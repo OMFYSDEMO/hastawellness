@@ -1,0 +1,9 @@
+{
+  // Deploys over the existing "hasta-wellness-clinic" Worker as a static site.
+  "name": "hasta-wellness-clinic",
+  "compatibility_date": "2026-10-01",
+  "assets": {
+    "directory": "./public",
+    "not_found_handling": "single-page-application"
+  }
+}
