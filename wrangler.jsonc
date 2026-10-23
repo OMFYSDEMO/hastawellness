@@ -1,9 +1,22 @@
 {
-  // Deploys over the existing "hasta-wellness-clinic" Worker as a static site.
+  // Hasta Wellness website: static site + small API for lead capture.
   "name": "hasta-wellness-clinic",
+  "main": "src/index.js",
   "compatibility_date": "2026-10-01",
   "assets": {
     "directory": "./public",
-    "not_found_handling": "single-page-application"
-  }
+    "binding": "ASSETS"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "hasta-wellness-leads",
+      "database_id": "c7abecb6-faa0-446c-8cfc-bf7095a3998a",
+      "migrations_dir": "migrations"
+    }
+  ],
+  // Daily clean-up: removes leads older than the retention period.
+  "triggers": { "crons": ["30 21 * * *"] },
+  "vars": { "LEAD_RETENTION_DAYS": "90" }
+  // Secret (set in Cloudflare dashboard, never in this file): ADMIN_PASSWORD
 }
