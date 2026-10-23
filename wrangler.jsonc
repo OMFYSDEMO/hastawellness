@@ -17,6 +17,9 @@
       "migrations_dir": "migrations"
     }
   ],
+  "r2_buckets": [
+    { "binding": "CVS", "bucket_name": "hasta-careers-cvs" }
+  ],
   // Daily clean-up: removes leads older than the retention period.
   "triggers": { "crons": ["30 21 * * *"] },
   "vars": { "LEAD_RETENTION_DAYS": "90" }
