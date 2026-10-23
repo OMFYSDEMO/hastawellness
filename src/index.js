@@ -1,5 +1,5 @@
 import { PAGES } from './pages.js';
-import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink } from './util.js';
+import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify } from './util.js';
 import { handleCareers, handleApply, handleAdminJobs, handleAdminApplications, handleAdminCv, careerSitemapPaths, purgeOldApplications } from './careers.js';
 // Hasta Wellness — Cloudflare Worker
 // Serves the static site (./public) and a small lead-capture API.
@@ -25,13 +25,13 @@ export default {
       return Response.redirect(url.toString(), 301);
     }
     try {
-      if (path === '/api/lead') return await handleLead(request, env);
+      if (path === '/api/lead') return await handleLead(request, env, ctx);
       if (path === '/admin' || path === '/admin/') return await handleAdmin(request, env, url);
       if (path === '/admin.csv') return await handleCsv(request, env);
       if (path === '/admin/jobs' || path.startsWith('/admin/jobs/')) return await handleAdminJobs(request, env, url);
       if (path === '/admin/applications') return await handleAdminApplications(request, env, url);
       if (path.startsWith('/admin/cv/')) return await handleAdminCv(request, env, url);
-      if (path === '/careers/apply') return await handleApply(request, env, url);
+      if (path === '/careers/apply') return await handleApply(request, env, url, ctx);
       if (path === '/careers' || path.startsWith('/careers/')) return await handleCareers(request, env, url);
     } catch (err) {
       console.error('Worker error', path, err && err.stack || err);
@@ -112,7 +112,7 @@ async function serveAsset(request, env, url) {
 
 /* ---------------- Lead capture ---------------- */
 
-async function handleLead(request, env) {
+async function handleLead(request, env, ctx) {
   if (request.method !== 'POST') return json({ ok: false, error: 'Method not allowed' }, 405, { Allow: 'POST' });
   if (!sameOrigin(request)) return json({ ok: false, error: 'Forbidden' }, 403);
   if (!(request.headers.get('content-type') || '').includes('application/json')) return json({ ok: false, error: 'Unsupported' }, 415);
@@ -173,6 +173,13 @@ async function handleLead(request, env) {
     nz(clean(body.page, MAX.page)),
     ipHash
   ).run();
+
+  const origin = new URL(request.url).origin;
+  const alert = notify(env, `New consultation lead: ${clean(body.interest, MAX.interest) || 'Not specified'}`, [
+    ['Name', name], ['Mobile', phone], ['Interested in', clean(body.interest, MAX.interest)], ['Concern', clean(body.concern, MAX.concern)],
+    ['Timing', clean(body.timing, MAX.timing)], ['Preferred date', date], ['Request', clean(body.request_type, MAX.request_type)], ['Source', source],
+  ], '/admin', origin);
+  if (ctx && ctx.waitUntil) ctx.waitUntil(alert); else await alert;
 
   return json({ ok: true });
 }

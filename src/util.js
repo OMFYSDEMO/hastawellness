@@ -129,3 +129,28 @@ export function adminShell(title, active, body, extraHead = '') {
 <div class="top"><div class="in"><h1>Hasta Wellness · Admin</h1><nav class="mainnav">${link('/admin', 'Leads', 'leads')}${link('/admin/jobs', 'Jobs', 'jobs')}${link('/admin/applications', 'Applications', 'apps')}</nav></div></div>
 <main>${body}</main></body></html>`;
 }
+
+/* ---------------- Email alerts ---------------- */
+// Sends a short internal alert to each address in ALERT_EMAILS (comma-separated).
+// Uses the Cloudflare Email Service binding EMAIL. Failures are logged, never shown to visitors.
+export async function notify(env, subject, rows, linkPath, origin) {
+  if (!env.EMAIL) { console.log('Email alert skipped (no EMAIL binding):', subject); return; }
+  const to = String(env.ALERT_EMAILS || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (!to.length) return;
+  const from = env.ALERT_FROM || 'alerts@hastawellnessclinic.com';
+  const link = `${origin}${linkPath}`;
+  const text = rows.filter(r => r[1]).map(([k, v]) => `${k}: ${v}`).join('\n') + `\n\nOpen in admin: ${link}\n\n— Hasta Wellness website`;
+  const html = `<div style="font-family:Arial,sans-serif;color:#34595e;max-width:560px">
+<div style="border-top:3px solid #c4a45b;padding:16px 0 4px"><strong style="font-size:16px">${h(subject)}</strong></div>
+<table style="border-collapse:collapse;font-size:14px;margin:8px 0 16px">${rows.filter(r => r[1]).map(([k, v]) =>
+    `<tr><td style="padding:4px 14px 4px 0;color:#6c746d;vertical-align:top">${h(k)}</td><td style="padding:4px 0">${h(v)}</td></tr>`).join('')}</table>
+<a href="${h(link)}" style="display:inline-block;background:#34595e;color:#fff;padding:10px 16px;border-radius:6px;text-decoration:none;font-size:14px">Open in admin</a>
+<p style="font-size:12px;color:#6c746d;margin-top:18px">Automatic alert from hastawellnessclinic.com. Contains personal details — please don’t forward.</p></div>`;
+  for (const addr of to) {
+    try {
+      await env.EMAIL.send({ from, to: addr, subject, text, html });
+    } catch (err) {
+      console.error('Email alert failed for', addr, err && err.message || err);
+    }
+  }
+}

@@ -9,7 +9,7 @@
 //   GET  /admin/applications    applications (filter by job / status)
 //   GET  /admin/cv/<id>         download an applicant's CV
 
-import { authorised, authResponse, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink } from './util.js';
+import { authorised, authResponse, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify } from './util.js';
 import { NAV_LINKS } from './site_nav.js';
 
 const PHONE_DISPLAY = '+91 97784 58883';
@@ -210,7 +210,7 @@ export async function careerSitemapPaths(env) {
 
 /* ---------------- Applications ---------------- */
 
-export async function handleApply(request, env, url) {
+export async function handleApply(request, env, url, ctx) {
   if (request.method !== 'POST') return new Response('Method not allowed', { status: 405 });
   if (!sameOrigin(request)) return new Response('Forbidden', { status: 403 });
   const len = parseInt(request.headers.get('content-length') || '0', 10);
@@ -254,6 +254,12 @@ export async function handleApply(request, env, url) {
     job.id, job.title, name, phone, nz(email), nz(clean(form.get('qualification'), 120)), nz(clean(form.get('experience_years'), 40)),
     nz(clean(form.get('current_location'), 80)), nz(clean(form.get('notice_period'), 40)), nz(clean(form.get('message'), 1000)), cvKey, cvName, ipHash
   ).run();
+  const alert = notify(env, `New job application: ${job.title}`, [
+    ['Role', job.title], ['Name', name], ['Mobile', phone], ['Email', email], ['Qualification', clean(form.get('qualification'), 120)],
+    ['Experience', clean(form.get('experience_years'), 40)], ['Location', clean(form.get('current_location'), 80)],
+    ['Notice period', clean(form.get('notice_period'), 40)], ['CV attached', cvKey ? 'Yes — download from admin' : 'No'],
+  ], `/admin/applications?job=${job.id}`, url.origin);
+  if (ctx && ctx.waitUntil) ctx.waitUntil(alert); else await alert;
   return backTo(url, slug, null, true);
 }
 

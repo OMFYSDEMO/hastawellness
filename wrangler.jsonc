@@ -24,6 +24,12 @@
   ],
   // Daily clean-up: removes leads older than the retention period.
   "triggers": { "crons": ["30 21 * * *"] },
-  "vars": { "LEAD_RETENTION_DAYS": "90" }
+  // Email alerts for new leads and job applications (Cloudflare Email Service).
+  "send_email": [{ "name": "EMAIL" }],
+  "vars": {
+    "LEAD_RETENTION_DAYS": "90",
+    "ALERT_EMAILS": "hello@hastawellnessclinic.com,shajianandan@gmail.com",
+    "ALERT_FROM": "alerts@hastawellnessclinic.com"
+  }
   // Secret (set in Cloudflare dashboard, never in this file): ADMIN_PASSWORD
 }
