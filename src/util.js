@@ -36,14 +36,22 @@ export function adminHeaders(extra = {}) {
     'cache-control': 'no-store',
     'x-robots-tag': 'noindex, nofollow',
     'x-frame-options': 'DENY',
-    'referrer-policy': 'no-referrer',
+    'referrer-policy': 'same-origin',
     ...extra,
   };
 }
 
 export function sameOrigin(request) {
+  // Browsers mark same-site form posts with Sec-Fetch-Site; trust that first.
+  const site = request.headers.get('sec-fetch-site');
+  if (site) return site === 'same-origin';
   const origin = request.headers.get('origin');
-  if (!origin) return true; // some browsers omit Origin on same-origin requests
+  if (!origin || origin === 'null') {
+    // No usable Origin (older browsers / strict referrer policy): fall back to Referer if present.
+    const ref = request.headers.get('referer');
+    if (!ref) return !origin; // missing Origin entirely: allow (same-origin GET-style posts); literal "null": reject
+    try { return new URL(ref).host === new URL(request.url).host; } catch { return false; }
+  }
   try { return new URL(origin).host === new URL(request.url).host; } catch { return false; }
 }
 
