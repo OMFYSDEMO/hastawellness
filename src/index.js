@@ -1,3 +1,4 @@
+import { PAGES } from './pages.js';
 // Hasta Wellness — Cloudflare Worker
 // Serves the static site (./public) and a small lead-capture API.
 //
@@ -58,11 +59,11 @@ function robots(url) {
 function sitemap(url) {
   const xml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:image="http://www.google.com/schemas/sitemap-image/1.1">
-  <url>
-    <loc>${url.origin}/</loc>
-    <lastmod>${SITE_LASTMOD}</lastmod>
-    <image:image><image:loc>${url.origin}/img/og-hasta-wellness.jpg</image:loc></image:image>
-  </url>
+${PAGES.map(p => `  <url>
+    <loc>${url.origin}${p}</loc>
+    <lastmod>${SITE_LASTMOD}</lastmod>${p === '/' ? `
+    <image:image><image:loc>${url.origin}/img/og-hasta-wellness.jpg</image:loc></image:image>` : ''}
+  </url>`).join('\n')}
 </urlset>
 `;
   return new Response(xml, { headers: { 'content-type': 'application/xml; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
@@ -87,12 +88,9 @@ async function serveAsset(request, env, url) {
     const o = url.origin;
     let html = await res.text();
     html = html
-      .replace('<link rel="canonical" href="/">', `<link rel="canonical" href="${o}/">`)
-      .replace('<meta property="og:url" content="/">', `<meta property="og:url" content="${o}/">`)
-      .replace('<meta property="og:image" content="/img/', `<meta property="og:image" content="${o}/img/`)
-      .replace('"image":"/img/', `"image":"${o}/img/`)
-      .replace('"logo":"/img/', `"logo":"${o}/img/`)
-      .replace('"url":"/"', `"url":"${o}/"`);
+      .replace(/(<link rel="canonical" href=")(\/[^"]*")/g, `$1${o}$2`)
+      .replace(/(<meta property="og:(?:url|image)" content=")(\/[^"]*")/g, `$1${o}$2`)
+      .replace(/"(url|item|image|logo)": ?"(\/[^"]*)"/g, `"$1":"${o}$2"`);
     headers.set('cache-control', 'public, max-age=300, must-revalidate');
     headers.delete('content-length');
     headers.delete('etag');
@@ -127,7 +125,7 @@ async function handleLead(request, env) {
   if (name.length < 2) return json({ ok: false, error: 'Please enter your name.' }, 400);
   if (!phone) return json({ ok: false, error: 'Please enter a valid mobile number.' }, 400);
 
-  const source = body.source === 'assistant' ? 'assistant' : 'booking form';
+  const source = ['assistant', 'service page'].includes(body.source) ? body.source : 'booking form';
   const date = /^\d{4}-\d{2}-\d{2}$/.test(body.preferred_date || '') ? body.preferred_date : null;
 
   const ip = request.headers.get('cf-connecting-ip') || '';
