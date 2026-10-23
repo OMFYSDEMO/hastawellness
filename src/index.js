@@ -16,6 +16,11 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     const path = url.pathname;
+    // One canonical host: send www.* to the bare domain (permanent redirect).
+    if (url.hostname.startsWith('www.')) {
+      url.hostname = url.hostname.slice(4);
+      return Response.redirect(url.toString(), 301);
+    }
     try {
       if (path === '/api/lead') return await handleLead(request, env);
       if (path === '/admin' || path === '/admin/') return await handleAdmin(request, env, url);
