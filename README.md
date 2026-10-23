@@ -11,4 +11,6 @@ Every push to `main` deploys automatically once the repo is connected in
 Cloudflare (Worker → Settings → Builds). Manual deploy: `npx wrangler deploy`.
 
 Booking/enquiry requests are prepared in the browser and sent by the visitor
-over WhatsApp to +91 91575 76703. No data is stored by the site.
+over WhatsApp to +91 97784 58883. Consented leads are stored in the D1
+database `hasta-wellness-leads` and shown at /admin (password: ADMIN_PASSWORD
+secret, username `hasta`); they are deleted automatically after 90 days.
