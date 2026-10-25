@@ -32,7 +32,7 @@ def head(title, desc, path, extra_ld):
 {''.join(f'<script type="application/ld+json">{json.dumps(x, ensure_ascii=False)}</script>' for x in extra_ld)}
 </head><body>
 <div class="top">YOUR EVERYDAY WELLNESS, BEAUTIFULLY REIMAGINED · KAZHAKOOTTAM, TRIVANDRUM</div>
-<header class="site"><nav class="wrap"><a class="logo" href="/" aria-label="Hasta Wellness home"><img src="/img/hasta-wellness-logo.webp" alt="Hasta Wellness" width="185" height="66"></a>
+<header class="site"><nav class="wrap"><a class="logo" href="/" aria-label="Hasta Wellness home"><img src="/img/hasta-wellness-logo.webp" alt="Hasta Wellness" width="185" height="66" decoding="async"></a>
 <div class="navlinks"><a href="/#care">Find your care</a><a href="/#programmes">All programmes</a><a href="/careers/">Careers</a><a href="/#visit">Visit us</a></div>
 <a class="btn" href="#enquire">Book a consultation <span>↗</span></a></nav></header>
 <main>'''
@@ -68,10 +68,19 @@ def page(p):
     out = [head(p['title'], p['description'], path, [page_ld, faq_ld, crumbs_ld])]
     # hero
     if p['image']:
-        art = (f'<div class="hero-art"><img src="{e(p["image"])}" alt="{e(p["image_alt"])}" fetchpriority="high" decoding="async">'
+        img = p["image"]
+        if 'images.unsplash.com' in img:
+            base = img.split('&w=')[0].replace('&q=80', '') + '&q=75'
+            srcset = ', '.join(f'{e(base)}&amp;w={w} {w}w' for w in (480, 900))
+            attrs = f'src="{e(base)}&amp;w=900" srcset="{srcset}"'
+        elif img.endswith('hair-wellness-portrait.webp'):
+            attrs = 'src="/img/hair-wellness-portrait.webp" srcset="/img/hair-wellness-portrait-480.webp 480w, /img/hair-wellness-portrait.webp 900w"'
+        else:
+            attrs = f'src="{e(img)}"'
+        art = (f'<div class="hero-art"><img {attrs} sizes="(max-width: 900px) 92vw, 40vw" alt="{e(p["image_alt"])}" fetchpriority="high" decoding="async">'
                f'<div class="tag">Every plan starts with a conversation. Images are illustrative.</div></div>')
     else:
-        art = ('<div class="hero-art emblem"><img src="/img/icon-512.png" alt="" width="512" height="512">'
+        art = ('<div class="hero-art emblem"><img src="/img/hasta-emblem.webp" alt="" width="400" height="400" decoding="async">'
                '<div class="tag">Every plan starts with a conversation.</div></div>')
     intro = ''.join(f'<p>{e(t)}</p>' for t in p['intro'])
     out.append(f'''<div class="wrap"><p class="crumbs"><a href="/">Home</a> / {e(p["nav"])}</p>
