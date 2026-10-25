@@ -104,7 +104,10 @@ async function serveAsset(request, env, url) {
     headers.delete('etag');
     return new Response(html, { status: 200, headers });
   }
-  if (res.status === 200 && /^\/(img\/|favicon\.ico$|apple-touch-icon\.png$|site\.webmanifest$)/.test(url.pathname)) {
+  if (res.status === 200 && url.pathname.startsWith('/fonts/')) {
+    headers.set('cache-control', 'public, max-age=31536000, immutable');
+    headers.set('access-control-allow-origin', '*');
+  } else if (res.status === 200 && /^\/(img\/|assets\/|favicon\.ico$|apple-touch-icon\.png$|site\.webmanifest$)/.test(url.pathname)) {
     headers.set('cache-control', 'public, max-age=604800, stale-while-revalidate=86400');
   }
   return new Response(res.body, { status: res.status, statusText: res.statusText, headers });
