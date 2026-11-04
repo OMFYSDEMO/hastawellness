@@ -1,6 +1,7 @@
 import {
   api, esc, icon, toast, modal, formData, busy, field, inp, emptyState, slotPicker, lineChart, ring, insightList, deltaTag, measureSeries,
   dietView, today, nowLocal, dayDiff, fDay, fDate, fLong, fTime, fWhen, inr, kg, first, prettyPhone, pill, KIND_LABEL, CLINIC_PHONE, CLINIC_TEL,
+  BASE, PROGRAMME_LABEL, admState, admSteps, letterBox, screeningForm, readScreening, sigPad,
 } from './core.js';
 
 let ME, APP, BODY, DATA;
@@ -27,7 +28,7 @@ async function route(refetch = true) {
   window.scrollTo(0, 0);
   try {
     if (refetch || !DATA) await load();
-    ({ '': home, progress, book, plan, account }[k] || home)();
+    ({ '': home, progress, book, plan, account, admission }[k] || home)();
   } catch (e) { BODY.innerHTML = `<div class="panel"><p class="err">${esc(e.message)}</p></div>`; }
 }
 const refresh = () => route(true);
@@ -51,9 +52,10 @@ function home() {
           <div>${icon('trending-down', 20)}<p><b>${w ? (w.diff > 0 ? '+' : '') + w.diff + ' kg' : '—'}</b><span>${w ? 'weight since ' + fDay(w.since) : 'weight change'}</span></p></div>
           <div>${icon('ruler', 20)}<p><b>${wa ? (wa.diff > 0 ? '+' : '') + wa.diff + ' cm' : '—'}</b><span>waist change</span></p></div>
         </div></div>
-      <div class="next">${next ? `<div><b>${esc(fWhen(next.start_at))}</b><span>Your next ${next.kind === 'session' ? 'EMS session' : esc(KIND_LABEL[next.kind].toLowerCase())}</span></div><a class="btn sm gold" href="#/book">Manage</a>`
+      <div class="next">${!DATA.client.cleared ? `<div><b>Admission needed</b><span>Complete your admission before your first session</span></div><a class="btn sm gold" href="#/admission">Open</a>` : next ? `<div><b>${esc(fWhen(next.start_at))}</b><span>Your next ${next.kind === 'session' ? 'EMS session' : esc(KIND_LABEL[next.kind].toLowerCase())}</span></div><a class="btn sm gold" href="#/book">Manage</a>`
         : `<div><b>No session booked</b><span>${p && p.available ? `${p.available} session${p.available > 1 ? 's' : ''} ready to book` : 'Ask the clinic about your next package'}</span></div>${p && p.available ? '<a class="btn sm gold" href="#/book">Book now</a>' : `<a class="btn sm gold" href="tel:${CLINIC_TEL}">Call</a>`}`}</div>
     </section>
+    ${admCard()}
     ${!checkedToday ? `<a href="#/plan" class="panel" style="display:flex;gap:14px;align-items:center;text-decoration:none;background:var(--gold-soft);border-color:transparent">${icon('clipboard-check', 24)}<div style="flex:1"><b>Log today's check-in</b><p class="small muted">Water, steps, sleep and meals — 20 seconds.</p></div>${icon('chevron-right', 20)}</a>` : ''}
     <section class="panel"><div class="panel-h"><div class="t">${icon('flame', 20)}<h3>Your momentum</h3></div></div>
       <div class="score"><b>${M.score}</b><div class="meter"><i style="width:${M.score}%"></i></div></div>
@@ -72,7 +74,7 @@ function book() {
   BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>Bookings</h1><p>${avail} session${avail === 1 ? '' : 's'} available to book</p></div></div>
     ${up.length ? `<section class="panel flush"><div class="panel-h" style="padding:16px 16px 0"><div class="t">${icon('calendar-check', 20)}<h3>Coming up</h3></div></div><div class="rows" style="margin-top:6px">
       ${up.map(a => `<div class="row"><div class="grow"><b>${esc(fWhen(a.start_at))}</b><span>${esc(KIND_LABEL[a.kind])}</span></div>${a.kind === 'session' ? `<button class="btn sm ghost" data-cancel="${a.id}">Cancel</button>` : pill('booked')}</div>`).join('')}</div></section>` : ''}
-    ${!DATA.client.cleared ? `<section class="panel"><div class="ins warn">${icon('shield-alert', 20)}<div><b>Suitability check first</b><p>Before your first EMS session the clinic team will go through a short health check with you. Call or WhatsApp to book it.</p></div></div><div style="display:flex;gap:8px;margin-top:12px"><a class="btn" href="tel:${CLINIC_TEL}">${icon('phone', 18)}Call</a><a class="btn wa" href="https://wa.me/919778458883" target="_blank" rel="noopener">${icon('message-circle', 18)}WhatsApp</a></div></section>`
+    ${!DATA.client.cleared ? `<section class="panel"><div class="ins warn">${icon('shield-alert', 20)}<div><b>Complete your admission first</b><p>Before your first session, you fill in a short health questionnaire, your coach or doctor assesses you, and you sign your programme consent.</p></div></div><div style="display:flex;gap:8px;margin-top:12px"><a class="btn gold" href="#/admission">${icon('shield-check', 18)}Open admission</a><a class="btn wa" href="https://wa.me/919778458883" target="_blank" rel="noopener">${icon('message-circle', 18)}WhatsApp</a></div></section>`
       : avail ? `<section class="panel"><div class="panel-h"><div class="t">${icon('calendar-plus', 20)}<h3>Book a session</h3></div></div>
         <div data-slots></div>
         <p class="note" style="margin-top:14px">${icon('battery-charging', 16, '')} Leave about 48 hours between EMS sessions so your muscles can recover. Twice a week works well for most people.</p>
@@ -154,6 +156,7 @@ function account() {
         <span class="small muted">${p.used} done, ${p.booked} booked, ${p.remaining} left of ${p.sessions_total}${p.expiry_date ? ` · use by ${fDate(p.expiry_date)}` : ''}</span>
         <p class="small" style="margin-top:4px">${inr(p.due)} · paid ${inr(p.paid)}${p.balance > 0 ? ` · <b style="color:var(--warn)">${inr(p.balance)} due</b>` : ''}</p></div></div>`).join('') : emptyState('package', 'No package yet.')}</section>
     ${DATA.payments.length ? `<section class="panel flush"><div class="panel-h" style="padding:16px 16px 0"><div class="t">${icon('receipt', 20)}<h3>Payments</h3></div></div><div class="rows" style="margin-top:6px">${DATA.payments.map(p => `<div class="row"><div class="grow"><b>${inr(p.amount)}</b><span>${esc(fDate(p.paid_on))} · ${esc(p.method)}</span></div><span class="small muted">${esc(p.package_name || '')}</span></div>`).join('')}</div></section>` : ''}
+    <a href="#/admission" class="panel" style="display:flex;gap:14px;align-items:center;text-decoration:none">${icon('shield-check', 22)}<div style="flex:1"><b>Admission and consent</b><p class="small muted">${DATA.admission ? esc(DATA.admission.step[0].toUpperCase() + DATA.admission.step.slice(1)) : 'Not started'}${DATA.admission && DATA.admission.valid_until ? ' · valid until ' + fDate(DATA.admission.valid_until) : ''}</p></div>${icon('chevron-right', 20)}</a>
     <section class="panel"><div class="panel-h"><div class="t">${icon('key-round', 20)}<h3>Change PIN</h3></div></div>
       <form class="grid2" data-pin style="align-items:end">${field('Current PIN', inp('current', '', 'type="password" inputmode="numeric" maxlength="6" autocomplete="current-password"'))}${field('New 6-digit PIN', inp('next', '', 'type="password" inputmode="numeric" maxlength="6" autocomplete="new-password"'))}<button class="btn">Update PIN</button></form></section>
     <section class="panel stack" style="gap:10px"><div class="t" style="display:flex;gap:10px;align-items:center">${icon('phone', 20)}<h3>Hasta Wellness</h3></div>
@@ -164,4 +167,67 @@ function account() {
   const pf = BODY.querySelector('[data-pin]');
   pf.addEventListener('submit', e => { e.preventDefault(); busy(pf.querySelector('button'), () => api('/me/secret', { method: 'POST', body: formData(pf) })).then(() => { toast('PIN updated'); pf.reset(); }).catch(() => {}); });
   BODY.querySelector('[data-out]').addEventListener('click', async () => { await api('/auth/logout', { method: 'POST', body: {} }); location.hash = ''; location.reload(); });
+}
+
+/* ---------- Admission ---------- */
+function admCard() {
+  const a = DATA.admission, st = admState(a);
+  if (st === 'admitted') return '';
+  const msg = {
+    none: ['Your admission will start at the clinic', 'The team will set it up at your consultation.'],
+    screening: ['Fill in your health questionnaire', 'Step 1 of 3 — about 2 minutes.'],
+    assessment: ['Assessment at the clinic', 'Step 2 of 3 — your coach or doctor will review your answers with you.'],
+    client_consent: ['Read and sign your consent', 'Step 3 of 3 — your clinician has signed. Your sign-off starts your programme.'],
+    expired: ['Renew your admission', 'Your yearly consent has expired. The clinic will help you renew it.'],
+    withdrawn: ['Consent withdrawn', 'Contact the clinic to rejoin a programme.'],
+    not_suitable: ['Talk to your clinician', 'Your clinician has advised that this programme isn\'t suitable for now.'],
+  }[st];
+  const act = ['screening', 'client_consent'].includes(st);
+  return `<a href="#/admission" class="panel" style="display:flex;gap:14px;align-items:center;text-decoration:none;${act ? 'background:var(--gold-soft);border-color:transparent' : ''}">${icon('shield-check', 24)}<div style="flex:1"><b>${esc(msg[0])}</b><p class="small muted">${esc(msg[1])}</p></div>${icon('chevron-right', 20)}</a>`;
+}
+
+function admission() {
+  const a = DATA.admission, st = admState(a), Q = DATA.screen_questions, C = DATA.client;
+  let body = '';
+  if (st === 'none') body = `<section class="panel">${emptyState('shield-check', 'Your admission is started by the clinic team at your consultation. You\'ll then be able to fill in your health questionnaire here.')}</section>`;
+  else if (st === 'screening') body = `<section class="panel stack" style="gap:14px"><div class="panel-h" style="margin:0"><div class="t">${icon('clipboard-check', 20)}<h3>Health questionnaire</h3></div></div>
+      <p class="muted">For the ${a.programmes.map(p => esc(PROGRAMME_LABEL[p])).join(' and ')}. Answer every question honestly — your clinician uses this to keep you safe.</p>
+      <form data-scr class="stack" style="gap:14px">${screeningForm(Q, a.screening)}<button class="btn gold" style="height:46px">${icon('check', 18)}Send to my clinician</button></form></section>`;
+  else if (st === 'assessment') body = `<section class="panel stack" style="gap:10px"><div class="ins tip">${icon('stethoscope', 20)}<div><b>Thank you — your answers are with the clinic</b><p>At your next visit your coach or doctor will check your blood pressure and talk through your answers. After they sign, you'll be asked here to read and sign your consent.</p></div></div>
+      <a class="btn ghost" href="#/admission" data-edit>${icon('pencil', 16)}Change my answers</a></section>`;
+  else if (st === 'client_consent') body = `<section class="panel stack" style="gap:14px">
+      ${letterBox('Recommendation from ' + a.clinician_name + ' (' + a.clinician_role + ')', a.clinician_letter, 'Signed by ' + esc(a.clinician_name) + ' on ' + esc(fDate(a.clinician_signed_at)))}
+      ${letterBox('Your consent', a.client_letter)}
+      <form data-sign class="stack" style="gap:14px">${field('Type your full name', `<input class="in" name="typed_name" autocomplete="name" placeholder="${esc(C.name)}">`)}
+        <div><h4 style="margin-bottom:8px">Sign with your finger</h4><div data-sig></div></div>
+        <label class="check"><input type="checkbox" name="agree"> <span>I have read my clinician's recommendation and this consent, and I agree to join the programme.</span></label>
+        <button class="btn gold" style="height:46px">${icon('pencil', 18)}Sign my consent</button></form>
+      <p class="small muted">Questions first? WhatsApp <a href="https://wa.me/919778458883">${CLINIC_PHONE}</a> before signing.</p></section>`;
+  else if (st === 'admitted') body = `<section class="panel stack" style="gap:12px"><div class="ins good">${icon('shield-check', 22)}<div><b>You're admitted</b><p>${a.programmes.map(p => esc(PROGRAMME_LABEL[p])).join(' and ')} · valid until ${esc(fDate(a.valid_until))}</p></div></div>
+      ${a.precautions ? `<div class="ins warn">${icon('alert-triangle', 20)}<div><b>Your precautions</b><p>${esc(a.precautions)}</p></div></div>` : ''}
+      <a class="btn" href="${BASE}/api/client/admission/pdf?id=${a.id}" download>${icon('printer', 18)}Download my signed consent (PDF)</a>
+      <p class="small muted">Tell the clinic before your next session if your health changes. To withdraw from the programme, contact the clinic.</p></section>`;
+  else body = `<section class="panel">${admCard()}</section>`;
+  BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>Admission</h1><p>Health questionnaire, assessment and consent</p></div></div>
+    ${['screening', 'assessment', 'client_consent', 'admitted'].includes(st) ? admSteps(a) : ''}${body}`;
+  const scr = BODY.querySelector('[data-scr]');
+  scr && scr.addEventListener('submit', e => {
+    e.preventDefault();
+    const v = readScreening(scr, Q);
+    scr.querySelectorAll('.q').forEach((q, i) => q.classList.toggle('missing', v.answers[Q[i][0]] === null));
+    if (Object.values(v.answers).some(x => x === null)) return toast('Please answer every question with Yes or No.', true);
+    busy(scr.querySelector('button.btn'), () => api('/client/admission/screening', { method: 'PUT', body: v })).then(() => { toast('Sent to your clinician'); refresh(); }).catch(() => {});
+  });
+  BODY.querySelector('[data-edit]')?.addEventListener('click', e => { e.preventDefault(); DATA.admission = { ...a, status: 'screening' }; admission(); });
+  const sf = BODY.querySelector('[data-sign]');
+  if (sf) {
+    const pad = sigPad(sf.querySelector('[data-sig]'));
+    sf.addEventListener('submit', e => {
+      e.preventDefault();
+      const sig = pad.value();
+      if (!sig) return toast('Please sign in the box.', true);
+      busy(sf.querySelector('button.btn.gold'), () => api('/client/admission/sign', { method: 'POST', body: { typed_name: sf.typed_name.value, signature: sig, agree: sf.agree.checked } }))
+        .then(() => { toast('Consent signed — welcome to your programme!'); refresh(); }).catch(() => {});
+    });
+  }
 }

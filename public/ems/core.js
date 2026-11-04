@@ -286,3 +286,53 @@ export const SCREENING = [
   ['heart', 'Heart condition or circulation problems'], ['surgery', 'Surgery in the last 6 months'], ['implants', 'Metal implants or pins'],
   ['cancer', 'Cancer or current treatment'], ['diabetes', 'Diabetes'], ['bp', 'High or low blood pressure'], ['skin', 'Skin wounds or rashes where pads go'],
 ];
+
+/* ---------- Admission helpers ---------- */
+export const PROGRAMME_LABEL = { ems: 'EMS programme', weight: 'Weight management', combined: 'EMS + weight management' };
+export const ADM_LABEL = { screening: 'Screening', assessment: 'Clinician assessment', client_consent: 'Awaiting client signature', admitted: 'Admitted', not_suitable: 'Not suitable', withdrawn: 'Withdrawn', expired: 'Admission expired' };
+export function admState(a) { if (!a) return 'none'; if (a.status === 'admitted' && (a.expired || (a.valid_until && a.valid_until < today()))) return 'expired'; return a.status; }
+export function admPill(a) {
+  const s = admState(a);
+  if (s === 'none') return pill('alert', 'Admission not started');
+  if (s === 'admitted') return pill('good', 'Admitted to ' + fDay(a.valid_until));
+  if (['not_suitable', 'withdrawn', 'expired'].includes(s)) return pill('alert', ADM_LABEL[s]);
+  return pill('warn', 'Admission: ' + ADM_LABEL[s].toLowerCase());
+}
+export function admSteps(a) {
+  const s = admState(a);
+  const order = ['screening', 'assessment', 'client_consent', 'admitted'];
+  const idx = order.indexOf(s);
+  const labels = ['Health screening', 'Clinician assessment', 'Client consent', 'Admitted'];
+  return `<ol class="steps">${labels.map((l, i) => { const st = s === 'admitted' || idx > i ? 'done' : idx === i ? 'now' : ''; return `<li class="${st}"><span>${st === 'done' ? icon('check', 14) : i + 1}</span>${esc(l)}</li>`; }).join('')}</ol>`;
+}
+export function letterBox(title, text, foot) {
+  return `<div class="letter"><h4>${esc(title)}</h4>${String(text || '').split('\n').filter(Boolean).map(p => `<p>${esc(p)}</p>`).join('')}${foot ? `<p class="sig">${foot}</p>` : ''}</div>`;
+}
+export function yesNo(name, value) {
+  return `<span class="yn" role="radiogroup"><label><input type="radio" name="${name}" value="yes"${value === true ? ' checked' : ''}><span>Yes</span></label><label><input type="radio" name="${name}" value="no"${value === false ? ' checked' : ''}><span>No</span></label></span>`;
+}
+export function screeningForm(questions, s = null) {
+  const ans = (s && s.answers) || {};
+  return `<div class="qs">${questions.map(([k, q]) => `<div class="q"><p>${esc(q)}</p>${yesNo('q_' + k, ans[k])}</div>`).join('')}</div>
+    ${field('Medicines you take regularly', inp('medicines', s && s.medicines, 'maxlength="300" placeholder="Name and what for, or None"'))}
+    ${field('Anything else the clinician should know', `<textarea class="in" name="other" maxlength="500" placeholder="Allergies, recent illness, injuries, past reactions…">${esc((s && s.other) || '')}</textarea>`)}`;
+}
+export function readScreening(form, questions) {
+  const answers = {};
+  for (const [k] of questions) { const r = form.querySelector(`[name="q_${k}"]:checked`); answers[k] = r ? r.value === 'yes' : null; }
+  return { answers, medicines: form.medicines.value.trim(), other: form.other.value.trim() };
+}
+export function sigPad(el) {
+  el.innerHTML = `<div class="sigpad"><canvas aria-label="Signature area — sign with your finger or mouse"></canvas><span class="hint">Sign here</span><button type="button" class="btn sm quiet" data-clear>Clear</button></div>`;
+  const cv = el.querySelector('canvas'), hint = el.querySelector('.hint');
+  const ctx = cv.getContext('2d');
+  let drawing = false, dirty = false, last = null;
+  const size = () => { const r = cv.getBoundingClientRect(); cv.width = Math.round(r.width); cv.height = Math.round(r.height); ctx.lineWidth = 2.2; ctx.lineCap = 'round'; ctx.lineJoin = 'round'; ctx.strokeStyle = '#1d3437'; };
+  requestAnimationFrame(size);
+  const pt = e => { const r = cv.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; };
+  cv.addEventListener('pointerdown', e => { cv.setPointerCapture(e.pointerId); drawing = true; last = pt(e); hint.hidden = true; });
+  cv.addEventListener('pointermove', e => { if (!drawing) return; const p = pt(e); ctx.beginPath(); ctx.moveTo(...last); ctx.lineTo(...p); ctx.stroke(); last = p; dirty = true; });
+  ['pointerup', 'pointercancel', 'pointerleave'].forEach(t => cv.addEventListener(t, () => { drawing = false; }));
+  el.querySelector('[data-clear]').addEventListener('click', () => { ctx.clearRect(0, 0, cv.width, cv.height); dirty = false; hint.hidden = false; });
+  return { value: () => dirty ? cv.toDataURL('image/png') : null };
+}

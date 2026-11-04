@@ -12,6 +12,7 @@
 // consultation enquiries from the website appear here automatically.
 
 import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify } from './util.js';
+import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
 
 const STAFF_TTL_H = 12;
 const CLIENT_TTL_D = 30;
@@ -61,6 +62,15 @@ const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-
 
 function api(data, status = 200, extra = {}) {
   return json(data, status, { ...HEADERS, ...extra });
+}
+
+const done = ([status, error, extra]) => status === 200 ? api({ ok: true, ...(extra || {}) }) : api({ ok: false, error }, status);
+async function pdfResponse(env, request, a, clientId) {
+  if (!a) return api({ ok: false, error: 'No admission record yet.' }, 404);
+  const c = await env.DB.prepare('SELECT * FROM ems_clients WHERE id=?').bind(clientId).first();
+  const bytes = await admissionPdf(env, request, a, c);
+  const fname = `Hasta-admission-consent-${c.name.replace(/[^A-Za-z0-9]+/g, '-')}-${a.id}.pdf`;
+  return new Response(bytes, { headers: { ...HEADERS, 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="${fname}"` } });
 }
 
 /* ---------------- Passwords & sessions ---------------- */
@@ -166,9 +176,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=2">
+<link rel="stylesheet" href="/ems/app.css?v=3">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=2"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=3"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -179,7 +189,7 @@ async function route(request, env, url, ctx, base, p) {
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
     if (!(request.headers.get('content-type') || '').includes('application/json')) return api({ ok: false, error: 'Unsupported' }, 415);
-    if (parseInt(request.headers.get('content-length') || '0', 10) > 20000) return api({ ok: false, error: 'Too large' }, 413);
+    if (parseInt(request.headers.get('content-length') || '0', 10) > (/\/(assess|sign|client-sign)$/.test(p) ? 400000 : 20000)) return api({ ok: false, error: 'Too large' }, 413);
     try { body = await request.json(); } catch { return bad('Invalid request'); }
     if (!body || typeof body !== 'object') return bad('Invalid request');
   }
@@ -211,6 +221,18 @@ async function route(request, env, url, ctx, base, p) {
     let r;
     if ((r = p.match(/^\/client\/appointments\/(\d+)\/cancel$/)) && m === 'POST') return clientCancel(env, me, +r[1]);
     if (p === '/client/checkins' && m === 'POST') return saveCheckin(env, me.id, body);
+    if (p === '/client/admission/screening' && m === 'PUT') { const a = await latestAdmission(env, me.id); return done(await saveScreening(env, a, body, 'client (app)')); }
+    if (p === '/client/admission/sign' && m === 'POST') {
+      const a = await latestAdmission(env, me.id), c = await env.DB.prepare('SELECT * FROM ems_clients WHERE id=?').bind(me.id).first();
+      const r = await clientSign(env, a, c, body, 'app', request);
+      if (r[0] === 200) { const al = notify(env, `Consent signed: ${c.name}`, [['Client', c.name], ['Mobile', c.phone], ['Programme', (JSON.parse(a.programmes) || []).map(k => PROGRAMMES[k]).join(', ')]], `/#/clients/${c.id}?tab=admission`, emsOrigin(env, url)); if (ctx && ctx.waitUntil) ctx.waitUntil(al); }
+      return done(r);
+    }
+    if (p === '/client/admission/pdf' && m === 'GET') {
+      const id = parseInt(url.searchParams.get('id'), 10);
+      const a = id ? await env.DB.prepare('SELECT * FROM ems_admissions WHERE id=? AND client_id=?').bind(id, me.id).first() : await latestAdmission(env, me.id);
+      return pdfResponse(env, request, a, me.id);
+    }
     return api({ ok: false, error: 'Not found' }, 404);
   }
 
@@ -226,6 +248,17 @@ async function route(request, env, url, ctx, base, p) {
     if (m === 'DELETE') return admin ? deleteClient(env, +r[1]) : api({ ok: false, error: 'Only an admin can delete records.' }, 403);
   }
   if ((r = p.match(/^\/staff\/clients\/(\d+)\/pin$/)) && m === 'POST') return resetPin(env, +r[1]);
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/admissions$/)) && m === 'POST') return done(await startAdmission(env, me, +r[1], body));
+  if ((r = p.match(/^\/staff\/admissions\/(\d+)\/(screening|assess|client-sign|withdraw|pdf)$/))) {
+    const a = await env.DB.prepare('SELECT * FROM ems_admissions WHERE id=?').bind(+r[1]).first();
+    if (!a) return api({ ok: false, error: 'Not found' }, 404);
+    const c = await env.DB.prepare('SELECT * FROM ems_clients WHERE id=?').bind(a.client_id).first();
+    if (r[2] === 'pdf' && m === 'GET') return pdfResponse(env, request, a, a.client_id);
+    if (r[2] === 'screening' && m === 'PUT') return done(await saveScreening(env, a, body, `${me.name} (staff, with client)`));
+    if (r[2] === 'assess' && m === 'POST') return done(await saveAssessment(env, me, a, c, body));
+    if (r[2] === 'client-sign' && m === 'POST') return done(await clientSign(env, a, c, body, 'clinic', request));
+    if (r[2] === 'withdraw' && m === 'POST') return done(await withdraw(env, a, body, me.name));
+  }
   if ((r = p.match(/^\/staff\/clients\/(\d+)\/plan$/)) && m === 'PUT') return savePlan(env, me, +r[1], body);
   if ((r = p.match(/^\/staff\/clients\/(\d+)\/packages$/)) && m === 'POST') return assignPackage(env, +r[1], body);
   if ((r = p.match(/^\/staff\/client-packages\/(\d+)$/)) && m === 'PUT') return updateClientPackage(env, +r[1], body);
@@ -406,9 +439,10 @@ async function clientBook(env, ctx, url, me, b) {
   if (start.slice(0, 10) > addDays(today(), 30)) return bad('You can book up to 30 days ahead.');
   const c = await env.DB.prepare('SELECT cleared, status FROM ems_clients WHERE id=?').bind(me.id).first();
   if (!c || c.status !== 'active') return bad('Your programme is paused. Please contact the clinic.');
-  if (!c.cleared) return bad('Your suitability check is still to be confirmed by the clinic. Please call us to book your first session.');
   const pkg = await bookablePackage(env, me.id);
   if (!pkg) return bad('You have no sessions left to book. Ask the clinic about renewing your package.');
+  const el = await eligible(env, me.id, needsProgrammes(pkg.programme));
+  if (!el.ok) return bad('Your admission needs to be completed (or renewed) before you can book. Open "Admission" in the app, or contact the clinic.');
   const clash = await recoveryClash(env, me.id, start);
   if (clash) return bad('EMS works best with about 48 hours of recovery between sessions. Please pick a time further from your other session.');
   if (!(await slotFree(env, start))) return bad('That time has just been taken. Please choose another.');
@@ -442,10 +476,10 @@ async function staffBook(env, me, b) {
   if (clientId && kind === 'session') {
     const pkg = await bookablePackage(env, clientId);
     if (!pkg) return bad('This client has no sessions left. Add a package first.');
+    const el = await eligible(env, clientId, needsProgrammes(pkg.programme));
+    if (!el.ok) return bad(el.reason);
     pkgId = pkg.id;
     if (await recoveryClash(env, clientId, start)) warnings.push('Less than 48 hours from another session.');
-    const c = await env.DB.prepare('SELECT cleared FROM ems_clients WHERE id=?').bind(clientId).first();
-    if (c && !c.cleared) warnings.push('Suitability not yet confirmed.');
   }
   if (!b.force && !(await slotFree(env, start))) return bad('That time slot is full. Choose another or tick "overbook".');
   if (!withinHours(start)) warnings.push('Outside normal clinic hours.');
@@ -466,6 +500,10 @@ async function updateAppointment(env, id, b) {
     const pkg = await bookablePackage(env, a.client_id);
     if (!pkg) return bad('No sessions left on this client\'s packages.');
     pkgId = pkg.id;
+  }
+  if (a.kind === 'session' && a.client_id && status === 'booked' && (start !== a.start_at || a.status !== 'booked')) {
+    const el = await eligible(env, a.client_id, ['ems']);
+    if (!el.ok) return bad(el.reason);
   }
   const notes = b.notes !== undefined ? nz(clean(b.notes, 300)) : a.notes;
   await env.DB.prepare("UPDATE ems_appointments SET status=?, start_at=?, client_package_id=?, notes=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?")
@@ -497,6 +535,8 @@ async function listClients(env, url) {
   else if (/^\d+$/.test(coach)) { where += ' AND c.coach_id=?'; binds.push(+coach); }
   const { results } = await env.DB.prepare(`SELECT c.id, c.name, c.phone, c.status, c.goal, c.cleared, c.target_weight, c.created_at, c.coach_id,
     (SELECT name FROM ems_staff s WHERE s.id=c.coach_id) coach_name,
+    (SELECT status FROM ems_admissions x WHERE x.client_id=c.id ORDER BY x.id DESC LIMIT 1) adm_status,
+    (SELECT valid_until FROM ems_admissions x WHERE x.client_id=c.id ORDER BY x.id DESC LIMIT 1) adm_valid,
     (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='attended') attended,
     (SELECT MAX(start_at) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='attended') last_visit,
     (SELECT MIN(start_at) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='booked' AND a.start_at >= ?) next_visit,
@@ -521,12 +561,7 @@ function readClientFields(b, partial) {
   if (b.coach_id !== undefined) { const v = parseInt(b.coach_id, 10); f.coach_id = v > 0 ? v : null; }
   if (b.staff_notes !== undefined) f.staff_notes = String(b.staff_notes || '').slice(0, 2000) || null;
   if (b.status !== undefined && ['active', 'paused', 'completed'].includes(b.status)) f.status = b.status;
-  if (b.cleared !== undefined) f.cleared = b.cleared ? 1 : 0;
-  if (b.screening !== undefined && typeof b.screening === 'object' && b.screening) {
-    const s = {};
-    for (const k of SCREENING) if (b.screening[k]) s[k] = true;
-    f.screening = JSON.stringify(s);
-  }
+  // Clearance and screening are set only by the admission workflow (admission.js).
   return { f, bad };
 }
 
@@ -604,12 +639,15 @@ async function assignPackage(env, clientId, b) {
   const discount = int(b.discount || 0, 0, 10000000);
   const start = isDate(b.start_date) ? b.start_date : today();
   if (!name || !sessions) return bad('Choose a package and the number of sessions.');
+  const programme = def ? def.programme : (['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems');
+  const el = await eligible(env, clientId, needsProgrammes(programme));
+  if (!el.ok) return bad(el.reason);
   if (price == null || price === undefined) return bad('Enter the package price.');
   if (discount > price) return bad('The discount is more than the price.');
   const validity = def ? def.validity_days : int(b.validity_days, 7, 730) || 90;
   const expiry = isDate(b.expiry_date) ? b.expiry_date : addDays(start, validity);
-  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date) VALUES (?,?,?,?,?,?,?,?)')
-    .bind(clientId, def ? def.id : null, name, sessions, price, discount, start, expiry).run();
+  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme) VALUES (?,?,?,?,?,?,?,?,?)')
+    .bind(clientId, def ? def.id : null, name, sessions, price, discount, start, expiry, programme).run();
   return api({ ok: true, id: r.meta.last_row_id });
 }
 
@@ -686,6 +724,10 @@ async function clientView(env, id, staff) {
   client.coach_name = coach ? coach.name : null;
   const p = plan || { diet: 'kerala-balanced', water_target: 10, steps_target: 7000, sleep_target: 7, focus: null };
   const data = { client, packages: pkgs, appointments: appts.results || [], measurements: meas.results || [], payments: pays.results || [], plan: p, checkins: checks.results || [] };
+  const { results: adms } = await env.DB.prepare('SELECT * FROM ems_admissions WHERE client_id=? ORDER BY id DESC').bind(id).all();
+  data.admissions = (adms || []).map(a => publicAdmission(a, c, staff));
+  data.admission = data.admissions[0] || null;
+  data.screen_questions = SCREEN_QS;
   data.insights = insights(data, staff);
   if (!staff) {
     delete client.staff_notes; delete client.screening; delete client.lead_id;
@@ -806,7 +848,7 @@ export function insights({ client: c, packages, appointments, measurements: meas
 
   // Staff-only safety
   const flags = Object.keys(c.screening || {});
-  if (!c.cleared) add('alert', 'shield-alert', 'Suitability not confirmed', 'Complete the suitability check and mark the client as cleared before EMS sessions.', true);
+  if (!c.cleared) add('alert', 'shield-alert', 'Admission not complete', 'No package or EMS session until the health screening, clinician assessment and both signed consents are done. Open the Admission tab.', true);
   if (flags.length) add('alert', 'stethoscope', 'Screening flags', `Flagged: ${flags.join(', ')}. Confirm clinician clearance and adjust intensity.`, true);
 
   // Momentum score (0-100)
@@ -906,6 +948,14 @@ async function reminders(env) {
     for (const p of pk.filter(p => p.balance > 0 && p.status !== 'closed')) push({ kind: 'balance', ref: `${p.id}:${p.balance}`, priority: 3, client_id: c.id, name: c.name, phone: c.phone, title: `Balance due ₹${p.balance.toLocaleString('en-IN')} on ${p.name}`, amount: p.balance });
     if (c.last_visit && (!c.last_meas || daysBetween(c.last_meas, t) > 14) && (!c.last_meas || c.last_visit.slice(0, 10) > c.last_meas)) push({ kind: 'measure', ref: `${c.id}:${c.last_meas || 'none'}`, priority: 3, client_id: c.id, name: c.name, phone: c.phone, title: c.last_meas ? `Measurements due · last on ${fmtDay(c.last_meas)}` : 'No measurements recorded yet' });
   }
+  const { results: adm } = await env.DB.prepare(`SELECT a.id, a.status, a.valid_until, a.updated_at, a.created_at, c.id cid, c.name, c.phone FROM ems_admissions a JOIN ems_clients c ON c.id=a.client_id
+    WHERE c.status='active' AND a.id=(SELECT MAX(id) FROM ems_admissions x WHERE x.client_id=c.id)
+    AND (a.status IN ('screening','client_consent') OR (a.status='admitted' AND a.valid_until <= ?))`).bind(addDays(t, 21)).all();
+  for (const a of adm || []) {
+    if (a.status === 'screening') push({ kind: 'admission', ref: `${a.id}:screen`, priority: 2, client_id: a.cid, name: a.name, phone: a.phone, title: 'Admission: health questionnaire not filled in', step: 'screening' });
+    else if (a.status === 'client_consent') push({ kind: 'admission', ref: `${a.id}:sign`, priority: 1, client_id: a.cid, name: a.name, phone: a.phone, title: 'Admission: waiting for the client to sign consent', step: 'sign' });
+    else push({ kind: 'admission', ref: `${a.id}:renew`, priority: 2, client_id: a.cid, name: a.name, phone: a.phone, title: `Admission ${a.valid_until < t ? 'expired' : 'expires'} ${fmtDay(a.valid_until)} — renew screening and consent`, step: 'renew' });
+  }
   for (const l of leads) push({ kind: 'lead', ref: String(l.id), priority: 1, lead_id: l.id, name: l.name, phone: l.phone, title: `New enquiry not contacted · ${l.interest || 'EMS'}` });
   out.sort((a, b) => a.priority - b.priority);
   return out;
@@ -964,8 +1014,9 @@ async function savePackageDef(env, id, b) {
   const name = clean(b.name, 80), sessions = int(b.sessions, 1, 200), price = int(b.price, 0, 10000000), validity = int(b.validity_days, 7, 730);
   if (!name || !sessions || price === undefined || !validity) return bad('Enter a name, sessions, price and validity.');
   const desc = nz(clean(b.description, 200)), active = b.active === false ? 0 : 1;
-  if (id) await env.DB.prepare('UPDATE ems_packages SET name=?, sessions=?, price=?, validity_days=?, description=?, active=? WHERE id=?').bind(name, sessions, price, validity, desc, active, id).run();
-  else await env.DB.prepare('INSERT INTO ems_packages (name, sessions, price, validity_days, description, active) VALUES (?,?,?,?,?,?)').bind(name, sessions, price, validity, desc, active).run();
+  const prog = ['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems';
+  if (id) await env.DB.prepare('UPDATE ems_packages SET name=?, sessions=?, price=?, validity_days=?, description=?, active=?, programme=? WHERE id=?').bind(name, sessions, price, validity, desc, active, prog, id).run();
+  else await env.DB.prepare('INSERT INTO ems_packages (name, sessions, price, validity_days, description, active, programme) VALUES (?,?,?,?,?,?,?)').bind(name, sessions, price, validity, desc, active, prog).run();
   return api({ ok: true });
 }
 
@@ -995,6 +1046,7 @@ export async function emsDaily(env) {
   await env.DB.prepare("DELETE FROM ems_sessions WHERE expires_at < strftime('%Y-%m-%dT%H:%M:%SZ','now')").run();
   await env.DB.prepare("DELETE FROM ems_login_attempts WHERE at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-1 day')").run();
   await env.DB.prepare("DELETE FROM ems_reminder_log WHERE created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-60 days')").run();
+  await env.DB.prepare(`UPDATE ems_clients SET cleared=0 WHERE cleared=1 AND NOT EXISTS (SELECT 1 FROM ems_admissions a WHERE a.client_id=ems_clients.id AND a.status='admitted' AND a.valid_until >= ?)`).bind(today()).run();
   // Morning digest for the team (cron runs ~03:00 IST).
   const t = today();
   const { results } = await env.DB.prepare(`SELECT a.start_at, a.kind, IFNULL(c.name, a.guest_name) name FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id

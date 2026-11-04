@@ -2,6 +2,7 @@ import {
   api, esc, icon, toast, modal, formData, busy, field, inp, sel, emptyState, slotPicker, lineChart, barChart, insightList, deltaTag,
   measureSeries, dietView, DIETS, SCREENING, today, nowLocal, addDays, dayDiff, fDay, fDate, fWeekday, fLong, fTime, fWhen, inr, kg, initials, first,
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
+  PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
 } from './core.js';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null;
@@ -48,7 +49,7 @@ async function route() {
   try {
     if (!top) await viewDashboard();
     else if (top === 'schedule') await viewSchedule(q.get('d') || today());
-    else if (top === 'clients' && parts[1]) await viewClient(+parts[1], q.get('tab') || 'overview');
+    else if (top === 'clients' && parts[1]) await viewClient(+parts[1], q.get('tab'));
     else if (top === 'clients') await viewClients(q);
     else if (top === 'leads') await viewLeads(q);
     else if (top === 'reminders') await viewReminders();
@@ -193,6 +194,10 @@ function reminderText(kind, r) {
     case 'expiry': return `Hi ${n}, a friendly note from Hasta Wellness: your EMS package expires soon and you still have sessions left. Reply with times that suit you and we'll book them in.`;
     case 'balance': return `Hi ${n}, this is Hasta Wellness. A balance of ${inr(r.amount)} is due on your EMS package. You can pay by UPI or at the clinic on your next visit. Thank you!`;
     case 'measure': return `Hi ${n}, it's time for your progress check at Hasta Wellness — we'll take your measurements at your next session so you can see how far you've come.`;
+    case 'admission': return r.step === 'sign'
+      ? `Hi ${n}, your clinician at Hasta Wellness has completed your assessment. Please open the Hasta EMS app, read your programme consent and sign it so we can start your sessions: ${APP_URL}#/admission`
+      : r.step === 'renew' ? `Hi ${n}, your Hasta Wellness programme consent is due for its yearly renewal. Please update your health questionnaire in the app (${APP_URL}#/admission) and we'll arrange a quick review at your next visit.`
+      : `Hi ${n}, welcome to Hasta Wellness! Before your programme starts, please fill in the short health questionnaire in the Hasta EMS app: ${APP_URL}#/admission`;
     case 'lead': return `Hi ${n}, thank you for your enquiry about EMS and weight management at Hasta Wellness, Kazhakkoottam. When would be a good time for a consultation with our team?`;
     case 'pin': return `Hi ${n}, welcome to Hasta EMS! Track your sessions, progress and plan at ${APP_URL}\nSign in with this mobile number and your PIN: ${r.pin}\nYou can change the PIN after signing in.`;
     default: return `Hi ${n}, this is Hasta Wellness.`;
@@ -277,7 +282,7 @@ async function viewClients(q) {
     <div class="toolbar"><form class="search" data-search>${icon('search', 18)}<input class="in" name="q" value="${esc(search)}" placeholder="Search name or mobile"></form>
       <div class="seg">${['active', 'paused', 'completed', 'all'].map(s => `<button data-s="${s}" class="${s === status ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div>
       <select class="in" data-coach style="width:auto;min-width:190px" aria-label="Coach">${[['', 'All coaches']].concat(tm.some(t => t.id === ME.id) ? [[String(ME.id), 'My clients']] : [], [['none', 'Not allocated']], tm.map(t => [String(t.id), t.name])).map(([v, l]) => `<option value="${v}"${v === coach ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
-    <section class="panel flush">${clients.length ? `<table class="t"><thead><tr><th>Client</th><th>Coach</th><th>Sessions</th><th>Weight</th><th>Last visit</th><th>Next visit</th><th>Suitability</th></tr></thead><tbody>
+    <section class="panel flush">${clients.length ? `<table class="t"><thead><tr><th>Client</th><th>Coach</th><th>Sessions</th><th>Weight</th><th>Last visit</th><th>Next visit</th><th>Admission</th></tr></thead><tbody>
       ${clients.map(c => { const diff = c.first_weight != null && c.last_weight != null ? Math.round((c.last_weight - c.first_weight) * 10) / 10 : null;
         return `<tr class="click" data-id="${c.id}"><td><div style="display:flex;gap:12px;align-items:center"><span class="avatar">${esc(initials(c.name))}</span><div><b>${esc(c.name)}</b><div class="small muted">${esc(prettyPhone(c.phone))}</div></div></div></td>
         <td>${c.coach_name ? esc(c.coach_name) : '<span style="color:var(--warn)">Not allocated</span>'}</td>
@@ -285,7 +290,7 @@ async function viewClients(q) {
         <td>${c.last_weight != null ? `<span class="num">${kg(c.last_weight)} kg</span> ${deltaTag(diff, ' kg')}` : '<span class="faint">—</span>'}</td>
         <td>${c.last_visit ? esc(fDay(c.last_visit)) : '<span class="faint">—</span>'}</td>
         <td>${c.next_visit ? esc(fWhen(c.next_visit)) : '<span class="faint">Not booked</span>'}</td>
-        <td>${c.cleared ? pill('cleared', 'Cleared') : pill('not-cleared', 'Check needed')}</td></tr>`; }).join('')}</tbody></table>`
+        <td>${admPill(c.adm_status ? { status: c.adm_status, valid_until: c.adm_valid } : null)}</td></tr>`; }).join('')}</tbody></table>`
       : emptyState('users', search ? 'No clients match your search.' : 'No clients yet. Add your first client to start tracking.', '<button class="btn sm gold" data-add>Add client</button>')}</section>`;
   const setQ = (k, v) => { const p = new URLSearchParams(q); p.set(k, v); location.hash = '#/clients?' + p; };
   MAIN.querySelector('[data-search]').addEventListener('submit', e => { e.preventDefault(); setQ('q', e.target.q.value.trim()); });
@@ -335,11 +340,12 @@ function showPin({ id, name, phone, pin, isNew }) {
 
 /* ---------- Client profile ---------- */
 
-const TABS = [['overview', 'layout-dashboard', 'Overview'], ['sessions', 'calendar-days', 'Sessions & packages'], ['progress', 'line-chart', 'Progress'], ['payments', 'wallet', 'Payments'], ['plan', 'salad', 'Lifestyle plan'], ['profile', 'user', 'Profile & suitability']];
+const TABS = [['overview', 'layout-dashboard', 'Overview'], ['admission', 'shield-check', 'Admission'], ['sessions', 'calendar-days', 'Sessions & packages'], ['progress', 'line-chart', 'Progress'], ['payments', 'wallet', 'Payments'], ['plan', 'salad', 'Lifestyle plan'], ['profile', 'user', 'Profile']];
 
 async function viewClient(id, tab) {
   const [d, tm] = await Promise.all([api('/staff/clients/' + id), team()]);
   d.team = tm;
+  if (!tab) tab = admState(d.admission) === 'admitted' ? 'overview' : 'admission';
   const c = d.client;
   const age = ageFrom(c.birth_year);
   const act = d.packages.filter(p => p.state === 'active');
@@ -353,7 +359,7 @@ async function viewClient(id, tab) {
         ${c.height_cm ? `<span>${icon('ruler', 15)}${c.height_cm} cm</span>` : ''}
         <span>${icon('package', 15)}${left} session${left === 1 ? '' : 's'} available</span>
         <button type="button" class="btn sm ghost" data-coach style="height:28px">${icon('users', 15)}${c.coach_name ? 'Coach: ' + esc(c.coach_name) : '<span style="color:var(--warn)">Allocate a coach</span>'}</button></div></div>
-      <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${pill(c.status)}${c.cleared ? pill('cleared', 'Cleared for EMS') : pill('not-cleared', 'Suitability check needed')}</div>
+      <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${pill(c.status)}<a href="#/clients/${c.id}?tab=admission" style="text-decoration:none">${admPill(d.admissions.find(x => x.status === 'admitted' && admState(x) === 'admitted') || d.admission)}</a></div>
     </div>
     <div class="head" style="margin-bottom:14px"><div></div><div class="acts">
       <a class="btn ghost" href="${esc(wa(c.phone, `Hi ${first(c.name)}, this is Hasta Wellness.`))}" target="_blank" rel="noopener">${icon('message-circle', 18)}WhatsApp</a>
@@ -374,7 +380,7 @@ async function viewClient(id, tab) {
   MAIN.querySelector('[data-measure]').addEventListener('click', () => measureModal(c, after));
   MAIN.querySelector('[data-pay]').addEventListener('click', () => payModal(c, d.packages, after));
   const body = MAIN.querySelector('[data-body]');
-  ({ overview: tabOverview, sessions: tabSessions, progress: tabProgress, payments: tabPayments, plan: tabPlan, profile: tabProfile }[tab] || tabOverview)(body, d, after);
+  ({ overview: tabOverview, admission: tabAdmission, sessions: tabSessions, progress: tabProgress, payments: tabPayments, plan: tabPlan, profile: tabProfile }[tab] || tabOverview)(body, d, after);
 }
 
 function metricStrip(d) {
@@ -426,12 +432,13 @@ function tabSessions(el, d, after) {
 }
 
 async function packageModal(c, after) {
+  if (!c.cleared) { toast('Complete the admission first — both the clinician and the client must sign before enrolment.', true); return go(`#/clients/${c.id}?tab=admission`); }
   const { packages } = await api('/staff/packages');
   const defs = packages.filter(p => p.active);
   modal({
     title: 'Add package · ' + c.name,
     body: `<form class="stack" style="gap:14px" data-f>
-      ${field('Package', sel('package_id', defs.map(p => [p.id, `${p.name} — ${p.sessions} sessions${p.price ? ', ' + inr(p.price) : ''}`]).concat([['', 'Custom package']]), defs[0] && defs[0].id))}
+      ${field('Package', sel('package_id', defs.map(p => [p.id, `${p.name} (${PROGRAMME_LABEL[p.programme] || 'EMS'}) — ${p.sessions} sessions${p.price ? ', ' + inr(p.price) : ''}`]).concat([['', 'Custom package']]), defs[0] && defs[0].id))}
       <div class="grid3">${field('Sessions', inp('sessions_total', defs[0] && defs[0].sessions, 'type="number" min="1"'))}${field('Price (₹)', inp('price', defs[0] && defs[0].price, 'type="number" min="0" inputmode="numeric"'))}${field('Discount (₹)', inp('discount', 0, 'type="number" min="0" inputmode="numeric"'))}</div>
       <div class="grid2">${field('Start date', inp('start_date', today(), 'type="date"'))}${field('Name', inp('name', defs[0] && defs[0].name, 'maxlength="80"'), 'shown to client')}</div>
       <p class="small muted" data-exp></p></form>`,
@@ -569,23 +576,17 @@ function tabProfile(el, d, after) {
       ${field('Programme status', sel('status', [['active', 'Active'], ['paused', 'Paused'], ['completed', 'Completed']], c.status))}
       ${field('Team notes', `<textarea class="in" name="staff_notes" maxlength="2000" placeholder="Visible to the team only">${esc(c.staff_notes || '')}</textarea>`)}
       <div><button class="btn" data-save>Save details</button></div></form></section>
-    <div class="stack"><section class="panel"><form class="stack" style="gap:12px" data-s>
-      <div class="panel-h" style="margin:0"><div class="t">${icon('shield-check', 20)}<h3>Suitability check</h3></div></div>
-      <p class="small muted">Tick anything the client reports. Any tick needs clinician review before EMS.</p>
-      ${SCREENING.map(([k, l]) => `<label class="check"><input type="checkbox" name="screening.${k}" ${c.screening && c.screening[k] ? 'checked' : ''}> ${esc(l)}</label>`).join('')}
-      <div style="border-top:1px solid var(--line-soft);padding-top:12px"><label class="check"><input type="checkbox" name="cleared" ${c.cleared ? 'checked' : ''}> <b>Cleared for EMS by a clinician</b></label></div>
-      <div><button class="btn" data-save-s>Save suitability</button></div></form></section>
+    <div class="stack"><section class="panel stack" style="gap:10px"><div class="t" style="display:flex;gap:10px;align-items:center">${icon('shield-check', 20)}<h3>Suitability and consent</h3></div>
+      <p class="small muted">Health screening, the clinician's assessment and both signed consents are handled in the Admission tab.</p>
+      <div>${admPill(d.admission)} <a class="btn sm ghost" href="#/clients/${c.id}?tab=admission" style="margin-left:6px">Open admission</a></div></section>
     <section class="panel stack" style="gap:12px"><div class="t" style="display:flex;gap:10px;align-items:center">${icon('key-round', 20)}<h3>Client app access</h3></div>
       <p class="small muted">The client signs in at ${esc(APP_URL)} with their mobile number and a 6-digit PIN.</p>
       <div><button class="btn ghost" data-pin>${icon('refresh-cw', 18)}Create new PIN</button></div>
       ${ME.role === 'admin' ? `<div style="border-top:1px solid var(--line-soft);padding-top:12px"><button class="btn danger" data-del>${icon('trash-2', 18)}Delete client and all records</button><p class="small muted" style="margin-top:6px">Use when a client asks for their data to be erased.</p></div>` : ''}</section></div></div>`;
-  const f = el.querySelector('[data-f]'), s = el.querySelector('[data-s]');
-  [f, s].forEach(x => x.addEventListener('submit', e => e.preventDefault()));
+  const f = el.querySelector('[data-f]');
+  f.addEventListener('submit', e => e.preventDefault());
   const saveF = el.querySelector('[data-save]');
   saveF.addEventListener('click', () => busy(saveF, () => api('/staff/clients/' + c.id, { method: 'PUT', body: formData(f) })).then(() => { toast('Details saved'); after(); }).catch(() => {}));
-  const saveS = el.querySelector('[data-save-s]');
-  saveS.addEventListener('click', () => { const b = formData(s); if (b.cleared && Object.values(b.screening || {}).some(Boolean) && !confirm('Some items are ticked. Confirm a clinician has reviewed them and cleared this client?')) return;
-    busy(saveS, () => api('/staff/clients/' + c.id, { method: 'PUT', body: { screening: b.screening || {}, cleared: b.cleared } })).then(() => { toast('Suitability saved'); after(); }).catch(() => {}); });
   const pinB = el.querySelector('[data-pin]');
   pinB.addEventListener('click', () => { if (confirm('Create a new PIN? The current one will stop working.')) busy(pinB, () => api(`/staff/clients/${c.id}/pin`, { method: 'POST', body: {} })).then(r => showPin({ ...c, pin: r.pin, isNew: false })).catch(() => {}); });
   el.querySelector('[data-del]')?.addEventListener('click', e => { if (prompt(`Type DELETE to erase ${c.name} and every record for them. This cannot be undone.`) === 'DELETE') busy(e.currentTarget, () => api('/staff/clients/' + c.id, { method: 'DELETE', body: {} })).then(() => { toast('Client deleted'); go('#/clients'); }).catch(() => {}); });
@@ -627,6 +628,7 @@ async function viewLeads(q) {
 
 const REM_GROUPS = [
   ['tomorrow', 'calendar-check', 'Appointments tomorrow', 'Send a reminder the evening before to cut no-shows.'],
+  ['admission', 'shield-check', 'Admission and consent', 'Questionnaires to fill in, consents waiting for a signature, and admissions due for renewal.'],
   ['lead', 'inbox', 'New enquiries', 'Website leads not yet contacted.'],
   ['rebook', 'calendar-plus', 'Needs a next booking', 'Clients with sessions left and nothing booked.'],
   ['expiry', 'clock', 'Packages expiring', 'Unused sessions on packages ending within 14 days.'],
@@ -703,7 +705,7 @@ async function viewSettings() {
     <div class="stack">
       <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('package', 20)}<h3>Package catalogue</h3></div>${admin ? `<button class="btn sm gold" data-new-pkg>${icon('plus', 16)}New package</button>` : ''}</div>
         <table class="t"><thead><tr><th>Package</th><th class="n">Sessions</th><th class="n">Price</th><th class="n">Valid for</th><th>Status</th></tr></thead><tbody>
-        ${packages.map(p => `<tr class="${admin ? 'click' : ''}" data-pkg="${p.id}"><td><b>${esc(p.name)}</b><div class="small muted">${esc(p.description || '')}</div></td><td class="n">${p.sessions}</td><td class="n">${p.price != null ? inr(p.price) : '<span style="color:var(--warn)">Set price</span>'}</td><td class="n">${p.validity_days} days</td><td>${p.active ? pill('active') : pill('closed', 'Hidden')}</td></tr>`).join('')}</tbody></table></section>
+        ${packages.map(p => `<tr class="${admin ? 'click' : ''}" data-pkg="${p.id}"><td><b>${esc(p.name)}</b><div class="small muted">${esc(PROGRAMME_LABEL[p.programme] || 'EMS programme')}${p.description ? ' — ' + esc(p.description) : ''}</div></td><td class="n">${p.sessions}</td><td class="n">${p.price != null ? inr(p.price) : '<span style="color:var(--warn)">Set price</span>'}</td><td class="n">${p.validity_days} days</td><td>${p.active ? pill('active') : pill('closed', 'Hidden')}</td></tr>`).join('')}</tbody></table></section>
       ${admin ? `<section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('users', 20)}<h3>Team accounts</h3></div><button class="btn sm gold" data-new-user>${icon('user-plus', 16)}Add team member</button></div>
         <div class="rows">${users.some(u => u.username === 'hasta') ? '' : `<div class="row"><span class="avatar">CA</span><div class="grow"><b>Clinic admin</b><span>Username "hasta" — password is the website admin password</span></div>${pill('active', 'Admin')}</div>`}
         ${users.map(u => `<div class="row click" data-user="${u.id}"><span class="avatar">${esc(initials(u.name))}</span><div class="grow"><b>${esc(u.name)}</b><span>${esc(u.username)}</span></div><a class="btn sm quiet" href="#/clients?coach=${u.id}" onclick="event.stopPropagation()">${clientsOf(u.id)} active client${clientsOf(u.id) === 1 ? '' : 's'}</a>${pill(u.active ? 'active' : 'closed', u.active ? (u.role === 'admin' ? 'Admin' : 'Team') : 'Disabled')}</div>`).join('')}</div></section>` : ''}
@@ -729,6 +731,7 @@ function pkgDefModal(p) {
     title: p.id ? 'Edit package' : 'New package',
     body: `<form class="stack" style="gap:14px" data-f>${field('Name', inp('name', p.name, 'maxlength="80"'))}
       <div class="grid3">${field('Sessions', inp('sessions', p.sessions, 'type="number" min="1"'))}${field('Price (₹)', inp('price', p.price, 'type="number" min="0"'))}${field('Valid for (days)', inp('validity_days', p.validity_days, 'type="number" min="7"'))}</div>
+      ${field('Programme', sel('programme', [['ems', 'EMS programme'], ['weight', 'Weight management'], ['combined', 'EMS + weight management']], p.programme || 'ems'), 'the client\'s admission must cover this')}
       ${field('Description', inp('description', p.description, 'maxlength="200"'))}
       <label class="check"><input type="checkbox" name="active" ${p.active ? 'checked' : ''}> Available to assign</label></form>
       <p class="small muted">Changing a package here doesn't change packages already given to clients.</p>`,
@@ -753,4 +756,120 @@ function userModal(u) {
       save.addEventListener('click', () => busy(save, () => { const b = formData(el.querySelector('[data-f]')); if (!u.id) b.active = true; return api('/staff/users' + (u.id ? '/' + u.id : ''), { method: u.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Team member saved'); team(true); reload(); }).catch(() => {}));
     },
   });
+}
+
+/* ================= Admission ================= */
+
+function tabAdmission(el, d, after) {
+  const c = d.client, a = d.admission, st = admState(a), Q = d.screen_questions;
+  const pdf = x => `${BASE}/api/staff/admissions/${x.id}/pdf`;
+  const history = d.admissions.length ? `<section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('clipboard-check', 20)}<h3>Admission records</h3></div></div>
+    <table class="t"><thead><tr><th>Started</th><th>Programme</th><th>Status</th><th>Clinician</th><th>Client signed</th><th></th></tr></thead><tbody>${d.admissions.map(x => `<tr><td>${esc(fDate(x.created_at))}</td><td>${x.programmes.map(p => esc(PROGRAMME_LABEL[p])).join(', ')}</td><td>${admPill(x)}</td><td>${x.clinician_name ? esc(x.clinician_name) + `<div class="small muted">${esc(x.clinician_role)}</div>` : '—'}</td><td>${x.client_signed_at ? esc(fDate(x.client_signed_at)) + `<div class="small muted">${x.client_sign_where === 'app' ? 'in app' : 'at clinic'}</div>` : '—'}</td>
+    <td class="n"><a class="btn sm ghost" href="${pdf(x)}" download>${icon('printer', 15)}PDF</a></td></tr>`).join('')}</tbody></table></section>` : '';
+  const withdrawBtn = a && ['screening', 'assessment', 'client_consent', 'admitted'].includes(a.status) && st !== 'expired' ? `<button class="btn danger sm" data-withdraw>${icon('x', 15)}${a.status === 'admitted' ? 'Withdraw consent' : 'Cancel admission'}</button>` : '';
+  let body = '';
+
+  if (['none', 'not_suitable', 'withdrawn', 'expired'].includes(st)) {
+    body = `<section class="panel stack" style="gap:14px">
+      ${st === 'not_suitable' ? `<div class="ins alert">${icon('shield-alert', 20)}<div><b>Assessed as not suitable on ${esc(fDate(a.clinician_signed_at))}</b><p>${esc(a.findings || '')} — ${esc(a.clinician_name)}, ${esc(a.clinician_role)}</p></div></div>` : ''}
+      ${st === 'withdrawn' ? `<div class="ins warn">${icon('info', 20)}<div><b>Consent withdrawn ${esc(fDate(a.withdrawn_at))}</b><p>${esc(a.withdrawn_reason || '')}</p></div></div>` : ''}
+      ${st === 'expired' ? `<div class="ins warn">${icon('clock', 20)}<div><b>Admission expired on ${esc(fDate(a.valid_until))}</b><p>Admissions last 12 months. Repeat the screening, assessment and consent to continue.</p></div></div>` : ''}
+      <div class="panel-h" style="margin:0"><div class="t">${icon('shield-check', 20)}<h3>${st === 'none' ? 'Start admission' : 'Start a new admission'}</h3></div></div>
+      <p class="muted">No package can be assigned and no EMS session booked until all three steps are done: the client's health screening, the coach or doctor's assessment with their signed recommendation, and the client's signed consent.</p>
+      <form data-start class="stack" style="gap:12px"><div><h4 style="margin-bottom:8px">Programmes this admission covers</h4><div class="chips">
+        <label class="chip"><input type="checkbox" name="ems" checked>${icon('zap', 15)}EMS programme</label>
+        <label class="chip"><input type="checkbox" name="weight">${icon('salad', 15)}Weight management</label></div></div>
+        ${c.birth_year ? '' : `<p class="note">${icon('info', 15)} Add the client's year of birth in Profile first — programmes are for adults aged 18+.</p>`}
+        <div><button class="btn gold">${icon('shield-check', 18)}Start admission</button></div></form></section>`;
+  } else if (st === 'screening') {
+    body = `<section class="panel stack" style="gap:14px"><div class="panel-h" style="margin:0"><div class="t">${icon('clipboard-check', 20)}<h3>Step 1 — Health screening</h3></div>
+        <a class="btn sm wa" target="_blank" rel="noopener" href="${esc(wa(c.phone, reminderText('admission', { name: c.name, step: 'screening' })))}">${icon('message-circle', 15)}Ask client to fill it in the app</a></div>
+      <p class="muted">Go through each question with the client, or let them answer in their app. Every question needs a Yes or No.</p>
+      <form data-scr class="stack" style="gap:14px">${screeningForm(Q, a.screening)}<div><button class="btn">${icon('check', 18)}Save screening</button></div></form></section>`;
+  } else if (st === 'assessment') {
+    const yes = Q.filter(([k]) => a.screening.answers[k]);
+    body = `<div class="cols"><section class="panel stack" style="gap:14px"><div class="panel-h" style="margin:0"><div class="t">${icon('stethoscope', 20)}<h3>Step 2 — Clinician assessment</h3></div></div>
+      <form data-asm class="stack" style="gap:14px">
+        <div class="grid3">${field('Blood pressure', inp('bp', '', 'placeholder="120/80" inputmode="numeric"'), 'mmHg')}${field('Resting heart rate', inp('heart_rate', '', 'type="number" inputmode="numeric"'), 'bpm')}${field('Weight', inp('assess_weight', '', 'type="number" step="0.1" inputmode="decimal"'), 'kg')}</div>
+        ${field('Findings', `<textarea class="in" name="findings" maxlength="1000" placeholder="${yes.length ? 'Required: comment on each Yes answer' : 'e.g. No contraindications found'}"></textarea>`)}
+        <div><h4 style="margin-bottom:8px">Decision</h4><div class="chips">
+          <label class="chip"><input type="radio" name="decision" value="suitable">Suitable</label>
+          <label class="chip"><input type="radio" name="decision" value="conditions">Suitable with precautions</label>
+          <label class="chip"><input type="radio" name="decision" value="not_suitable">Not suitable now</label></div></div>
+        ${field('Precautions the client must follow', `<textarea class="in" name="precautions" maxlength="600" placeholder="e.g. Low intensity for first 4 sessions; avoid abdominal pads; check BP before each session"></textarea>`, 'required for "with precautions"')}
+        <div class="grid3">${field('Clinician name', inp('clinician_name', ME.id ? ME.name : ''))}${field('Role', sel('clinician_role', ['Wellness coach', 'Doctor', 'Physiotherapist', 'Dietitian', 'Nurse'], 'Wellness coach'))}${field('Registration no.', inp('clinician_reg', ''), 'required for doctors')}</div>
+        <div><h4 style="margin-bottom:8px">Clinician signature</h4><div data-sig></div></div>
+        <label class="check"><input type="checkbox" name="confirm"> <span>I have assessed this client in person and the recommendation is my professional judgement. I sign it on behalf of Hasta Wellness.</span></label>
+        <div><button class="btn gold">${icon('pencil', 18)}Sign recommendation</button></div></form></section>
+      <section class="panel stack" style="gap:12px"><div class="t" style="display:flex;gap:10px;align-items:center">${icon('clipboard-check', 20)}<h3>Screening answers</h3></div>
+        <p class="small muted">Completed ${esc(fDate(a.screened_at))} by ${esc(a.screened_by)}</p>
+        ${yes.length ? `<div class="yes-list">${yes.map(([, q]) => `<div>${icon('alert-triangle', 16)}<span>Yes — ${esc(q)}</span></div>`).join('')}</div>` : `<div class="ins good">${icon('check-circle', 20)}<div><b>No to every question</b><p>No contraindications reported.</p></div></div>`}
+        <dl class="kv"><dt>Medicines</dt><dd>${esc(a.screening.medicines || 'None stated')}</dd><dt>Other</dt><dd>${esc(a.screening.other || 'None stated')}</dd></dl>
+        <button class="btn sm ghost" data-redo-scr>${icon('pencil', 15)}Edit screening</button></section></div>`;
+  } else if (st === 'client_consent') {
+    body = `<div class="cols"><section class="panel stack" style="gap:14px"><div class="panel-h" style="margin:0"><div class="t">${icon('pencil', 20)}<h3>Step 3 — Client consent</h3></div></div>
+      <p class="muted">The client reads both letters and signs. They can do it in their app, or here on this device at the clinic.</p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><button class="btn gold" data-sign-now>${icon('pencil', 18)}Sign now at the clinic</button>
+        <a class="btn wa" target="_blank" rel="noopener" href="${esc(wa(c.phone, reminderText('admission', { name: c.name, step: 'sign' })))}">${icon('message-circle', 18)}Send to the client's app</a></div>
+      ${letterBox('Client consent (to be signed)', a.client_letter)}</section>
+      <section class="panel stack" style="gap:12px">${letterBox('Clinician recommendation — signed', a.clinician_letter, `Signed by ${esc(a.clinician_name)}, ${esc(a.clinician_role)}${a.clinician_reg ? ' · Reg. ' + esc(a.clinician_reg) : ''} · ${esc(fWhen(new Date(new Date(a.clinician_signed_at).getTime() + 330 * 60000).toISOString().slice(0, 16)))}`)}</section></div>`;
+  } else if (st === 'admitted') {
+    body = `<section class="panel stack" style="gap:14px"><div class="ins good">${icon('shield-check', 22)}<div><b>Admitted to the ${a.programmes.map(p => esc(PROGRAMME_LABEL[p])).join(' and ')} until ${esc(fDate(a.valid_until))}</b>
+        <p>Recommended by ${esc(a.clinician_name)} (${esc(a.clinician_role)}) on ${esc(fDate(a.clinician_signed_at))}. Consent signed by ${esc(a.client_typed_name)} ${a.client_sign_where === 'app' ? 'in the app' : 'at the clinic'} on ${esc(fDate(a.client_signed_at))}.</p></div></div>
+      ${a.precautions ? `<div class="ins warn">${icon('alert-triangle', 20)}<div><b>Precautions</b><p>${esc(a.precautions)}</p></div></div>` : ''}
+      <div style="display:flex;gap:10px;flex-wrap:wrap"><a class="btn" href="${pdf(a)}" download>${icon('printer', 18)}Download signed PDF</a><a class="btn ghost" href="#/clients/${c.id}?tab=sessions">${icon('package', 18)}Add a package</a>${a.valid_until <= addDays(today(), 30) ? `<button class="btn gold" data-renew>${icon('refresh-cw', 18)}Start renewal</button>` : ''}</div></section>`;
+  }
+
+  el.innerHTML = `${admSteps(a && st !== 'none' && !['not_suitable', 'withdrawn', 'expired'].includes(st) ? a : null)}<div class="stack">${body}${history}${withdrawBtn ? `<div>${withdrawBtn}</div>` : ''}</div>`;
+
+  el.querySelector('[data-renew]')?.addEventListener('click', e => busy(e.currentTarget, () => api(`/staff/clients/${c.id}/admissions`, { method: 'POST', body: { programmes: a.programmes } })).then(() => { toast('Renewal started — the current admission stays valid until it expires'); after(); }).catch(() => {}));
+  el.querySelector('[data-start]')?.addEventListener('submit', e => {
+    e.preventDefault();
+    const f = e.target, programmes = ['ems', 'weight'].filter(k => f[k].checked);
+    busy(f.querySelector('button'), () => api(`/staff/clients/${c.id}/admissions`, { method: 'POST', body: { programmes } })).then(() => { toast('Admission started'); after(); }).catch(() => {});
+  });
+  const scr = el.querySelector('[data-scr]');
+  scr && scr.addEventListener('submit', e => {
+    e.preventDefault();
+    const v = readScreening(scr, Q);
+    scr.querySelectorAll('.q').forEach((q, i) => q.classList.toggle('missing', v.answers[Q[i][0]] === null));
+    if (Object.values(v.answers).some(x => x === null)) return toast('Answer every question with Yes or No.', true);
+    busy(scr.querySelector('button.btn'), () => api(`/staff/admissions/${a.id}/screening`, { method: 'PUT', body: v })).then(() => { toast('Screening saved — next, the clinician assessment'); after(); }).catch(() => {});
+  });
+  el.querySelector('[data-redo-scr]')?.addEventListener('click', () => modal({
+    title: 'Edit health screening', wide: true, body: `<form data-f class="stack" style="gap:14px">${screeningForm(Q, a.screening)}</form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save screening</button>`,
+    onMount(m, close) { const b = m.querySelector('[data-save]'); b.addEventListener('click', () => { const v = readScreening(m.querySelector('[data-f]'), Q); if (Object.values(v.answers).some(x => x === null)) return toast('Answer every question.', true); busy(b, () => api(`/staff/admissions/${a.id}/screening`, { method: 'PUT', body: v })).then(() => { close(); toast('Screening updated'); after(); }).catch(() => {}); }); },
+  }));
+  const asm = el.querySelector('[data-asm]');
+  if (asm) {
+    const pad = sigPad(asm.querySelector('[data-sig]'));
+    asm.addEventListener('submit', e => {
+      e.preventDefault();
+      const b = formData(asm);
+      b.signature = pad.value(); b.confirm = asm.confirm.checked;
+      if (!b.decision) return toast('Choose the decision.', true);
+      if (!b.signature) return toast('Please sign in the signature box.', true);
+      busy(asm.querySelector('button.btn.gold'), () => api(`/staff/admissions/${a.id}/assess`, { method: 'POST', body: b })).then(r => { toast(r.status === 'not_suitable' ? 'Recorded as not suitable' : 'Recommendation signed — now the client signs'); after(); }).catch(() => {});
+    });
+  }
+  el.querySelector('[data-sign-now]')?.addEventListener('click', () => modal({
+    title: 'Client consent — hand the device to the client', wide: true,
+    body: `${letterBox('Recommendation from ' + a.clinician_name, a.clinician_letter)}${letterBox('Your consent', a.client_letter)}
+      <form data-f class="stack" style="gap:14px">${field('Type your full name', inp('typed_name', '', `autocomplete="off" placeholder="${esc(c.name)}"`))}
+      <div><h4 style="margin-bottom:8px">Your signature</h4><div data-sig></div></div>
+      <label class="check"><input type="checkbox" name="agree"> <span>I have read the recommendation and this consent, my questions have been answered, and I agree to join the programme.</span></label></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>${icon('pencil', 18)}Sign consent</button>`,
+    onMount(m, close) {
+      const pad = sigPad(m.querySelector('[data-sig]')), f = m.querySelector('[data-f]'), b = m.querySelector('[data-save]');
+      b.addEventListener('click', () => { const sig = pad.value(); if (!sig) return toast('Please sign in the box.', true);
+        busy(b, () => api(`/staff/admissions/${a.id}/client-sign`, { method: 'POST', body: { typed_name: f.typed_name.value, signature: sig, agree: f.agree.checked } })).then(() => { close(); toast('Consent signed — client admitted'); after(); }).catch(() => {}); });
+    },
+  }));
+  el.querySelector('[data-withdraw]')?.addEventListener('click', () => modal({
+    title: a.status === 'admitted' ? 'Withdraw consent' : 'Cancel admission',
+    body: `<p>${a.status === 'admitted' ? 'The client will be blocked from new packages and bookings, and their upcoming EMS sessions will be cancelled.' : 'This admission will be closed. You can start a new one later.'}</p>${field('Reason', inp('reason', '', 'maxlength="300" placeholder="e.g. Client request, health change"'))}`,
+    actions: `<button class="btn ghost" data-close>Keep</button><button class="btn danger" data-save>Confirm</button>`,
+    onMount(m, close) { const b = m.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api(`/staff/admissions/${a.id}/withdraw`, { method: 'POST', body: { reason: m.querySelector('[name=reason]').value } })).then(r => { close(); toast('Recorded' + (r.cancelled ? ` — ${r.cancelled} upcoming session${r.cancelled > 1 ? 's' : ''} cancelled` : '')); after(); }).catch(() => {})); },
+  }));
 }

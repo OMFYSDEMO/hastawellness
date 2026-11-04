@@ -31,3 +31,13 @@ the app runs at `/`; on any other host it is available at `/ems/`.
 - Tables: `migrations/0003_ems.sql` (prefix `ems_`). Settings: `EMS_SLOT_CAPACITY`,
   `EMS_ORIGIN` in `wrangler.jsonc`. A morning digest email goes to ALERT_EMAILS.
 - Icons: Lucide (ISC), see `public/ems/LICENSE-lucide.txt`.
+
+### Admission and consent (`src/admission.js`)
+Every client goes through admission before any enrolment: (1) health screening
+(yes/no to every question, in the client app or with staff), (2) wellness coach
+or doctor assessment with vitals, decision, precautions and a drawn signature,
+(3) client consent signed in the app or on the clinic device, (4) admitted for
+12 months. Packages can't be assigned, and EMS sessions can't be booked, without
+a valid admission covering the package's programme. Signed letters are kept as
+text snapshots with signatures and download as PDF (pdf-lib, MIT — see
+`src/vendor/LICENSE-pdf-lib.md`). Consent text version: `CONSENT_VERSION`.
