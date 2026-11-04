@@ -75,7 +75,7 @@ export function clinicianLetter(a, c) {
   const prog = progList(parse(a.programmes) || []);
   const who = `${a.clinician_name}, ${a.clinician_role}${a.clinician_reg ? ` (Registration no. ${a.clinician_reg})` : ''}`;
   const lines = [
-    `I, ${who} at Hasta Wellness, a venture of HASWEL CARE Private Limited, assessed ${c.name}${age ? `, aged ${age}` : ''}, on ${longDay(today())} for the ${prog}.`,
+    `I, ${who} at Hasta Wellness, a venture of HASWEL CARE Private Limited, assessed ${c.name}${age ? `, aged ${age}` : ''}, ${a.assess_mode === 'video' ? 'by video consultation' : 'in person'} on ${longDay(today())} for the ${prog}.`,
     `I have reviewed the health screening answers given by the client and the assessment findings recorded in this form${a.bp ? ` (blood pressure ${a.bp} mmHg` : ''}${a.heart_rate ? `${a.bp ? ', ' : ' ('}resting heart rate ${a.heart_rate} bpm` : ''}${a.bp || a.heart_rate ? ')' : ''}.`,
     a.decision === 'not_suitable'
       ? `In my professional judgement the client is not suitable to start this programme at this time. Reason: ${a.findings || 'see findings'}.`
@@ -109,7 +109,7 @@ export function publicAdmission(a, c, forStaff) {
   const out = {
     id: a.id, status: a.status, step: stepLabel(a.status), programmes: parse(a.programmes) || [], consent_version: a.consent_version,
     screening: parse(a.screening), screened_at: a.screened_at, screened_by: a.screened_by,
-    bp: a.bp, heart_rate: a.heart_rate, assess_weight: a.assess_weight, findings: a.findings, precautions: a.precautions, decision: a.decision,
+    assess_mode: a.assess_mode, bp: a.bp, heart_rate: a.heart_rate, assess_weight: a.assess_weight, findings: a.findings, precautions: a.precautions, decision: a.decision,
     clinician_name: a.clinician_name, clinician_role: a.clinician_role, clinician_reg: a.clinician_reg, clinician_signed_at: a.clinician_signed_at,
     client_typed_name: a.client_typed_name, client_signed_at: a.client_signed_at, client_sign_where: a.client_sign_where,
     valid_until: a.valid_until, withdrawn_at: a.withdrawn_at, withdrawn_reason: a.withdrawn_reason, created_at: a.created_at,
@@ -170,12 +170,13 @@ export async function saveAssessment(env, me, adm, c, b) {
   if (role === 'Doctor' && !reg) return [400, 'Enter the doctor\'s registration number.'];
   if (!sigOk(b.signature)) return [400, 'The clinician must sign in the signature box.'];
   if (b.confirm !== true) return [400, 'Tick the confirmation to sign the recommendation.'];
-  const row = { ...adm, bp: bp || null, heart_rate: hr, assess_weight: wt, findings: findings || null, precautions: precautions || null, decision, clinician_name: name, clinician_role: role, clinician_reg: reg || null };
+  const assessMode = b.assess_mode === 'video' ? 'video' : 'in_person';
+  const row = { ...adm, assess_mode: assessMode, bp: bp || null, heart_rate: hr, assess_weight: wt, findings: findings || null, precautions: precautions || null, decision, clinician_name: name, clinician_role: role, clinician_reg: reg || null };
   const letter = clinicianLetter(row, c);
   const status = decision === 'not_suitable' ? 'not_suitable' : 'client_consent';
   await env.DB.prepare(`UPDATE ems_admissions SET bp=?, heart_rate=?, assess_weight=?, findings=?, precautions=?, decision=?, clinician_id=?, clinician_name=?, clinician_role=?, clinician_reg=?,
-    clinician_sig=?, clinician_signed_at=?, clinician_letter=?, status=?, updated_at=? WHERE id=?`)
-    .bind(row.bp, hr, wt, row.findings, row.precautions, decision, me.id, name, role, row.clinician_reg, b.signature, nowIso(), letter, status, nowIso(), adm.id).run();
+    clinician_sig=?, clinician_signed_at=?, clinician_letter=?, status=?, assess_mode=?, updated_at=? WHERE id=?`)
+    .bind(row.bp, hr, wt, row.findings, row.precautions, decision, me.id, name, role, row.clinician_reg, b.signature, nowIso(), letter, status, assessMode, nowIso(), adm.id).run();
   if (wt) await env.DB.prepare('INSERT INTO ems_measurements (client_id, measured_on, weight, notes, staff_id) VALUES (?,?,?,?,?)').bind(c.id, today(), wt, 'Admission assessment', me.id).run();
   if (status === 'not_suitable') await env.DB.prepare('UPDATE ems_clients SET cleared=0 WHERE id=?').bind(c.id).run();
   return [200, null, { status }];
@@ -318,7 +319,7 @@ export async function admissionPdf(env, request, adm, c) {
 
   heading('2. Clinician assessment and recommendation');
   if (adm.clinician_signed_at) {
-    kv([['Blood pressure', adm.bp ? adm.bp + ' mmHg' : 'Not recorded'], ['Resting heart rate', adm.heart_rate ? adm.heart_rate + ' bpm' : 'Not recorded'], ['Weight', adm.assess_weight ? adm.assess_weight + ' kg' : 'Not recorded'],
+    kv([['Assessed', adm.assess_mode === 'video' ? 'By video consultation' : 'In person'], ['Blood pressure', adm.bp ? adm.bp + ' mmHg' : 'Not recorded'], ['Resting heart rate', adm.heart_rate ? adm.heart_rate + ' bpm' : 'Not recorded'], ['Weight', adm.assess_weight ? adm.assess_weight + ' kg' : 'Not recorded'],
       ['Findings', adm.findings || 'No concerns noted'], ['Decision', DECISIONS[adm.decision]], ['Precautions', adm.precautions || 'None']]);
     para(adm.clinician_letter, { size: 10 });
     await signature(adm.clinician_sig, adm.clinician_name, `${adm.clinician_role}${adm.clinician_reg ? ' · Reg. no. ' + adm.clinician_reg : ''} · Hasta Wellness`, 'Signed electronically ' + istStamp(adm.clinician_signed_at));

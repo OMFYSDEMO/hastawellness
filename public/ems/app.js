@@ -6,8 +6,8 @@ async function start() {
   let me = null;
   try { ({ me } = await api('/me')); } catch (e) { app.innerHTML = `<div class="boot"><p class="err">${esc(e.message)}</p></div>`; return; }
   if (!me) return login();
-  if (me.kind === 'staff') (await import('./staff.js?v=3')).mount(app, me);
-  else (await import('./client.js?v=3')).mount(app, me);
+  if (me.kind === 'staff') (await import('./staff.js?v=4')).mount(app, me);
+  else (await import('./client.js?v=4')).mount(app, me);
 }
 
 function login() {
@@ -35,6 +35,7 @@ function login() {
           ${field('Your name', inp('name', '', 'autocomplete="name" required'))}
           ${field('Mobile number', inp('phone', '', 'type="tel" inputmode="tel" autocomplete="tel" placeholder="98xxx xxxxx" required'))}
           ${field('What would you like to work on?', inp('goal', '', 'placeholder="e.g. lose 6 kg, tone after pregnancy"'), 'optional')}
+          <div class="grid2">${field('Your area PIN code', inp('pincode', '', 'inputmode="numeric" maxlength="6" placeholder="695582"'), 'finds your nearest centre')}${field('Consultation', '<select class="in" name="mode"><option value="in_person">At the centre</option><option value="video">Video call</option></select>')}</div>
           <div class="grid2">${field('Preferred date', inp('preferred_date', '', `type="date" min="${today()}"`))}${field('Best time', `<select class="in" name="timing"><option value="">Any time</option><option>Morning</option><option>Lunch break</option><option>Evening</option><option>Weekend</option></select>`)}</div>
           <input name="company" tabindex="-1" autocomplete="off" style="position:absolute;left:-9999px" aria-hidden="true">
           <label class="check"><input type="checkbox" name="consent"> <span>I agree to Hasta Wellness contacting me about this request. Please don't include medical details here.</span></label>

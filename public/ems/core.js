@@ -100,7 +100,7 @@ export const sel = (name, options, value, attrs = '') => `<select class="in" nam
 export const emptyState = (ic, text, action = '') => `<div class="empty">${icon(ic, 30)}<p>${esc(text)}</p>${action}</div>`;
 
 /* ---------- Slot picker ---------- */
-export function slotPicker(el, { staff = false, onPick, days = 14, startDate } = {}) {
+export function slotPicker(el, { staff = false, onPick, days = 14, startDate, query = () => '' } = {}) {
   let chosenDay = startDate || today(), chosen = null;
   const dayList = [];
   for (let i = 0; i < days; i++) dayList.push(addDays(today(), i));
@@ -110,9 +110,9 @@ export function slotPicker(el, { staff = false, onPick, days = 14, startDate } =
   async function load() {
     slotsEl.innerHTML = '<p class="muted small">Loading times…</p>';
     try {
-      const { slots } = await api('/slots?date=' + chosenDay);
-      slotsEl.innerHTML = slots.length ? slots.map(s => `<button type="button" class="slot" data-t="${s.time}" ${s.left ? '' : (staff ? 'data-full="1"' : 'disabled')} title="${s.left ? s.left + ' place' + (s.left > 1 ? 's' : '') + ' left' : 'Full'}">${fTime(s.time)}</button>`).join('')
-        : '<p class="muted small">No times left on this day.</p>';
+      const { slots } = await api('/slots?date=' + chosenDay + query());
+      slotsEl.innerHTML = slots.some(s => s.left) || (staff && slots.length) ? slots.map(s => `<button type="button" class="slot" data-t="${s.time}" ${s.left ? '' : (staff ? 'data-full="1"' : 'disabled')} title="${s.left ? s.left + ' place' + (s.left > 1 ? 's' : '') + ' left' : 'Full'}">${fTime(s.time)}</button>`).join('')
+        : `<p class="muted small">${slots.length ? 'Fully booked on this day.' : 'Closed, or no staff rostered on this day.'}</p>`;
     } catch (e) { slotsEl.innerHTML = `<p class="err">${esc(e.message)}</p>`; }
   }
   el.addEventListener('click', e => {
@@ -122,7 +122,7 @@ export function slotPicker(el, { staff = false, onPick, days = 14, startDate } =
     if (s && !s.disabled) { el.querySelectorAll('.slot').forEach(x => x.classList.toggle('on', x === s)); chosen = `${chosenDay}T${s.dataset.t}`; onPick && onPick(chosen, !!s.dataset.full); }
   });
   load();
-  return { value: () => chosen };
+  return { value: () => chosen, reload: () => { chosen = null; onPick && onPick(null); load(); } };
 }
 
 /* ---------- Charts (SVG, no dependencies) ---------- */
@@ -336,3 +336,5 @@ export function sigPad(el) {
   el.querySelector('[data-clear]').addEventListener('click', () => { ctx.clearRect(0, 0, cv.width, cv.height); dirty = false; hint.hidden = false; });
   return { value: () => dirty ? cv.toDataURL('image/png') : null };
 }
+
+export const unitLabel = (units, id) => { const u = (units || []).find(x => x.id === id); return u ? u.name : ''; };

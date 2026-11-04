@@ -41,3 +41,14 @@ or doctor assessment with vitals, decision, precautions and a drawn signature,
 a valid admission covering the package's programme. Signed letters are kept as
 text snapshots with signatures and download as PDF (pdf-lib, MIT — see
 `src/vendor/LICENSE-pdf-lib.md`). Consent text version: `CONSENT_VERSION`.
+
+### Satellite units (`src/units.js`)
+Each unit has its own hours, up to 3 EMS devices, team members (with skills:
+EMS trainer, wellness coach, doctor, front desk) and a weekly rota with leave.
+A session slot is offered only when a device and a rostered trainer are free;
+each trainer supervises one client at a time. Consultations need a free coach
+or doctor (in person at the unit, or by video from any unit's video shift).
+Bookings get a device and staff member assigned automatically. Clients can
+book at any unit. Units are company-owned or franchise; sessions delivered for
+another unit's package appear in the cross-unit settlement on Payments.
+Roles: admin (all units), unit manager (rota and leave), team.

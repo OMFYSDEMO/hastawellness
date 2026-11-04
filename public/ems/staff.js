@@ -5,12 +5,16 @@ import {
   PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
 } from './core.js';
 
-let ME, APP, MAIN, BADGES = {}, TEAM = null;
+let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {};
+const multi = () => UNITS.length > 1;
+const U = (path) => UNIT ? path + (path.includes('?') ? '&' : '?') + 'unit=' + UNIT : path;
+const unitName = id => (ALL_UNITS.find(u => u.id === id) || {}).name || '';
+const unitOpts = (list = UNITS) => list.map(u => [u.id, u.name]);
 async function team(fresh = false) { if (!TEAM || fresh) TEAM = (await api('/staff/team')).team; return TEAM; }
 const coachOptions = (list, value) => [['', 'Not allocated']].concat(list.map(t => [t.id, t.name + (t.role === 'admin' ? ' (admin)' : '')]));
 const NAV = [
   ['', 'layout-dashboard', 'Dashboard'], ['schedule', 'calendar-days', 'Schedule'], ['clients', 'users', 'Clients'],
-  ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['payments', 'wallet', 'Payments'],
+  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['payments', 'wallet', 'Payments'],
 ];
 
 export function mount(app, me) {
@@ -21,16 +25,27 @@ export function mount(app, me) {
       <div class="nav-sep"></div><a href="#/settings" data-k="settings">${icon('settings', 20)}<span>Settings</span></a></nav>
     <div class="me"><span class="avatar">${esc(initials(me.name))}</span><div><b>${esc(me.name)}</b><span>${me.role === 'admin' ? 'Admin' : 'Team'}</span></div>
       <button data-logout aria-label="Sign out" title="Sign out">${icon('log-out', 18)}</button></div>
-  </aside><main class="main" id="main"></main></div>`;
+  </aside><div class="mainwrap"><div class="unitbar" hidden><span>${icon('home', 16)}</span><select class="in" data-unit aria-label="Unit"></select></div><main class="main" id="main"></main></div></div>`;
   MAIN = app.querySelector('#main');
   app.querySelector('[data-logout]').addEventListener('click', async () => { await api('/auth/logout', { method: 'POST', body: {} }); location.hash = ''; location.reload(); });
   window.addEventListener('hashchange', route);
-  route();
-  refreshBadges();
+  loadUnits().then(() => { route(); refreshBadges(); });
+}
+
+async function loadUnits() {
+  const r = await api('/staff/units');
+  UNITS = r.units; ALL_UNITS = r.all_units; SKILLS = r.skills;
+  let saved = null;
+  try { saved = parseInt(localStorage.getItem('ems_unit'), 10); } catch {}
+  UNIT = UNITS.some(u => u.id === saved) ? saved : (UNITS.length === 1 ? UNITS[0].id : null);
+  const bar = APP.querySelector('.unitbar'), sel = bar.querySelector('select');
+  bar.hidden = UNITS.length < 2;
+  sel.innerHTML = `<option value="">All my units (${UNITS.length})</option>` + UNITS.map(u => `<option value="${u.id}"${u.id === UNIT ? ' selected' : ''}>${esc(u.name)}${u.ownership === 'franchise' ? ' — franchise' : ''}</option>`).join('');
+  sel.onchange = () => { UNIT = parseInt(sel.value, 10) || null; try { localStorage.setItem('ems_unit', UNIT || ''); } catch {} refreshBadges(); route(); };
 }
 
 async function refreshBadges(counts) {
-  try { if (!counts) counts = (await api('/staff/dashboard')).counts; } catch { return; }
+  try { if (!counts) counts = (await api(U('/staff/dashboard'))).counts; } catch { return; }
   BADGES = counts;
   APP.querySelectorAll('[data-b]').forEach(b => { const n = counts[b.dataset.b] || 0; b.hidden = !n; b.textContent = n > 99 ? '99+' : n; });
 }
@@ -54,6 +69,7 @@ async function route() {
     else if (top === 'leads') await viewLeads(q);
     else if (top === 'reminders') await viewReminders();
     else if (top === 'payments') await viewPayments(q);
+    else if (top === 'rota') await viewRota();
     else if (top === 'settings') await viewSettings();
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
   } catch (e) { MAIN.innerHTML = `<div class="panel"><p class="err">${esc(e.message)}</p></div>`; }
@@ -67,7 +83,7 @@ function apptRow(a, { showDate = false, link = true, own = false } = {}) {
   const name = a.client_name || a.guest_name || 'Client';
   const phone = a.client_phone || a.guest_phone;
   const when = showDate ? fWhen(a.start_at) : fTime(a.start_at);
-  const sub = [own ? null : KIND_LABEL[a.kind], a.package_name, !own && a.coach_name ? 'Coach ' + first(a.coach_name) : null, a.notes].filter(Boolean).map(esc).join(' — ');
+  const sub = [own ? null : KIND_LABEL[a.kind], a.mode === 'video' ? 'Video call' : null, multi() || own ? a.unit_name : null, a.trainer_name ? (a.kind === 'session' ? 'Trainer ' : 'With ') + first(a.trainer_name) : null, a.device_name, a.notes].filter(Boolean).map(esc).join(' — ');
   const acts = a.status === 'booked' ? `
       <button class="btn sm ghost" data-act="attended" data-id="${a.id}" title="Mark attended">${icon('check', 16)}<span class="hide-m">Attended</span></button>
       <button class="btn sm quiet icon" data-act="more" data-id="${a.id}" aria-label="More actions">${icon('more-horizontal', 18)}</button>` : '';
@@ -120,12 +136,15 @@ function rescheduleModal(a, after) {
   let pick = null, full = false;
   modal({
     title: 'Reschedule', wide: true,
-    body: `<p class="muted">Currently ${esc(fWhen(a.start_at))}</p><div data-slots></div><label class="check" hidden data-over><input type="checkbox" name="force"> Overbook this slot</label>`,
+    body: `<p class="muted">Currently ${esc(fWhen(a.start_at))}${a.unit_name ? ' at ' + esc(a.unit_name) : ''}</p>${multi() && a.mode !== 'video' ? field('Unit', sel('unit_id', unitOpts(), a.unit_id)) : ''}<div data-slots></div><label class="check" hidden data-over><input type="checkbox" name="force"> Overbook this slot</label>`,
     actions: `<button class="btn ghost" data-close>Keep current time</button><button class="btn" data-save disabled>Move booking</button>`,
     onMount(el, close) {
       const save = el.querySelector('[data-save]');
-      slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, onPick: (v, f) => { pick = v; full = f; save.disabled = !v; el.querySelector('[data-over]').hidden = !f; } });
-      save.addEventListener('click', () => busy(save, () => api('/staff/appointments/' + a.id, { method: 'PUT', body: { start_at: pick, force: el.querySelector('[name=force]').checked } }))
+      const uSel = el.querySelector('[name=unit_id]');
+      const unitNow = () => (uSel ? +uSel.value : a.unit_id) || 1;
+      const sp = slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, query: () => `&unit=${unitNow()}&kind=${a.kind}&mode=${a.mode || 'in_person'}`, onPick: (v, f) => { pick = v; full = f; save.disabled = !v; el.querySelector('[data-over]').hidden = !f; } });
+      uSel && uSel.addEventListener('change', () => sp.reload());
+      save.addEventListener('click', () => busy(save, () => api('/staff/appointments/' + a.id, { method: 'PUT', body: { start_at: pick, unit_id: unitNow(), force: el.querySelector('[name=force]').checked } }))
         .then(() => { close(); toast('Booking moved to ' + fWhen(pick)); after(); }).catch(() => {}));
     },
   });
@@ -134,12 +153,14 @@ function rescheduleModal(a, after) {
 async function findClient(q) { return (await api('/staff/clients?status=all&q=' + encodeURIComponent(q))).clients; }
 
 function bookModal({ client = null, kind = 'session', lead = null, after = reload } = {}) {
-  let chosen = client, pick = null;
+  let chosen = client, pick = null, mode = 'in_person', sp = null;
+  const startUnit = (client && client.home_unit_id) || (lead && lead.unit_id) || UNIT || (UNITS[0] && UNITS[0].id);
   const m = modal({
     title: lead ? `Book consultation · ${lead.name}` : 'New booking', wide: true,
     body: `${lead ? '' : `<div class="seg" data-kind>${['session', 'consultation', 'review'].map(k => `<button type="button" data-k="${k}" class="${k === kind ? 'on' : ''}">${KIND_LABEL[k]}</button>`).join('')}</div>`}
       ${lead ? `<p class="muted">${esc(prettyPhone(lead.phone))}${lead.concern ? ' — ' + esc(lead.concern) : ''}</p>` : `<div data-who></div>`}
-      <div><h4 style="margin-bottom:10px">Date and time</h4><div data-slots></div></div>
+      <div class="grid2">${field('Unit', sel('unit_id', unitOpts(), startUnit), 'clients can book at any unit')}<div data-mode ${kind === 'session' ? 'hidden' : ''}>${field('How', `<div class="seg" style="width:100%"><button type="button" data-m="in_person" class="on" style="flex:1">${icon('home', 15)} In person</button><button type="button" data-m="video" style="flex:1">${icon('phone', 15)} Video call</button></div>`)}</div></div>
+      <div><h4 style="margin-bottom:10px">Date and time</h4><div data-slots></div><p class="small muted" style="margin-top:8px">Times shown have a free device and a rostered trainer (one client per trainer), or a free coach/doctor for consultations. A device and staff member are assigned automatically.</p></div>
       <label class="check" hidden data-over><input type="checkbox" name="force"> Overbook — this slot is already full</label>
       ${field('Note', inp('notes', '', 'maxlength="300" placeholder="Optional"'))}
       <div data-warn></div>`,
@@ -166,13 +187,16 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
       };
       who && who.addEventListener('click', e => { if (e.target.closest('[data-change]')) { chosen = null; drawWho(); ready(); } });
       drawWho();
-      el.querySelector('[data-kind]')?.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (!b) return; kind = b.dataset.k; el.querySelectorAll('[data-kind] button').forEach(x => x.classList.toggle('on', x === b)); if (!client) drawWho(); ready(); });
-      slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, startDate: lead && lead.preferred_date >= today() && lead.preferred_date <= addDays(today(), 29) ? lead.preferred_date : undefined, onPick: (v, full) => { pick = v; el.querySelector('[data-over]').hidden = !full; ready(); } });
+      const uSel = el.querySelector('[name=unit_id]');
+      el.querySelector('[data-kind]')?.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (!b) return; kind = b.dataset.k; el.querySelectorAll('[data-kind] button').forEach(x => x.classList.toggle('on', x === b)); el.querySelector('[data-mode]').hidden = kind === 'session'; if (kind === 'session') mode = 'in_person'; if (!client) drawWho(); sp.reload(); ready(); });
+      el.querySelector('[data-mode]').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; mode = b.dataset.m; el.querySelectorAll('[data-mode] button').forEach(x => x.classList.toggle('on', x === b)); sp.reload(); });
+      uSel.addEventListener('change', () => sp.reload());
+      sp = slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, query: () => `&unit=${uSel.value}&kind=${lead ? 'consultation' : kind}&mode=${mode}`, startDate: lead && lead.preferred_date >= today() && lead.preferred_date <= addDays(today(), 29) ? lead.preferred_date : undefined, onPick: (v, full) => { pick = v; el.querySelector('[data-over]').hidden = !full; ready(); } });
       save.addEventListener('click', () => busy(save, async () => {
         const notes = el.querySelector('[name=notes]').value, force = el.querySelector('[name=force]').checked;
         let r;
-        if (lead) r = await api(`/staff/leads/${lead.id}/convert`, { method: 'POST', body: { start_at: pick, notes, force } });
-        else r = await api('/staff/appointments', { method: 'POST', body: { kind, start_at: pick, notes, force, client_id: chosen && chosen.id, guest_name: el.querySelector('[name=guest_name]')?.value, guest_phone: el.querySelector('[name=guest_phone]')?.value } });
+        if (lead) r = await api(`/staff/leads/${lead.id}/convert`, { method: 'POST', body: { start_at: pick, notes, force, unit_id: uSel.value, mode } });
+        else r = await api('/staff/appointments', { method: 'POST', body: { kind, mode, unit_id: uSel.value, start_at: pick, notes, force, client_id: chosen && chosen.id, guest_name: el.querySelector('[name=guest_name]')?.value, guest_phone: el.querySelector('[name=guest_phone]')?.value } });
         close();
         toast('Booked for ' + fWhen(pick) + (r.warnings && r.warnings.length ? ' — ' + r.warnings.join(' ') : ''));
         after();
@@ -207,7 +231,7 @@ function reminderText(kind, r) {
 /* ================= Dashboard ================= */
 
 async function viewDashboard() {
-  const d = await api('/staff/dashboard');
+  const d = await api(U('/staff/dashboard'));
   refreshBadges(d.counts);
   const c = d.counts;
   const hr = new Date(Date.now() + 330 * 60000).getUTCHours();
@@ -228,6 +252,9 @@ async function viewDashboard() {
       <div class="stack">
         <section class="panel flush"><div class="panel-h" style="padding:18px 20px 0"><div class="t">${icon('calendar-check', 20)}<h3>Today's schedule</h3></div><a class="btn sm quiet" href="#/schedule">Full schedule</a></div>
           <div class="rows" data-today style="margin-top:8px">${d.today.length ? d.today.map(a => apptRow(a)).join('') : emptyState('calendar-days', 'No appointments today.', '<button class="btn sm ghost" data-book>Book a session</button>')}</div></section>
+        ${d.units.length > 1 || ME.role === 'admin' ? `<section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('home', 20)}<h3>Units this week</h3></div>${ME.role === 'admin' ? '<a class="btn sm quiet" href="#/settings">Manage units</a>' : ''}</div>
+          <table class="t"><thead><tr><th>Unit</th><th class="n">Devices</th><th class="n">Booked / capacity</th><th class="n">Utilisation</th><th class="n">Clients</th><th class="n">Received (month)</th></tr></thead><tbody>
+          ${d.units.map(u => `<tr><td><b>${esc(u.name)}</b>${u.ownership === 'franchise' ? ' <span class="pill warn">Franchise</span>' : ''}</td><td class="n">${u.devices}</td><td class="n">${u.week_booked} / ${u.capacity}</td><td class="n"><div style="display:flex;gap:8px;align-items:center;justify-content:flex-end"><div class="bar" style="width:70px"><i style="width:${Math.min(100, u.utilisation)}%"></i></div><b>${u.utilisation}%</b></div></td><td class="n">${u.clients}</td><td class="n">${inr(u.revenue)}</td></tr>`).join('')}</tbody></table></section>` : ''}
         <section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>Sessions attended per week</h3></div></div><div data-weeks></div></section>
       </div>
       <div class="stack">
@@ -250,7 +277,7 @@ async function viewDashboard() {
 async function viewSchedule(day) {
   const mon = addDays(day, -((new Date(day + 'T00:00:00Z').getUTCDay() + 6) % 7));
   const sun = addDays(mon, 6);
-  const { appointments } = await api(`/staff/appointments?from=${mon}&to=${sun}`);
+  const { appointments } = await api(U(`/staff/appointments?from=${mon}&to=${sun}`));
   const list = appointments.filter(a => a.start_at.slice(0, 10) === day);
   const active = list.filter(a => a.status !== 'cancelled'), cancelled = list.filter(a => a.status === 'cancelled');
   MAIN.innerHTML = `
@@ -275,17 +302,17 @@ async function viewClients(q) {
   const status = q.get('status') || 'active';
   const search = q.get('q') || '';
   const coach = q.get('coach') || '';
-  const [{ clients }, tm] = await Promise.all([api(`/staff/clients?status=${status}&q=${encodeURIComponent(search)}&coach=${coach}`), team()]);
+  const [{ clients }, tm] = await Promise.all([api(U(`/staff/clients?status=${status}&q=${encodeURIComponent(search)}&coach=${coach}`)), team()]);
   MAIN.innerHTML = `
     <div class="head"><div><h1>Clients</h1><p>${clients.length} ${status === 'all' ? '' : status} client${clients.length === 1 ? '' : 's'}</p></div>
       <div class="acts"><button class="btn gold" data-add>${icon('user-plus', 18)}Add client</button></div></div>
     <div class="toolbar"><form class="search" data-search>${icon('search', 18)}<input class="in" name="q" value="${esc(search)}" placeholder="Search name or mobile"></form>
       <div class="seg">${['active', 'paused', 'completed', 'all'].map(s => `<button data-s="${s}" class="${s === status ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div>
       <select class="in" data-coach style="width:auto;min-width:190px" aria-label="Coach">${[['', 'All coaches']].concat(tm.some(t => t.id === ME.id) ? [[String(ME.id), 'My clients']] : [], [['none', 'Not allocated']], tm.map(t => [String(t.id), t.name])).map(([v, l]) => `<option value="${v}"${v === coach ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
-    <section class="panel flush">${clients.length ? `<table class="t"><thead><tr><th>Client</th><th>Coach</th><th>Sessions</th><th>Weight</th><th>Last visit</th><th>Next visit</th><th>Admission</th></tr></thead><tbody>
+    <section class="panel flush">${clients.length ? `<table class="t"><thead><tr><th>Client</th><th>${multi() && !UNIT ? 'Unit / coach' : 'Coach'}</th><th>Sessions</th><th>Weight</th><th>Last visit</th><th>Next visit</th><th>Admission</th></tr></thead><tbody>
       ${clients.map(c => { const diff = c.first_weight != null && c.last_weight != null ? Math.round((c.last_weight - c.first_weight) * 10) / 10 : null;
         return `<tr class="click" data-id="${c.id}"><td><div style="display:flex;gap:12px;align-items:center"><span class="avatar">${esc(initials(c.name))}</span><div><b>${esc(c.name)}</b><div class="small muted">${esc(prettyPhone(c.phone))}</div></div></div></td>
-        <td>${c.coach_name ? esc(c.coach_name) : '<span style="color:var(--warn)">Not allocated</span>'}</td>
+        <td>${multi() && !UNIT ? `<div class="small muted">${esc(c.unit_name || '')}</div>` : ''}${c.coach_name ? esc(c.coach_name) : '<span style="color:var(--warn)">Not allocated</span>'}</td>
         <td class="num">${c.attended}${c.sessions_total ? ` <span class="muted">/ ${c.sessions_total}</span>` : ''}</td>
         <td>${c.last_weight != null ? `<span class="num">${kg(c.last_weight)} kg</span> ${deltaTag(diff, ' kg')}` : '<span class="faint">—</span>'}</td>
         <td>${c.last_visit ? esc(fDay(c.last_visit)) : '<span class="faint">—</span>'}</td>
@@ -301,7 +328,7 @@ async function viewClients(q) {
 }
 
 function clientForm(c = {}, isNew = true, tm = []) {
-  return `${field('Coach', sel('coach_id', coachOptions(tm), c.coach_id ?? (isNew && tm.some(t => t.id === ME.id) ? ME.id : '')), 'team member responsible for this client')}
+  return `<div class="grid2">${field('Home unit', sel('home_unit_id', unitOpts(), c.home_unit_id ?? UNIT ?? (UNITS[0] && UNITS[0].id)))}${field('Coach', sel('coach_id', coachOptions(tm), c.coach_id ?? (isNew && tm.some(t => t.id === ME.id) ? ME.id : '')), 'team member responsible')}</div>
     <div class="grid2">${field('Full name', inp('name', c.name, 'required autocomplete="off"'))}${field('Mobile number', inp('phone', c.phone, 'type="tel" required'), 'used to sign in')}</div>
     <div class="grid3">${field('Gender', sel('gender', [['', 'Select'], ['female', 'Female'], ['male', 'Male'], ['other', 'Other']], c.gender))}${field('Year of birth', inp('birth_year', c.birth_year, 'type="number" inputmode="numeric" placeholder="1990"'))}${field('Height (cm)', inp('height_cm', c.height_cm, 'type="number" step="0.5" inputmode="decimal"'))}</div>
     <div class="grid2">${field('Target weight (kg)', inp('target_weight', c.target_weight, 'type="number" step="0.1" inputmode="decimal"'), 'optional')}${field('Email', inp('email', c.email, 'type="email"'), 'optional')}</div>
@@ -357,6 +384,7 @@ async function viewClient(id, tab) {
         <span>${icon('phone', 15)}<a href="tel:${esc(c.phone)}">${esc(prettyPhone(c.phone))}</a></span>
         ${age ? `<span>${icon('user', 15)}${age} yrs${c.gender ? ', ' + esc(c.gender) : ''}</span>` : ''}
         ${c.height_cm ? `<span>${icon('ruler', 15)}${c.height_cm} cm</span>` : ''}
+        ${c.unit_name ? `<span>${icon('home', 15)}${esc(c.unit_name)}</span>` : ''}
         <span>${icon('package', 15)}${left} session${left === 1 ? '' : 's'} available</span>
         <button type="button" class="btn sm ghost" data-coach style="height:28px">${icon('users', 15)}${c.coach_name ? 'Coach: ' + esc(c.coach_name) : '<span style="color:var(--warn)">Allocate a coach</span>'}</button></div></div>
       <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${pill(c.status)}<a href="#/clients/${c.id}?tab=admission" style="text-decoration:none">${admPill(d.admissions.find(x => x.status === 'admitted' && admState(x) === 'admitted') || d.admission)}</a></div>
@@ -441,6 +469,7 @@ async function packageModal(c, after) {
       ${field('Package', sel('package_id', defs.map(p => [p.id, `${p.name} (${PROGRAMME_LABEL[p.programme] || 'EMS'}) — ${p.sessions} sessions${p.price ? ', ' + inr(p.price) : ''}`]).concat([['', 'Custom package']]), defs[0] && defs[0].id))}
       <div class="grid3">${field('Sessions', inp('sessions_total', defs[0] && defs[0].sessions, 'type="number" min="1"'))}${field('Price (₹)', inp('price', defs[0] && defs[0].price, 'type="number" min="0" inputmode="numeric"'))}${field('Discount (₹)', inp('discount', 0, 'type="number" min="0" inputmode="numeric"'))}</div>
       <div class="grid2">${field('Start date', inp('start_date', today(), 'type="date"'))}${field('Name', inp('name', defs[0] && defs[0].name, 'maxlength="80"'), 'shown to client')}</div>
+      ${multi() ? field('Sold by unit', sel('unit_id', unitOpts(), c.home_unit_id), 'payments go to this unit; sessions can be used at any unit') : ''}
       <p class="small muted" data-exp></p></form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Add package</button>`,
     onMount(el, close) {
@@ -596,7 +625,7 @@ function tabProfile(el, d, after) {
 
 async function viewLeads(q) {
   const scope = q.get('scope') || 'ems', status = q.get('status') || 'open';
-  const { leads } = await api(`/staff/leads?scope=${scope}&status=${encodeURIComponent(status)}`);
+  const { leads } = await api(U(`/staff/leads?scope=${scope}&status=${encodeURIComponent(status)}`));
   MAIN.innerHTML = `
     <div class="head"><div><h1>Website leads</h1><p>Enquiries from hastawellnessclinic.com and the EMS sign-in page. Book a consultation or add them as a client.</p></div></div>
     <div class="toolbar"><div class="seg">${[['ems', 'EMS & weight'], ['all', 'All services']].map(([k, l]) => `<button data-scope="${k}" class="${k === scope ? 'on' : ''}">${l}</button>`).join('')}</div>
@@ -611,6 +640,7 @@ async function viewLeads(q) {
         <a class="btn sm ghost icon" href="${esc(wa(l.phone, reminderText('lead', l)))}" target="_blank" rel="noopener" data-wa-lead="${l.id}" aria-label="WhatsApp">${icon('message-circle', 16)}</a>
         ${l.client_id ? `<a class="btn sm ghost" href="#/clients/${l.client_id}">${icon('user', 16)}Profile</a>` : `<button class="btn sm ghost" data-client="${l.id}">${icon('user-plus', 16)}Add client</button>`}
         <button class="btn sm" data-consult="${l.id}">${icon('calendar-plus', 16)}Book consultation</button>
+        ${ALL_UNITS.length > 1 ? `<select class="in" style="height:32px;width:auto;font-size:13px" data-lu="${l.id}" aria-label="Unit"><option value="">Unassigned</option>${ALL_UNITS.filter(u => u.active).map(u => `<option value="${u.id}"${u.id === l.unit_id ? ' selected' : ''}>${esc(u.name)}</option>`).join('')}</select>` : ''}
         <select class="in" style="height:32px;width:auto;font-size:13px" data-st="${l.id}" aria-label="Status">${['new', 'contacted', 'booked', 'not interested'].map(s => `<option value="${s}"${s === l.status ? ' selected' : ''}>${s[0].toUpperCase() + s.slice(1)}</option>`).join('')}</select>
       </div></div>`).join('') : emptyState('inbox', 'No leads in this view.')}</div></section>
     <p class="small muted" style="margin-top:10px">Website leads are kept for 90 days. Once someone becomes a client, their record here stays with them.</p>`;
@@ -620,6 +650,7 @@ async function viewLeads(q) {
   const L = id => leads.find(l => l.id === +id);
   MAIN.querySelectorAll('[data-consult]').forEach(b => b.addEventListener('click', () => bookModal({ lead: L(b.dataset.consult), kind: 'consultation', after: () => { refreshBadges(); reload(); } })));
   MAIN.querySelectorAll('[data-client]').forEach(b => b.addEventListener('click', () => { const l = L(b.dataset.client); clientModal({ name: l.name, phone: l.phone, goal: l.concern, lead_id: l.id }, () => { refreshBadges(); }); }));
+  MAIN.querySelectorAll('[data-lu]').forEach(s => s.addEventListener('change', () => api('/staff/leads/' + s.dataset.lu, { method: 'PUT', body: { unit_id: s.value } }).then(() => toast(s.value ? 'Lead assigned to ' + unitName(+s.value) : 'Lead unassigned')).catch(e => toast(e.message, true))));
   MAIN.querySelectorAll('[data-st]').forEach(s => s.addEventListener('change', () => api('/staff/leads/' + s.dataset.st, { method: 'PUT', body: { status: s.value } }).then(() => { toast('Lead updated'); refreshBadges(); }).catch(e => toast(e.message, true))));
   MAIN.querySelectorAll('[data-wa-lead]').forEach(a => a.addEventListener('click', () => { const l = L(a.dataset.waLead); if (l.status === 'new') api('/staff/reminders/log', { method: 'POST', body: { kind: 'lead', ref: String(l.id), lead_id: l.id } }).then(() => refreshBadges()).catch(() => {}); }));
 }
@@ -659,7 +690,7 @@ function bindRemActions(root, list) {
 }
 
 async function viewReminders() {
-  const { reminders } = await api('/staff/reminders');
+  const { reminders } = await api(U('/staff/reminders'));
   MAIN.innerHTML = `<div class="head"><div><h1>Follow-ups</h1><p>Everything that needs a message today. Sending on WhatsApp marks it done for three days.</p></div></div>
     ${reminders.length ? `<div class="stack">${REM_GROUPS.map(([k, ic, t, sub]) => { const items = reminders.filter(r => r.kind === k); if (!items.length) return '';
       return `<section class="panel flush"><div class="panel-h" style="padding:18px 20px 0"><div class="t">${icon(ic, 20)}<div><h3>${t} <span class="muted" style="font-weight:600">${items.length}</span></h3><p class="small muted">${sub}</p></div></div></div>
@@ -671,8 +702,9 @@ async function viewReminders() {
 /* ================= Payments ================= */
 
 async function viewPayments(q) {
+  if (!ALL_UNITS.length) await loadUnits();
   const from = q.get('from') || today().slice(0, 8) + '01', to = q.get('to') || today();
-  const r = await api(`/staff/payments?from=${from}&to=${to}`);
+  const r = await api(U(`/staff/payments?from=${from}&to=${to}`));
   const total = r.payments.reduce((a, p) => a + p.amount, 0);
   const byMethod = {};
   r.payments.forEach(p => { byMethod[p.method] = (byMethod[p.method] || 0) + p.amount; });
@@ -684,8 +716,13 @@ async function viewPayments(q) {
       <div class="kpi"><span class="l">${icon('circle-dollar-sign', 16)}By method</span><span class="v" style="font-size:16px;line-height:1.6">${Object.entries(byMethod).map(([k, v]) => `${esc(k)} ${inr(v)}`).join('<br>') || '—'}</span></div>
       <div class="kpi"><span class="l">${icon('wallet', 16)}Outstanding (all clients)</span><span class="v">${inr(r.outstanding)}</span><span class="s"><a href="#/reminders">Payment follow-ups</a></span></div></section>
     <section class="panel flush">${r.payments.length ? `<table class="t"><thead><tr><th>Date</th><th>Client</th><th>Package</th><th>Method</th><th class="n">Amount</th></tr></thead><tbody>
-      ${r.payments.map(p => `<tr class="click" data-c="${p.client_id}"><td>${esc(fDate(p.paid_on))}</td><td><b>${esc(p.client_name || '')}</b></td><td>${esc(p.package_name || '')}</td><td>${esc(p.method)}${p.reference ? `<div class="small muted">${esc(p.reference)}</div>` : ''}</td><td class="n"><b>${inr(p.amount)}</b></td></tr>`).join('')}</tbody></table>`
+      ${r.payments.map(p => `<tr class="click" data-c="${p.client_id}"><td>${esc(fDate(p.paid_on))}</td><td><b>${esc(p.client_name || '')}</b></td><td>${esc(p.package_name || '')}${multi() ? `<div class="small muted">${esc(p.unit_name || '')}</div>` : ''}</td><td>${esc(p.method)}${p.reference ? `<div class="small muted">${esc(p.reference)}</div>` : ''}</td><td class="n"><b>${inr(p.amount)}</b></td></tr>`).join('')}</tbody></table>`
       : emptyState('receipt', 'No payments in this period.')}</section>`;
+  if (ME.role === 'admin' && ALL_UNITS.length > 1) {
+    const st = await api(`/staff/reports/settlement?from=${from}&to=${to}`);
+    MAIN.insertAdjacentHTML('beforeend', `<section class="panel flush" style="margin-top:18px"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('refresh-cw', 20)}<div><h3>Cross-unit sessions</h3><p class="small muted">Sessions delivered at one unit from a package sold by another, for the same dates. "Payable" uses the delivering unit's revenue share.</p></div></div></div>
+      ${st.rows.length ? `<table class="t"><thead><tr><th>Delivered by</th><th>Package sold by</th><th class="n">Sessions</th><th class="n">Session value</th><th class="n">Payable to delivering unit</th></tr></thead><tbody>${st.rows.map(r => `<tr><td><b>${esc(r.delivered_name)}</b>${r.franchise ? ' <span class="pill warn">Franchise</span>' : ''}</td><td>${esc(r.sold_name)}</td><td class="n">${r.sessions}</td><td class="n">${inr(r.value)}</td><td class="n"><b>${inr(r.payable)}</b> <span class="small muted">(${r.share}%)</span></td></tr>`).join('')}</tbody></table>` : emptyState('refresh-cw', 'No cross-unit sessions in this period.')}</section>`);
+  }
   MAIN.querySelector('[data-range]').addEventListener('submit', e => { e.preventDefault(); location.hash = `#/payments?from=${e.target.from.value}&to=${e.target.to.value}`; });
   MAIN.querySelectorAll('tr[data-c]').forEach(t => t.addEventListener('click', () => go(`#/clients/${t.dataset.c}?tab=payments`)));
   MAIN.querySelector('[data-csv]').addEventListener('click', () => {
@@ -699,23 +736,29 @@ async function viewPayments(q) {
 
 async function viewSettings() {
   const admin = ME.role === 'admin';
+  await loadUnits();
   const [{ packages }, users, tm] = await Promise.all([api('/staff/packages'), admin ? api('/staff/users').then(r => r.users) : Promise.resolve([]), team(true)]);
   const clientsOf = id => (tm.find(t => t.id === id) || {}).clients || 0;
   MAIN.innerHTML = `<div class="head"><div><h1>Settings</h1><p>Packages, team access and your account.</p></div></div>
     <div class="stack">
+      <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('home', 20)}<h3>Units</h3></div>${admin ? `<button class="btn sm gold" data-new-unit>${icon('plus', 16)}New unit</button>` : ''}</div>
+        <table class="t"><thead><tr><th>Unit</th><th>Ownership</th><th class="n">Devices</th><th>Hours</th><th>Status</th></tr></thead><tbody>
+        ${UNITS.map(u => `<tr class="${admin ? 'click' : ''}" data-unit-row="${u.id}"><td><b>${esc(u.name)}</b><div class="small muted">${esc(u.code)}${u.district ? ' — ' + esc(u.district) : ''}</div></td><td>${u.ownership === 'franchise' ? `Franchise<div class="small muted">${esc(u.franchise_name || '')} · ${u.revenue_share}% share</div>` : 'Company-owned'}</td><td class="n">${u.devices}</td><td class="small">${hoursText(u.hours)}</td><td>${u.active ? pill('active') : pill('closed', 'Closed')}</td></tr>`).join('')}</tbody></table></section>
       <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('package', 20)}<h3>Package catalogue</h3></div>${admin ? `<button class="btn sm gold" data-new-pkg>${icon('plus', 16)}New package</button>` : ''}</div>
         <table class="t"><thead><tr><th>Package</th><th class="n">Sessions</th><th class="n">Price</th><th class="n">Valid for</th><th>Status</th></tr></thead><tbody>
         ${packages.map(p => `<tr class="${admin ? 'click' : ''}" data-pkg="${p.id}"><td><b>${esc(p.name)}</b><div class="small muted">${esc(PROGRAMME_LABEL[p.programme] || 'EMS programme')}${p.description ? ' — ' + esc(p.description) : ''}</div></td><td class="n">${p.sessions}</td><td class="n">${p.price != null ? inr(p.price) : '<span style="color:var(--warn)">Set price</span>'}</td><td class="n">${p.validity_days} days</td><td>${p.active ? pill('active') : pill('closed', 'Hidden')}</td></tr>`).join('')}</tbody></table></section>
       ${admin ? `<section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('users', 20)}<h3>Team accounts</h3></div><button class="btn sm gold" data-new-user>${icon('user-plus', 16)}Add team member</button></div>
         <div class="rows">${users.some(u => u.username === 'hasta') ? '' : `<div class="row"><span class="avatar">CA</span><div class="grow"><b>Clinic admin</b><span>Username "hasta" — password is the website admin password</span></div>${pill('active', 'Admin')}</div>`}
-        ${users.map(u => `<div class="row click" data-user="${u.id}"><span class="avatar">${esc(initials(u.name))}</span><div class="grow"><b>${esc(u.name)}</b><span>${esc(u.username)}</span></div><a class="btn sm quiet" href="#/clients?coach=${u.id}" onclick="event.stopPropagation()">${clientsOf(u.id)} active client${clientsOf(u.id) === 1 ? '' : 's'}</a>${pill(u.active ? 'active' : 'closed', u.active ? (u.role === 'admin' ? 'Admin' : 'Team') : 'Disabled')}</div>`).join('')}</div></section>` : ''}
+        ${users.map(u => `<div class="row click" data-user="${u.id}"><span class="avatar">${esc(initials(u.name))}</span><div class="grow"><b>${esc(u.name)}</b><span>${esc(u.username)} — ${esc((u.skills || []).map(k => SKILLS[k]).join(', ') || 'no skills set')}${ALL_UNITS.length > 1 ? ' — ' + esc(u.role === 'admin' ? 'all units' : (u.units || []).map(unitName).join(', ')) : ''}</span></div><a class="btn sm quiet" href="#/clients?coach=${u.id}" onclick="event.stopPropagation()">${clientsOf(u.id)} active client${clientsOf(u.id) === 1 ? '' : 's'}</a>${pill(u.active ? 'active' : 'closed', u.active ? ({ admin: 'Admin', manager: 'Unit manager' }[u.role] || 'Team') : 'Disabled')}</div>`).join('')}</div></section>` : ''}
       <section class="panel"><div class="panel-h"><div class="t">${icon('key-round', 20)}<h3>Your account</h3></div></div>
         ${ME.id === 0 ? '<p class="muted">You are signed in with the clinic admin account. Its password is the ADMIN_PASSWORD secret in Cloudflare. Add personal team accounts above so each person signs in as themselves.</p>'
           : `<form class="grid3" data-pw style="align-items:end">${field('Current password', inp('current', '', 'type="password" autocomplete="current-password"'))}${field('New password', inp('next', '', 'type="password" autocomplete="new-password" minlength="8"'))}<div><button class="btn">Change password</button></div></form>`}</section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('phone', 20)}<h3>Client app</h3></div></div>
-        <p class="muted">Clients sign in at <b>${esc(APP_URL)}</b> with their mobile number and PIN. Each slot takes up to ${esc(String((await api('/staff/appointments?from=' + today())).capacity))} clients; sessions are 30 minutes within clinic hours (Mon–Sat 10 am–8 pm, Sun 10 am–2 pm).</p></section>
+        <p class="muted">Clients sign in at <b>${esc(APP_URL)}</b> with their mobile number and PIN, and can book at any unit with a free device and trainer. Each trainer supervises one client at a time.</p></section>
     </div>`;
   if (admin) {
+    MAIN.querySelector('[data-new-unit]').addEventListener('click', () => unitModal(null));
+    MAIN.querySelectorAll('[data-unit-row]').forEach(r => r.addEventListener('click', async () => unitModal((await api('/staff/units/' + r.dataset.unitRow)))));
     MAIN.querySelector('[data-new-pkg]').addEventListener('click', () => pkgDefModal(null));
     MAIN.querySelectorAll('[data-pkg]').forEach(r => r.addEventListener('click', () => pkgDefModal(packages.find(p => p.id === +r.dataset.pkg))));
     MAIN.querySelector('[data-new-user]').addEventListener('click', () => userModal(null));
@@ -744,16 +787,20 @@ function pkgDefModal(p) {
 }
 
 function userModal(u) {
-  u = u || { name: '', username: '', role: 'staff', active: 1 };
+  u = u || { name: '', username: '', role: 'staff', active: 1, skills: ['trainer'], units: UNIT ? [UNIT] : ALL_UNITS.slice(0, 1).map(x => x.id) };
   modal({
     title: u.id ? 'Edit team member' : 'Add team member',
     body: `<form class="stack" style="gap:14px" data-f><div class="grid2">${field('Name', inp('name', u.name))}${field('Username', inp('username', u.username, 'autocapitalize="none"'))}</div>
-      <div class="grid2">${field('Role', sel('role', [['staff', 'Team — clients, bookings, payments'], ['admin', 'Admin — also packages and team']], u.role))}${field(u.id ? 'New password' : 'Password', inp('password', '', 'type="password" autocomplete="new-password"'), u.id ? 'leave blank to keep' : 'at least 8 characters')}</div>
+      <div><h4 style="margin-bottom:8px">Skills</h4><div class="chips">${Object.entries(SKILLS).map(([k, l]) => `<label class="chip"><input type="checkbox" name="sk_${k}" ${(u.skills || []).includes(k) ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div><p class="small muted" style="margin-top:6px">EMS trainers run sessions. Coaches and doctors do consultations and admission assessments.</p></div>
+      ${field('Registration no.', inp('reg_no', u.reg_no || ''), 'doctors only')}
+      <div><h4 style="margin-bottom:8px">Works at</h4><div class="chips">${ALL_UNITS.filter(x => x.active).map(x => `<label class="chip"><input type="checkbox" name="un_${x.id}" ${(u.units || []).includes(x.id) ? 'checked' : ''}>${esc(x.name)}</label>`).join('')}</div></div>
+      <div class="grid2">${field('Role', sel('role', [['staff', 'Team — clients, bookings, payments'], ['manager', 'Unit manager — also rota and leave'], ['admin', 'Admin — all units, packages, team']], u.role))}${field(u.id ? 'New password' : 'Password', inp('password', '', 'type="password" autocomplete="new-password"'), u.id ? 'leave blank to keep' : 'at least 8 characters')}</div>
       ${u.id ? `<label class="check"><input type="checkbox" name="active" ${u.active ? 'checked' : ''}> Account active</label>` : ''}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
     onMount(el, close) {
       const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => { const b = formData(el.querySelector('[data-f]')); if (!u.id) b.active = true; return api('/staff/users' + (u.id ? '/' + u.id : ''), { method: u.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Team member saved'); team(true); reload(); }).catch(() => {}));
+      save.addEventListener('click', () => busy(save, () => { const b = formData(el.querySelector('[data-f]')); if (!u.id) b.active = true;
+        b.skills = Object.keys(SKILLS).filter(k => b['sk_' + k]); b.units = ALL_UNITS.filter(x => b['un_' + x.id]).map(x => x.id); return api('/staff/users' + (u.id ? '/' + u.id : ''), { method: u.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Team member saved'); team(true); reload(); }).catch(() => {}));
     },
   });
 }
@@ -790,6 +837,7 @@ function tabAdmission(el, d, after) {
     const yes = Q.filter(([k]) => a.screening.answers[k]);
     body = `<div class="cols"><section class="panel stack" style="gap:14px"><div class="panel-h" style="margin:0"><div class="t">${icon('stethoscope', 20)}<h3>Step 2 — Clinician assessment</h3></div></div>
       <form data-asm class="stack" style="gap:14px">
+        <div><h4 style="margin-bottom:8px">Assessment</h4><div class="chips"><label class="chip"><input type="radio" name="assess_mode" value="in_person" checked>${icon('home', 15)}In person</label><label class="chip"><input type="radio" name="assess_mode" value="video">${icon('phone', 15)}By video call</label></div></div>
         <div class="grid3">${field('Blood pressure', inp('bp', '', 'placeholder="120/80" inputmode="numeric"'), 'mmHg')}${field('Resting heart rate', inp('heart_rate', '', 'type="number" inputmode="numeric"'), 'bpm')}${field('Weight', inp('assess_weight', '', 'type="number" step="0.1" inputmode="decimal"'), 'kg')}</div>
         ${field('Findings', `<textarea class="in" name="findings" maxlength="1000" placeholder="${yes.length ? 'Required: comment on each Yes answer' : 'e.g. No contraindications found'}"></textarea>`)}
         <div><h4 style="margin-bottom:8px">Decision</h4><div class="chips">
@@ -871,5 +919,78 @@ function tabAdmission(el, d, after) {
     body: `<p>${a.status === 'admitted' ? 'The client will be blocked from new packages and bookings, and their upcoming EMS sessions will be cancelled.' : 'This admission will be closed. You can start a new one later.'}</p>${field('Reason', inp('reason', '', 'maxlength="300" placeholder="e.g. Client request, health change"'))}`,
     actions: `<button class="btn ghost" data-close>Keep</button><button class="btn danger" data-save>Confirm</button>`,
     onMount(m, close) { const b = m.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api(`/staff/admissions/${a.id}/withdraw`, { method: 'POST', body: { reason: m.querySelector('[name=reason]').value } })).then(r => { close(); toast('Recorded' + (r.cancelled ? ` — ${r.cancelled} upcoming session${r.cancelled > 1 ? 's' : ''} cancelled` : '')); after(); }).catch(() => {})); },
+  }));
+}
+
+/* ================= Units & rota ================= */
+
+const DAYN = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+function hoursText(h) {
+  const parts = [];
+  [1, 2, 3, 4, 5, 6, 0].forEach(d => { const v = h && h[d]; const txt = v ? `${fTime(v[0])}–${fTime(v[1])}` : 'closed'; const last = parts[parts.length - 1]; if (last && last.txt === txt) last.to = d; else parts.push({ from: d, to: d, txt }); });
+  return parts.map(p => `${DAYN[p.from]}${p.to !== p.from ? '–' + DAYN[p.to] : ''} ${p.txt}`).join(', ');
+}
+
+function unitModal(d) {
+  const u = d ? d.unit : { name: '', code: '', ownership: 'owned', revenue_share: 100, hours: { 0: ['10:00', '14:00'], 1: ['10:00', '20:00'], 2: ['10:00', '20:00'], 3: ['10:00', '20:00'], 4: ['10:00', '20:00'], 5: ['10:00', '20:00'], 6: ['10:00', '20:00'] }, slot_minutes: 30, active: 1 };
+  const devices = d ? d.devices.slice() : [{ name: 'EMS device 1', status: 'active' }];
+  const devRow = (x, i) => `<div class="grid3" data-dev="${i}" style="align-items:end">${field('Device name', `<input class="in" data-dn value="${esc(x.name)}">`)}${field('Status', `<select class="in" data-ds>${[['active', 'Active'], ['maintenance', 'Under maintenance'], ['retired', 'Retired']].map(([v, l]) => `<option value="${v}"${x.status === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`)}${field('Notes', `<input class="in" data-dno value="${esc(x.notes || '')}">`)}</div>`;
+  modal({
+    title: d ? 'Edit unit · ' + u.name : 'New unit', wide: true,
+    body: `<form data-f class="stack" style="gap:14px">
+      <div class="grid3">${field('Unit name', inp('name', u.name, 'placeholder="e.g. Kochi — Kakkanad"'))}${field('Short code', inp('code', u.code, 'maxlength="8" placeholder="KCH"'))}${field('Status', sel('active', [['1', 'Open'], ['0', 'Closed']], u.active ? '1' : '0'))}</div>
+      <div class="grid3">${field('Ownership', sel('ownership', [['owned', 'Company-owned'], ['franchise', 'Franchise']], u.ownership))}${field('Franchisee legal name', inp('franchise_name', u.franchise_name || ''), 'franchise only')}${field('Revenue share for cross-unit sessions', inp('revenue_share', u.revenue_share, 'type="number" min="0" max="100"'), '% paid to this unit')}</div>
+      ${field('Address', inp('address', u.address || ''))}
+      <div class="grid3">${field('District', inp('district', u.district || ''))}${field('PIN codes served', inp('pincodes', u.pincodes || '', 'placeholder="682030, 682021"'), 'routes website leads')}${field('Phone', inp('phone', u.phone || ''))}</div>
+      <div class="grid2">${field('UPI ID for payments', inp('upi', u.upi || ''), 'optional')}${field('Session length', sel('slot_minutes', [['20', '20 minutes'], ['30', '30 minutes'], ['40', '40 minutes'], ['45', '45 minutes'], ['60', '60 minutes']], u.slot_minutes))}</div>
+      <div><h4 style="margin-bottom:8px">Opening hours</h4><div class="qs">${[1, 2, 3, 4, 5, 6, 0].map(dn => { const h = u.hours[dn]; return `<div class="q"><label class="check" style="min-width:90px"><input type="checkbox" name="open_${dn}" ${h ? 'checked' : ''}> ${DAYN[dn]}</label><span style="display:flex;gap:8px"><input class="in" type="time" name="from_${dn}" value="${h ? h[0] : '10:00'}" style="width:130px"><input class="in" type="time" name="to_${dn}" value="${h ? h[1] : '20:00'}" style="width:130px"></span></div>`; }).join('')}</div></div>
+      <div><h4 style="margin-bottom:8px">EMS devices <span class="muted" style="font-weight:500">(maximum 3)</span></h4><div class="stack" style="gap:10px" data-devs>${devices.map(devRow).join('')}</div>
+        <button type="button" class="btn sm ghost" data-add-dev style="margin-top:10px" ${devices.filter(x => x.status !== 'retired').length >= 3 ? 'disabled' : ''}>${icon('plus', 15)}Add device</button></div>
+      <p class="small muted">Each trainer supervises one client at a time, so a slot is bookable only when a device and a rostered trainer are both free.</p></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save unit</button>`,
+    onMount(el, close) {
+      el.querySelector('[data-add-dev]').addEventListener('click', e => { devices.push({ name: `EMS device ${devices.length + 1}`, status: 'active' }); el.querySelector('[data-devs]').insertAdjacentHTML('beforeend', devRow(devices[devices.length - 1], devices.length - 1)); if (devices.filter(x => x.status !== 'retired').length >= 3) e.currentTarget.disabled = true; });
+      const save = el.querySelector('[data-save]');
+      save.addEventListener('click', () => busy(save, () => {
+        const f = el.querySelector('[data-f]'), b = formData(f);
+        b.active = b.active === '1';
+        b.hours = {}; [0, 1, 2, 3, 4, 5, 6].forEach(dn => { b.hours[dn] = { open: f['open_' + dn].checked, from: f['from_' + dn].value, to: f['to_' + dn].value }; });
+        b.devices = [...el.querySelectorAll('[data-dev]')].map(r => ({ id: devices[+r.dataset.dev].id, name: r.querySelector('[data-dn]').value, status: r.querySelector('[data-ds]').value, notes: r.querySelector('[data-dno]').value }));
+        return api('/staff/units' + (d ? '/' + u.id : ''), { method: d ? 'PUT' : 'POST', body: b });
+      }).then(() => { close(); toast('Unit saved'); team(true); loadUnits().then(reload); }).catch(() => {}));
+    },
+  });
+}
+
+async function viewRota() {
+  const unitId = UNIT || (UNITS[0] && UNITS[0].id);
+  if (!unitId) { MAIN.innerHTML = emptyState('home', 'You are not assigned to a unit yet.'); return; }
+  const d = await api('/staff/units/' + unitId);
+  const canEdit = ['admin', 'manager'].includes(ME.role);
+  const byStaff = d.staff.map(st => ({ ...st, shifts: d.rota.filter(r => r.staff_id === st.id) }));
+  MAIN.innerHTML = `<div class="head"><div><h1>Rota — ${esc(d.unit.name)}</h1><p>${esc(hoursText(d.unit.hours))} · ${d.devices.filter(x => x.status === 'active').length} active device${d.devices.filter(x => x.status === 'active').length === 1 ? '' : 's'}${multi() && !UNIT ? ' · choose a unit at the top to switch' : ''}</p></div>
+      ${canEdit ? `<div class="acts"><button class="btn ghost" data-leave>${icon('calendar-x', 18)}Record leave</button><button class="btn gold" data-shift>${icon('plus', 18)}Add shift</button></div>` : ''}</div>
+    <section class="panel flush" style="overflow-x:auto"><table class="t"><thead><tr><th>Team member</th>${[1, 2, 3, 4, 5, 6, 0].map(dn => `<th>${DAYN[dn]}${d.unit.hours[dn] ? '' : ' <span class="faint">(closed)</span>'}</th>`).join('')}</tr></thead><tbody>
+      ${byStaff.length ? byStaff.map(st => `<tr><td><b>${esc(st.name)}</b><div class="small muted">${esc(st.skills.map(k => SKILLS[k]).join(', '))}</div></td>${[1, 2, 3, 4, 5, 6, 0].map(dn => `<td>${st.shifts.filter(r => r.weekday === dn).map(r => `<div class="pill ${r.video ? 'good' : ''}" style="margin:2px 0;height:auto;padding:4px 8px;display:flex;gap:6px">${fTime(r.start_time)}–${fTime(r.end_time)}${r.video ? ' ' + icon('phone', 12) : ''}${canEdit ? `<button class="btn sm quiet icon" data-del-shift="${r.id}" style="width:18px;height:18px" aria-label="Remove shift">${icon('x', 12)}</button>` : ''}</div>`).join('') || '<span class="faint">—</span>'}</td>`).join('')}</tr>`).join('')
+        : `<tr><td colspan="8">${emptyState('users', 'No team members at this unit yet. Add them under Settings → Team accounts.')}</td></tr>`}</tbody></table></section>
+    <p class="small muted" style="margin-top:8px">${icon('phone', 12)} marks shifts that also take video consultations. Bookings are only offered when a device and a rostered trainer are free; each trainer supervises one client at a time.</p>
+    <section class="panel flush" style="margin-top:18px"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('calendar-x', 20)}<h3>Upcoming leave</h3></div></div>
+      <div class="rows">${d.leave.length ? d.leave.map(l => `<div class="row"><div class="grow"><b>${esc(l.name)}</b><span>${esc(fLong(l.day))}${l.note ? ' — ' + esc(l.note) : ''}</span></div>${canEdit ? `<button class="btn sm quiet" data-del-leave="${l.id}">Remove</button>` : ''}</div>`).join('') : emptyState('calendar-check', 'No leave recorded.')}</div></section>`;
+  MAIN.querySelectorAll('[data-del-shift]').forEach(b => b.addEventListener('click', () => busy(b, () => api('/staff/rota/' + b.dataset.delShift, { method: 'DELETE', body: {} })).then(() => { toast('Shift removed'); reload(); }).catch(() => {})));
+  MAIN.querySelectorAll('[data-del-leave]').forEach(b => b.addEventListener('click', () => busy(b, () => api('/staff/leave/' + b.dataset.delLeave, { method: 'DELETE', body: {} })).then(() => { toast('Leave removed'); reload(); }).catch(() => {})));
+  MAIN.querySelector('[data-shift]')?.addEventListener('click', () => modal({
+    title: 'Add shift · ' + d.unit.name,
+    body: `<form data-f class="stack" style="gap:14px">${field('Team member', sel('staff_id', d.staff.map(st => [st.id, st.name])))}
+      <div><h4 style="margin-bottom:8px">Days</h4><div class="chips">${[1, 2, 3, 4, 5, 6, 0].map(dn => `<label class="chip"><input type="checkbox" name="wd_${dn}" ${d.unit.hours[dn] && dn !== 0 ? 'checked' : ''}>${DAYN[dn]}</label>`).join('')}</div></div>
+      <div class="grid2">${field('Start', '<input class="in" type="time" name="start_time" value="10:00">')}${field('End', '<input class="in" type="time" name="end_time" value="18:00">')}</div>
+      <label class="check"><input type="checkbox" name="video"> Also available for video consultations in this shift</label></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Add shift</button>`,
+    onMount(el, close) { const b = el.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => { const f = formData(el.querySelector('[data-f]')); return api('/staff/rota', { method: 'POST', body: { staff_id: f.staff_id, unit_id: unitId, start_time: f.start_time, end_time: f.end_time, video: f.video, weekdays: [0, 1, 2, 3, 4, 5, 6].filter(dn => f['wd_' + dn]) } }); }).then(() => { close(); toast('Shift added'); reload(); }).catch(() => {})); },
+  }));
+  MAIN.querySelector('[data-leave]')?.addEventListener('click', () => modal({
+    title: 'Record leave',
+    body: `<form data-f class="stack" style="gap:14px">${field('Team member', sel('staff_id', d.staff.map(st => [st.id, st.name])))}<div class="grid2">${field('Day', inp('day', today(), `type="date" min="${today()}"`))}${field('Note', inp('note', '', 'maxlength="120"'))}</div></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save leave</button>`,
+    onMount(el, close) { const b = el.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api('/staff/leave', { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(r => { close(); if (r.affected && r.affected.length) modal({ title: 'Bookings to reassign', body: `<p>This person has ${r.affected.length} booking${r.affected.length > 1 ? 's' : ''} that day. Open each one in the Schedule and reschedule it so a free trainer is assigned:</p><ul class="dots">${r.affected.map(a => `<li>${esc(fTime(a.start_at))} — ${esc(a.name)}</li>`).join('')}</ul>`, actions: '<a class="btn" href="#/schedule" data-close>Open schedule</a>' }); else toast('Leave recorded'); reload(); }).catch(() => {})); },
   }));
 }

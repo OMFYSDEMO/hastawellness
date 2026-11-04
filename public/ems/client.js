@@ -52,7 +52,7 @@ function home() {
           <div>${icon('trending-down', 20)}<p><b>${w ? (w.diff > 0 ? '+' : '') + w.diff + ' kg' : '—'}</b><span>${w ? 'weight since ' + fDay(w.since) : 'weight change'}</span></p></div>
           <div>${icon('ruler', 20)}<p><b>${wa ? (wa.diff > 0 ? '+' : '') + wa.diff + ' cm' : '—'}</b><span>waist change</span></p></div>
         </div></div>
-      <div class="next">${!DATA.client.cleared ? `<div><b>Admission needed</b><span>Complete your admission before your first session</span></div><a class="btn sm gold" href="#/admission">Open</a>` : next ? `<div><b>${esc(fWhen(next.start_at))}</b><span>Your next ${next.kind === 'session' ? 'EMS session' : esc(KIND_LABEL[next.kind].toLowerCase())}</span></div><a class="btn sm gold" href="#/book">Manage</a>`
+      <div class="next">${!DATA.client.cleared ? `<div><b>Admission needed</b><span>Complete your admission before your first session</span></div><a class="btn sm gold" href="#/admission">Open</a>` : next ? `<div><b>${esc(fWhen(next.start_at))}</b><span>Your next ${next.kind === 'session' ? 'EMS session' : esc(KIND_LABEL[next.kind].toLowerCase())}${next.mode === 'video' ? ' (video call)' : next.unit_name ? ' at ' + esc(next.unit_name) : ''}</span></div><a class="btn sm gold" href="#/book">Manage</a>`
         : `<div><b>No session booked</b><span>${p && p.available ? `${p.available} session${p.available > 1 ? 's' : ''} ready to book` : 'Ask the clinic about your next package'}</span></div>${p && p.available ? '<a class="btn sm gold" href="#/book">Book now</a>' : `<a class="btn sm gold" href="tel:${CLINIC_TEL}">Call</a>`}`}</div>
     </section>
     ${admCard()}
@@ -71,19 +71,25 @@ function book() {
   const up = upcoming(), p = DATA.packages.filter(x => x.state === 'active');
   const avail = p.reduce((a, x) => a + x.available, 0);
   let pick = null;
+  const units = DATA.units || [];
+  let unitId = DATA.client.home_unit_id || (units[0] && units[0].id);
   BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>Bookings</h1><p>${avail} session${avail === 1 ? '' : 's'} available to book</p></div></div>
     ${up.length ? `<section class="panel flush"><div class="panel-h" style="padding:16px 16px 0"><div class="t">${icon('calendar-check', 20)}<h3>Coming up</h3></div></div><div class="rows" style="margin-top:6px">
-      ${up.map(a => `<div class="row"><div class="grow"><b>${esc(fWhen(a.start_at))}</b><span>${esc(KIND_LABEL[a.kind])}</span></div>${a.kind === 'session' ? `<button class="btn sm ghost" data-cancel="${a.id}">Cancel</button>` : pill('booked')}</div>`).join('')}</div></section>` : ''}
+      ${up.map(a => `<div class="row"><div class="grow"><b>${esc(fWhen(a.start_at))}</b><span>${esc([KIND_LABEL[a.kind], a.mode === 'video' ? 'Video call' : a.unit_name, a.trainer_name ? 'with ' + first(a.trainer_name) : ''].filter(Boolean).join(' — '))}</span></div>${a.kind === 'session' ? `<button class="btn sm ghost" data-cancel="${a.id}">Cancel</button>` : pill('booked')}</div>`).join('')}</div></section>` : ''}
     ${!DATA.client.cleared ? `<section class="panel"><div class="ins warn">${icon('shield-alert', 20)}<div><b>Complete your admission first</b><p>Before your first session, you fill in a short health questionnaire, your coach or doctor assesses you, and you sign your programme consent.</p></div></div><div style="display:flex;gap:8px;margin-top:12px"><a class="btn gold" href="#/admission">${icon('shield-check', 18)}Open admission</a><a class="btn wa" href="https://wa.me/919778458883" target="_blank" rel="noopener">${icon('message-circle', 18)}WhatsApp</a></div></section>`
       : avail ? `<section class="panel"><div class="panel-h"><div class="t">${icon('calendar-plus', 20)}<h3>Book a session</h3></div></div>
+        ${units.length > 1 ? `<h4 style="margin-bottom:8px">Centre</h4><div class="centres" data-centres>${units.map(u => `<button type="button" class="centre${u.id === unitId ? ' on' : ''}" data-u="${u.id}"><b>${esc(u.name)}</b><small>${u.id === DATA.client.home_unit_id ? 'Your home centre' : esc(u.district || '')}</small></button>`).join('')}</div><p class="small muted" data-addr style="margin:6px 0 14px"></p>` : ''}
         <div data-slots></div>
         <p class="note" style="margin-top:14px">${icon('battery-charging', 16, '')} Leave about 48 hours between EMS sessions so your muscles can recover. Twice a week works well for most people.</p>
         <button class="btn gold" data-confirm disabled style="width:100%;height:46px;margin-top:14px">Choose a time</button></section>`
       : `<section class="panel">${emptyState('package', 'You have no sessions left to book.', `<a class="btn" href="https://wa.me/919778458883?text=${encodeURIComponent('Hi, I would like to renew my EMS package.')}" target="_blank" rel="noopener">Ask about renewing</a>`)}</section>`}
     <p class="small muted" style="text-align:center;padding:0 12px">Need a time that isn't shown, or a change within 3 hours? Call <a href="tel:${CLINIC_TEL}">${CLINIC_PHONE}</a></p>`;
   const slotsEl = BODY.querySelector('[data-slots]'), btn = BODY.querySelector('[data-confirm]');
-  slotsEl && slotPicker(slotsEl, { onPick: v => { pick = v; btn.disabled = !v; btn.textContent = v ? `Book ${fWhen(v)}` : 'Choose a time'; } });
-  btn && btn.addEventListener('click', () => busy(btn, () => api('/client/appointments', { method: 'POST', body: { start_at: pick } }))
+  const addr = () => { const el = BODY.querySelector('[data-addr]'); const u = units.find(x => x.id === unitId); if (el && u) el.textContent = [u.address, u.phone].filter(Boolean).join(' · '); };
+  addr();
+  const sp = slotsEl && slotPicker(slotsEl, { query: () => `&unit=${unitId}`, onPick: v => { pick = v; btn.disabled = !v; btn.textContent = v ? `Book ${fWhen(v)}` : 'Choose a time'; } });
+  BODY.querySelector('[data-centres]')?.addEventListener('click', e => { const b = e.target.closest('[data-u]'); if (!b) return; unitId = +b.dataset.u; BODY.querySelectorAll('[data-u]').forEach(x => x.classList.toggle('on', x === b)); addr(); sp.reload(); });
+  btn && btn.addEventListener('click', () => busy(btn, () => api('/client/appointments', { method: 'POST', body: { start_at: pick, unit_id: unitId } }))
     .then(() => { toast('Booked for ' + fWhen(pick)); refresh(); }).catch(() => {}));
   BODY.querySelectorAll('[data-cancel]').forEach(b => b.addEventListener('click', () => {
     const a = up.find(x => x.id === +b.dataset.cancel);
@@ -149,7 +155,7 @@ function plan() {
 /* ---------- Account ---------- */
 function account() {
   const C = DATA.client;
-  BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>${esc(C.name)}</h1><p>${esc(prettyPhone(C.phone))}${C.coach_name ? ` · Coach: ${esc(C.coach_name)}` : ''}</p></div></div>
+  BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>${esc(C.name)}</h1><p>${esc(prettyPhone(C.phone))}${C.unit_name ? ` · ${esc(C.unit_name)}` : ''}${C.coach_name ? ` · Coach: ${esc(C.coach_name)}` : ''}</p></div></div>
     <section class="panel flush"><div class="panel-h" style="padding:16px 16px 4px"><div class="t">${icon('package', 20)}<h3>My packages</h3></div></div>
       ${DATA.packages.length ? DATA.packages.slice().reverse().map(p => `<div class="pkg" style="grid-template-columns:1fr"><div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(p.name)}</b>${pill(p.state)}</div>
         <div class="bar" style="margin:8px 0 6px"><i style="width:${p.used / p.sessions_total * 100}%"></i><i class="b" style="width:${p.booked / p.sessions_total * 100}%"></i></div>

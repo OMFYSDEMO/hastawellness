@@ -12,6 +12,7 @@
 // consultation enquiries from the website appear here automatically.
 
 import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify } from './util.js';
+import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS } from './units.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
 
 const STAFF_TTL_H = 12;
@@ -176,9 +177,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=3">
+<link rel="stylesheet" href="/ems/app.css?v=4">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=3"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=4"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -208,10 +209,20 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/me' && m === 'GET') return api({ ok: true, me });
   if (!me) return api({ ok: false, error: 'Please sign in.' }, 401);
 
+  if (p === '/units' && m === 'GET') return api({ ok: true, units: (await listUnits(env, { activeOnly: true })).map(publicUnit) });
   if (p === '/slots' && m === 'GET') {
     const d = url.searchParams.get('date');
     if (!isDate(d)) return bad('Choose a date.');
-    return api({ ok: true, slots: await slots(env, d, me.kind === 'staff') });
+    const kind = APPT_KINDS.includes(url.searchParams.get('kind')) ? url.searchParams.get('kind') : 'session';
+    const mode = kind !== 'session' && url.searchParams.get('mode') === 'video' ? 'video' : 'in_person';
+    let unitId = parseInt(url.searchParams.get('unit'), 10);
+    let prefer = null;
+    if (me.kind === 'client') {
+      const c = await env.DB.prepare('SELECT home_unit_id, coach_id FROM ems_clients WHERE id=?').bind(me.id).first();
+      unitId = unitId || c.home_unit_id || 1; prefer = c.coach_id;
+    }
+    const list = await unitSlots(env, unitId || 1, d, kind, mode, { minAheadH: me.kind === 'staff' ? 0 : 2, nowLocal: nowLocal(), prefer });
+    return api({ ok: true, slots: list });
   }
   if (p === '/me/secret' && m === 'POST') return changeSecret(env, me, body);
 
@@ -238,10 +249,45 @@ async function route(request, env, url, ctx, base, p) {
 
   // Staff
   const admin = me.role === 'admin';
+  const manager = admin || me.role === 'manager';
+  const scope = await scopeOf(env, me);
+  const sc = selectedUnits(url, scope);
   let r;
-  if (p === '/staff/dashboard' && m === 'GET') return api({ ok: true, ...(await dashboard(env)) });
-  if (p === '/staff/clients' && m === 'GET') return listClients(env, url);
-  if (p === '/staff/clients' && m === 'POST') return createClient(env, me, body);
+  if (p === '/staff/units' && m === 'GET') {
+    const all = await listUnits(env);
+    return api({ ok: true, units: all.filter(u => scope.units.includes(u.id)), all_units: all.map(u => ({ id: u.id, name: u.name, code: u.code, active: u.active })), role: me.role, skills: SKILLS });
+  }
+  if (p === '/staff/units' && m === 'POST') return admin ? done(await saveUnit(env, null, body)) : api({ ok: false, error: 'Only head-office admins can add units.' }, 403);
+  if ((r = p.match(/^\/staff\/units\/(\d+)$/))) {
+    if (!scope.units.includes(+r[1])) return api({ ok: false, error: 'Not your unit.' }, 403);
+    if (m === 'GET') { const d = await unitDetail(env, +r[1]); return d ? api({ ok: true, ...d }) : api({ ok: false, error: 'Not found' }, 404); }
+    if (m === 'PUT') return admin ? done(await saveUnit(env, +r[1], body)) : api({ ok: false, error: 'Only head-office admins can change unit settings.' }, 403);
+  }
+  if (p === '/staff/rota' && m === 'POST') {
+    if (!manager || !scope.units.includes(parseInt(body.unit_id, 10))) return api({ ok: false, error: 'Only a unit manager or admin can change the rota.' }, 403);
+    return done(await saveShift(env, body));
+  }
+  if ((r = p.match(/^\/staff\/rota\/(\d+)$/)) && m === 'DELETE') {
+    const sh = await env.DB.prepare('SELECT unit_id FROM ems_rota WHERE id=?').bind(+r[1]).first();
+    if (!sh || !manager || !scope.units.includes(sh.unit_id)) return api({ ok: false, error: 'Not allowed.' }, 403);
+    await env.DB.prepare('DELETE FROM ems_rota WHERE id=?').bind(+r[1]).run(); return api({ ok: true });
+  }
+  if (p === '/staff/leave' && m === 'POST') { if (!manager) return api({ ok: false, error: 'Only a unit manager or admin can record leave.' }, 403); return done(await saveLeave(env, body)); }
+  if ((r = p.match(/^\/staff\/leave\/(\d+)$/)) && m === 'DELETE') { if (!manager) return api({ ok: false, error: 'Not allowed.' }, 403); await env.DB.prepare('DELETE FROM ems_leave WHERE id=?').bind(+r[1]).run(); return api({ ok: true }); }
+  if (p === '/staff/reports/settlement' && m === 'GET') {
+    if (!admin) return api({ ok: false, error: 'Admins only.' }, 403);
+    const from = isDate(url.searchParams.get('from')) ? url.searchParams.get('from') : today().slice(0, 8) + '01';
+    const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : today();
+    return api({ ok: true, from, to, rows: await settlement(env, from, to) });
+  }
+  if (p === '/staff/dashboard' && m === 'GET') return api({ ok: true, ...(await dashboard(env, sc, admin)) });
+  if (p === '/staff/clients' && m === 'GET') return listClients(env, url, sc);
+  if (p === '/staff/clients' && m === 'POST') return createClient(env, me, body, sc);
+  if ((r = p.match(/^\/staff\/clients\/(\d+)/)) && !scope.all) {
+    const ok = await env.DB.prepare(`SELECT 1 FROM ems_clients c WHERE c.id=? AND (c.home_unit_id IS NULL OR c.home_unit_id IN (${scope.units.join(',') || 0})
+      OR EXISTS (SELECT 1 FROM ems_appointments a WHERE a.client_id=c.id AND a.unit_id IN (${scope.units.join(',') || 0})))`).bind(+r[1]).first();
+    if (!ok) return api({ ok: false, error: 'This client belongs to another unit.' }, 403);
+  }
   if ((r = p.match(/^\/staff\/clients\/(\d+)$/))) {
     if (m === 'GET') { const v = await clientView(env, +r[1], true); return v ? api({ ok: true, ...v }) : api({ ok: false, error: 'Not found' }, 404); }
     if (m === 'PUT') return updateClient(env, +r[1], body);
@@ -269,14 +315,14 @@ async function route(request, env, url, ctx, base, p) {
     if (!admin) return api({ ok: false, error: 'Only an admin can remove payments.' }, 403);
     await env.DB.prepare('DELETE FROM ems_payments WHERE id=?').bind(+r[1]).run(); return api({ ok: true });
   }
-  if (p === '/staff/payments' && m === 'GET') return listPayments(env, url);
-  if (p === '/staff/appointments' && m === 'GET') return listAppointments(env, url);
-  if (p === '/staff/appointments' && m === 'POST') return staffBook(env, me, body);
+  if (p === '/staff/payments' && m === 'GET') return listPayments(env, url, sc);
+  if (p === '/staff/appointments' && m === 'GET') return listAppointments(env, url, sc);
+  if (p === '/staff/appointments' && m === 'POST') return staffBook(env, me, body, sc);
   if ((r = p.match(/^\/staff\/appointments\/(\d+)$/)) && m === 'PUT') return updateAppointment(env, +r[1], body);
-  if (p === '/staff/leads' && m === 'GET') return listLeads(env, url);
+  if (p === '/staff/leads' && m === 'GET') return listLeads(env, url, sc, scope);
   if ((r = p.match(/^\/staff\/leads\/(\d+)$/)) && m === 'PUT') return updateLead(env, +r[1], body);
-  if ((r = p.match(/^\/staff\/leads\/(\d+)\/convert$/)) && m === 'POST') return convertLead(env, me, +r[1], body);
-  if (p === '/staff/reminders' && m === 'GET') return api({ ok: true, reminders: await reminders(env) });
+  if ((r = p.match(/^\/staff\/leads\/(\d+)\/convert$/)) && m === 'POST') return convertLead(env, me, +r[1], body, sc);
+  if (p === '/staff/reminders' && m === 'GET') return api({ ok: true, reminders: await reminders(env, sc) });
   if (p === '/staff/reminders/log' && m === 'POST') return logReminder(env, me, body);
   if (p === '/staff/packages' && m === 'GET') {
     const { results } = await env.DB.prepare('SELECT * FROM ems_packages ORDER BY active DESC, sessions, id').all();
@@ -285,13 +331,16 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/staff/packages' && m === 'POST') return admin ? savePackageDef(env, null, body) : api({ ok: false, error: 'Admins only.' }, 403);
   if ((r = p.match(/^\/staff\/packages\/(\d+)$/)) && m === 'PUT') return admin ? savePackageDef(env, +r[1], body) : api({ ok: false, error: 'Admins only.' }, 403);
   if (p === '/staff/team' && m === 'GET') {
-    const { results } = await env.DB.prepare(`SELECT s.id, s.name, s.role, (SELECT COUNT(*) FROM ems_clients c WHERE c.coach_id=s.id AND c.status='active') clients
+    const { results } = await env.DB.prepare(`SELECT s.id, s.name, s.role, s.skills, s.reg_no, (SELECT COUNT(*) FROM ems_clients c WHERE c.coach_id=s.id AND c.status='active') clients,
+      (SELECT group_concat(unit_id) FROM ems_staff_units x WHERE x.staff_id=s.id) units
       FROM ems_staff s WHERE s.active=1 ORDER BY s.name`).all();
+    for (const t of results || []) { t.skills = safeJson(t.skills); t.units = String(t.units || '').split(',').filter(Boolean).map(Number); }
     return api({ ok: true, team: results, me: me.id });
   }
   if (p === '/staff/users' && m === 'GET') {
     if (!admin) return api({ ok: false, error: 'Admins only.' }, 403);
-    const { results } = await env.DB.prepare('SELECT id, name, username, role, active, created_at FROM ems_staff ORDER BY active DESC, name').all();
+    const { results } = await env.DB.prepare('SELECT id, name, username, role, active, created_at, skills, reg_no, (SELECT group_concat(unit_id) FROM ems_staff_units x WHERE x.staff_id=ems_staff.id) units FROM ems_staff ORDER BY active DESC, name').all();
+    for (const t of results || []) { t.skills = safeJson(t.skills); t.units = String(t.units || '').split(',').filter(Boolean).map(Number); }
     return api({ ok: true, users: results });
   }
   if (p === '/staff/users' && m === 'POST') return admin ? saveUser(env, null, body) : api({ ok: false, error: 'Admins only.' }, 403);
@@ -365,8 +414,11 @@ async function consultRequest(request, env, ctx, url, b) {
   if (await tooManyAttempts(env, [key + ':consult'])) return api({ ok: false, error: 'Too many requests. Please call the clinic.' }, 429);
   await recordFailure(env, [key + ':consult']); // counts requests, not failures
   const goal = clean(b.goal, 160);
-  await env.DB.prepare("INSERT INTO leads (source, request_type, name, phone, interest, concern, timing, preferred_date, page) VALUES ('ems portal','Consultation',?,?,'EMS & Weight Management',?,?,?,'ems portal')")
-    .bind(name, phone, nz(goal), nz(clean(b.timing, 60)), date).run();
+  const pin = /^\d{6}$/.test(String(b.pincode || '')) ? String(b.pincode) : null;
+  const unitId = parseInt(b.unit_id, 10) || await routeUnit(env, { pincode: pin });
+  const mode = b.mode === 'video' ? 'Video call' : 'At the centre';
+  await env.DB.prepare("INSERT INTO leads (source, request_type, name, phone, interest, concern, timing, preferred_date, page, unit_id) VALUES ('ems portal',?,?,?,'EMS & Weight Management',?,?,?,'ems portal',?)")
+    .bind('Consultation · ' + mode, name, phone, nz([goal, pin ? 'PIN ' + pin : ''].filter(Boolean).join(' · ')), nz(clean(b.timing, 60)), date, unitId || null).run();
   const alert = notify(env, 'New EMS consultation request', [['Name', name], ['Mobile', phone], ['Goal', goal], ['Preferred date', date], ['Timing', clean(b.timing, 60)]], '/#/leads', emsOrigin(env, url));
   if (ctx && ctx.waitUntil) ctx.waitUntil(alert);
   return api({ ok: true });
@@ -375,34 +427,11 @@ const emsOrigin = (env, url) => env.EMS_ORIGIN || (url.hostname.startsWith('ems.
 
 /* ---------------- Slots & booking ---------------- */
 
-function slotTimes(d) {
-  const [open, close] = HOURS[dow(d)];
-  const out = [];
-  let [hh, mm] = open.split(':').map(Number);
-  const [ch, cm] = close.split(':').map(Number);
-  while (hh * 60 + mm + SLOT_MIN <= ch * 60 + cm) {
-    out.push(`${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`);
-    mm += SLOT_MIN; if (mm >= 60) { hh++; mm -= 60; }
-  }
-  return out;
-}
-const capacity = env => Math.max(1, parseInt(env.EMS_SLOT_CAPACITY || '2', 10));
-
-async function slots(env, d, staff) {
-  const { results } = await env.DB.prepare("SELECT substr(start_at,12,5) t, COUNT(*) n FROM ems_appointments WHERE substr(start_at,1,10)=? AND status IN ('booked','attended') GROUP BY t").bind(d).all();
-  const used = Object.fromEntries((results || []).map(r => [r.t, r.n]));
-  const cap = capacity(env), now = nowLocal();
-  const minAhead = staff ? 0 : 2;
-  return slotTimes(d).map(t => ({ time: t, left: Math.max(0, cap - (used[t] || 0)) }))
-    .filter(s => hoursBetween(now, `${d}T${s.time}`) >= minAhead);
-}
-
-async function slotFree(env, start) {
-  const r = await env.DB.prepare("SELECT COUNT(*) n FROM ems_appointments WHERE start_at=? AND status IN ('booked','attended')").bind(start).first();
-  return (r ? r.n : 0) < capacity(env);
-}
-function withinHours(start) {
-  return slotTimes(start.slice(0, 10)).includes(start.slice(11));
+const APPT_MODES = ['in_person', 'video'];
+async function unitFor(env, b, fallback) {
+  const id = parseInt(b.unit_id, 10) || fallback || 1;
+  const u = await getUnit(env, id);
+  return u && u.active ? u : null;
 }
 
 async function packagesFor(env, clientId) {
@@ -434,21 +463,24 @@ async function recoveryClash(env, clientId, start, exceptId = 0) {
 
 async function clientBook(env, ctx, url, me, b) {
   const start = String(b.start_at || '');
-  if (!isLocal(start) || !withinHours(start)) return bad('Please choose one of the available times.');
+  if (!isLocal(start)) return bad('Please choose one of the available times.');
   if (hoursBetween(nowLocal(), start) < 2) return bad('Please book at least 2 hours ahead, or call the clinic.');
   if (start.slice(0, 10) > addDays(today(), 30)) return bad('You can book up to 30 days ahead.');
-  const c = await env.DB.prepare('SELECT cleared, status FROM ems_clients WHERE id=?').bind(me.id).first();
+  const c = await env.DB.prepare('SELECT cleared, status, home_unit_id, coach_id FROM ems_clients WHERE id=?').bind(me.id).first();
   if (!c || c.status !== 'active') return bad('Your programme is paused. Please contact the clinic.');
+  const unit = await unitFor(env, b, c.home_unit_id);
+  if (!unit) return bad('Please choose a centre.');
   const pkg = await bookablePackage(env, me.id);
   if (!pkg) return bad('You have no sessions left to book. Ask the clinic about renewing your package.');
   const el = await eligible(env, me.id, needsProgrammes(pkg.programme));
   if (!el.ok) return bad('Your admission needs to be completed (or renewed) before you can book. Open "Admission" in the app, or contact the clinic.');
   const clash = await recoveryClash(env, me.id, start);
   if (clash) return bad('EMS works best with about 48 hours of recovery between sessions. Please pick a time further from your other session.');
-  if (!(await slotFree(env, start))) return bad('That time has just been taken. Please choose another.');
-  await env.DB.prepare("INSERT INTO ems_appointments (client_id, kind, start_at, client_package_id, created_by) VALUES (?,'session',?,?,'client')")
-    .bind(me.id, start, pkg.id).run();
-  const alert = notify(env, `EMS session booked by ${me.name}`, [['Client', me.name], ['Mobile', me.phone], ['When', start.replace('T', ' ') + ' IST'], ['Package', pkg.name]], '/#/schedule', emsOrigin(env, url));
+  const al = await allocate(env, unit.id, start, 'session', 'in_person', { prefer: c.coach_id });
+  if (!al.ok) return bad(al.error === 'No free device or trainer at that time. Choose another slot.' ? 'That time has just been taken. Please choose another.' : al.error);
+  await env.DB.prepare("INSERT INTO ems_appointments (client_id, kind, start_at, duration, client_package_id, created_by, unit_id, device_id, trainer_id) VALUES (?,'session',?,?,?,'client',?,?,?)")
+    .bind(me.id, start, al.duration, pkg.id, unit.id, al.device_id, al.trainer_id).run();
+  const alert = notify(env, `EMS session booked by ${me.name} at ${unit.name}`, [['Client', me.name], ['Mobile', me.phone], ['Unit', unit.name], ['When', start.replace('T', ' ') + ' IST'], ['Package', pkg.name]], '/#/schedule', emsOrigin(env, url));
   if (ctx && ctx.waitUntil) ctx.waitUntil(alert);
   return api({ ok: true });
 }
@@ -461,9 +493,10 @@ async function clientCancel(env, me, id) {
   return api({ ok: true });
 }
 
-async function staffBook(env, me, b) {
+async function staffBook(env, me, b, sc) {
   const start = String(b.start_at || '');
   const kind = APPT_KINDS.includes(b.kind) ? b.kind : 'session';
+  const mode = kind !== 'session' && b.mode === 'video' ? 'video' : 'in_person';
   if (!isLocal(start)) return bad('Choose a date and time.');
   const clientId = parseInt(b.client_id, 10) || null;
   let guestName = null, guestPhone = null;
@@ -481,10 +514,14 @@ async function staffBook(env, me, b) {
     pkgId = pkg.id;
     if (await recoveryClash(env, clientId, start)) warnings.push('Less than 48 hours from another session.');
   }
-  if (!b.force && !(await slotFree(env, start))) return bad('That time slot is full. Choose another or tick "overbook".');
-  if (!withinHours(start)) warnings.push('Outside normal clinic hours.');
-  await env.DB.prepare('INSERT INTO ems_appointments (client_id, lead_id, guest_name, guest_phone, kind, start_at, client_package_id, staff_id, notes) VALUES (?,?,?,?,?,?,?,?,?)')
-    .bind(clientId, parseInt(b.lead_id, 10) || null, guestName, guestPhone, kind, start, pkgId, me.id, nz(clean(b.notes, 300))).run();
+  const cl = clientId ? await env.DB.prepare('SELECT home_unit_id, coach_id FROM ems_clients WHERE id=?').bind(clientId).first() : null;
+  const unit = await unitFor(env, b, (cl && cl.home_unit_id) || sc.one || sc.ids[0]);
+  if (!unit || !sc.ids.concat(sc.one || []).length) return bad('Choose a unit.');
+  const al = await allocate(env, unit.id, start, kind, mode, { prefer: cl && cl.coach_id, force: !!b.force });
+  if (!al.ok) return bad(al.error + ' Or tick "overbook".');
+  if (al.warning) warnings.push(al.warning);
+  await env.DB.prepare('INSERT INTO ems_appointments (client_id, lead_id, guest_name, guest_phone, kind, mode, start_at, duration, client_package_id, staff_id, notes, unit_id, device_id, trainer_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .bind(clientId, parseInt(b.lead_id, 10) || null, guestName, guestPhone, kind, mode, start, al.duration, pkgId, me.id, nz(clean(b.notes, 300)), unit.id, al.device_id, al.trainer_id).run();
   return api({ ok: true, warnings });
 }
 
@@ -493,7 +530,15 @@ async function updateAppointment(env, id, b) {
   if (!a) return api({ ok: false, error: 'Not found' }, 404);
   const status = APPT_STATUSES.includes(b.status) ? b.status : a.status;
   const start = isLocal(b.start_at) ? b.start_at : a.start_at;
-  if (start !== a.start_at && !b.force && !(await slotFree(env, start))) return bad('That time slot is full.');
+  const unitId = parseInt(b.unit_id, 10) || a.unit_id || 1;
+  let deviceId = a.device_id, trainerId = a.trainer_id;
+  const moving = start !== a.start_at || unitId !== a.unit_id || (status === 'booked' && a.status !== 'booked');
+  if (moving && ['booked', 'attended'].includes(status)) {
+    const cl = a.client_id ? await env.DB.prepare('SELECT coach_id FROM ems_clients WHERE id=?').bind(a.client_id).first() : null;
+    const al = await allocate(env, unitId, start, a.kind, a.mode || 'in_person', { exceptId: a.id, prefer: cl && cl.coach_id, force: !!b.force });
+    if (!al.ok) return bad(al.error);
+    deviceId = al.device_id; trainerId = al.trainer_id;
+  }
   let pkgId = a.client_package_id;
   // A session moving back to booked/attended needs a package with room.
   if (a.kind === 'session' && a.client_id && ['booked', 'attended'].includes(status) && !pkgId) {
@@ -506,35 +551,39 @@ async function updateAppointment(env, id, b) {
     if (!el.ok) return bad(el.reason);
   }
   const notes = b.notes !== undefined ? nz(clean(b.notes, 300)) : a.notes;
-  await env.DB.prepare("UPDATE ems_appointments SET status=?, start_at=?, client_package_id=?, notes=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?")
-    .bind(status, start, pkgId, notes, id).run();
+  if (b.trainer_id !== undefined && parseInt(b.trainer_id, 10)) trainerId = parseInt(b.trainer_id, 10);
+  await env.DB.prepare("UPDATE ems_appointments SET status=?, start_at=?, client_package_id=?, notes=?, unit_id=?, device_id=?, trainer_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?")
+    .bind(status, start, pkgId, notes, unitId, deviceId, trainerId, id).run();
   return api({ ok: true });
 }
 
-async function listAppointments(env, url) {
+const APPT_SELECT = `SELECT a.*, c.name client_name, c.phone client_phone, cp.name package_name, c.coach_id, s.name coach_name,
+    t.name trainer_name, dv.name device_name, un.name unit_name, un.code unit_code
+    FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id LEFT JOIN ems_client_packages cp ON cp.id=a.client_package_id
+    LEFT JOIN ems_staff s ON s.id=c.coach_id LEFT JOIN ems_staff t ON t.id=a.trainer_id LEFT JOIN ems_devices dv ON dv.id=a.device_id LEFT JOIN ems_units un ON un.id=a.unit_id`;
+async function listAppointments(env, url, sc) {
   const from = isDate(url.searchParams.get('from')) ? url.searchParams.get('from') : today();
   const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : from;
-  const { results } = await env.DB.prepare(`SELECT a.*, c.name client_name, c.phone client_phone, cp.name package_name, c.coach_id, s.name coach_name
-    FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id LEFT JOIN ems_client_packages cp ON cp.id=a.client_package_id
-    LEFT JOIN ems_staff s ON s.id=c.coach_id
-    WHERE substr(a.start_at,1,10) BETWEEN ? AND ? ORDER BY a.start_at, a.id`).bind(from, to).all();
-  return api({ ok: true, appointments: results, capacity: capacity(env) });
+  const { results } = await env.DB.prepare(`${APPT_SELECT}
+    WHERE substr(a.start_at,1,10) BETWEEN ? AND ? AND (a.unit_id IN (${sc.sql}) OR (a.mode='video' AND a.trainer_id IS NOT NULL AND ${sc.one ? '0' : '1'})) ORDER BY a.start_at, a.id`).bind(from, to).all();
+  return api({ ok: true, appointments: results });
 }
 
 /* ---------------- Clients ---------------- */
 
-async function listClients(env, url) {
+async function listClients(env, url, sc) {
   const q = clean(url.searchParams.get('q'), 60);
   const status = url.searchParams.get('status') || 'active';
   const binds = [];
-  let where = "c.status != 'deleted'";
+  let where = `c.status != 'deleted' AND (c.home_unit_id IN (${sc.sql}) OR c.home_unit_id IS NULL${sc.one ? '' : ` OR EXISTS (SELECT 1 FROM ems_appointments x WHERE x.client_id=c.id AND x.unit_id IN (${sc.sql}))`})`;
   if (['active', 'paused', 'completed'].includes(status)) { where += ' AND c.status=?'; binds.push(status); }
   if (q) { where += ' AND (c.name LIKE ? OR c.phone LIKE ?)'; binds.push(`%${q}%`, `%${q.replace(/\D/g, '') || q}%`); }
   const coach = url.searchParams.get('coach') || '';
   if (coach === 'none') where += ' AND c.coach_id IS NULL';
   else if (/^\d+$/.test(coach)) { where += ' AND c.coach_id=?'; binds.push(+coach); }
   const { results } = await env.DB.prepare(`SELECT c.id, c.name, c.phone, c.status, c.goal, c.cleared, c.target_weight, c.created_at, c.coach_id,
-    (SELECT name FROM ems_staff s WHERE s.id=c.coach_id) coach_name,
+    (SELECT name FROM ems_staff s WHERE s.id=c.coach_id) coach_name, c.home_unit_id,
+    (SELECT name FROM ems_units u WHERE u.id=c.home_unit_id) unit_name,
     (SELECT status FROM ems_admissions x WHERE x.client_id=c.id ORDER BY x.id DESC LIMIT 1) adm_status,
     (SELECT valid_until FROM ems_admissions x WHERE x.client_id=c.id ORDER BY x.id DESC LIMIT 1) adm_valid,
     (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='attended') attended,
@@ -558,6 +607,7 @@ function readClientFields(b, partial) {
   if (b.height_cm !== undefined) { f.height_cm = num(b.height_cm, 120, 230); if (f.height_cm === undefined) bad.push('height'); }
   if (b.target_weight !== undefined) { f.target_weight = num(b.target_weight, 30, 250); if (f.target_weight === undefined) bad.push('target weight'); }
   if (b.goal !== undefined) f.goal = clean(b.goal, 200) || null;
+  if (b.home_unit_id !== undefined) { const v = parseInt(b.home_unit_id, 10); f.home_unit_id = v > 0 ? v : null; }
   if (b.coach_id !== undefined) { const v = parseInt(b.coach_id, 10); f.coach_id = v > 0 ? v : null; }
   if (b.staff_notes !== undefined) f.staff_notes = String(b.staff_notes || '').slice(0, 2000) || null;
   if (b.status !== undefined && ['active', 'paused', 'completed'].includes(b.status)) f.status = b.status;
@@ -565,8 +615,10 @@ function readClientFields(b, partial) {
   return { f, bad };
 }
 
-async function createClient(env, me, b) {
+async function createClient(env, me, b, sc) {
   const { f, bad: errs } = readClientFields(b, false);
+  if (!f.home_unit_id) f.home_unit_id = sc.one || sc.ids[0] || 1;
+  if (!sc.ids.includes(f.home_unit_id)) return bad('Choose one of your units as the home unit.');
   if (errs.length) return bad('Please check: ' + errs.join(', ') + '.');
   if (b.consent !== true) return bad('Confirm the client has agreed to their data being kept.');
   const dup = await env.DB.prepare("SELECT id FROM ems_clients WHERE substr(phone,-10)=? AND status != 'deleted'").bind(last10(f.phone)).first();
@@ -646,8 +698,10 @@ async function assignPackage(env, clientId, b) {
   if (discount > price) return bad('The discount is more than the price.');
   const validity = def ? def.validity_days : int(b.validity_days, 7, 730) || 90;
   const expiry = isDate(b.expiry_date) ? b.expiry_date : addDays(start, validity);
-  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme) VALUES (?,?,?,?,?,?,?,?,?)')
-    .bind(clientId, def ? def.id : null, name, sessions, price, discount, start, expiry, programme).run();
+  const cl = await env.DB.prepare('SELECT home_unit_id FROM ems_clients WHERE id=?').bind(clientId).first();
+  const unitId = parseInt(b.unit_id, 10) || (cl && cl.home_unit_id) || 1;
+  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme, unit_id) VALUES (?,?,?,?,?,?,?,?,?,?)')
+    .bind(clientId, def ? def.id : null, name, sessions, price, discount, start, expiry, programme, unitId).run();
   return api({ ok: true, id: r.meta.last_row_id });
 }
 
@@ -679,19 +733,19 @@ async function addPayment(env, me, b) {
   if (!amount) return bad('Enter the amount received.');
   const method = PAY_METHODS.includes(b.method) ? b.method : 'UPI';
   const day = isDate(b.paid_on) && b.paid_on <= today() ? b.paid_on : today();
-  const r = await env.DB.prepare('INSERT INTO ems_payments (client_id, client_package_id, amount, method, paid_on, reference, staff_id) VALUES (?,?,?,?,?,?,?)')
-    .bind(cp.client_id, cp.id, amount, method, day, nz(clean(b.reference, 80)), me.id).run();
+  const r = await env.DB.prepare('INSERT INTO ems_payments (client_id, client_package_id, amount, method, paid_on, reference, staff_id, unit_id) VALUES (?,?,?,?,?,?,?,?)')
+    .bind(cp.client_id, cp.id, amount, method, day, nz(clean(b.reference, 80)), me.id, cp.unit_id || 1).run();
   return api({ ok: true, id: r.meta.last_row_id });
 }
 
-async function listPayments(env, url) {
+async function listPayments(env, url, sc) {
   const from = isDate(url.searchParams.get('from')) ? url.searchParams.get('from') : today().slice(0, 8) + '01';
   const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : today();
-  const { results } = await env.DB.prepare(`SELECT p.*, c.name client_name, cp.name package_name FROM ems_payments p
+  const { results } = await env.DB.prepare(`SELECT p.*, c.name client_name, cp.name package_name, (SELECT name FROM ems_units u WHERE u.id=p.unit_id) unit_name FROM ems_payments p
     LEFT JOIN ems_clients c ON c.id=p.client_id LEFT JOIN ems_client_packages cp ON cp.id=p.client_package_id
-    WHERE p.paid_on BETWEEN ? AND ? ORDER BY p.paid_on DESC, p.id DESC`).bind(from, to).all();
+    WHERE p.paid_on BETWEEN ? AND ? AND IFNULL(p.unit_id,1) IN (${sc.sql}) ORDER BY p.paid_on DESC, p.id DESC`).bind(from, to).all();
   const out = await env.DB.prepare(`SELECT IFNULL(SUM(cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_payments p WHERE p.client_package_id=cp.id),0)),0) due
-    FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id WHERE c.status != 'deleted' AND cp.status != 'closed'`).first();
+    FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id WHERE c.status != 'deleted' AND cp.status != 'closed' AND IFNULL(cp.unit_id,1) IN (${sc.sql})`).first();
   return api({ ok: true, payments: results, from, to, outstanding: out ? out.due : 0 });
 }
 
@@ -712,7 +766,7 @@ async function clientView(env, id, staff) {
   if (!c) return null;
   const [pkgs, appts, meas, pays, plan, checks] = await Promise.all([
     packagesFor(env, id),
-    env.DB.prepare('SELECT a.*, cp.name package_name FROM ems_appointments a LEFT JOIN ems_client_packages cp ON cp.id=a.client_package_id WHERE a.client_id=? ORDER BY a.start_at DESC LIMIT 300').bind(id).all(),
+    env.DB.prepare(`${APPT_SELECT} WHERE a.client_id=? ORDER BY a.start_at DESC LIMIT 300`).bind(id).all(),
     env.DB.prepare('SELECT * FROM ems_measurements WHERE client_id=? ORDER BY measured_on, id').bind(id).all(),
     env.DB.prepare('SELECT p.*, cp.name package_name FROM ems_payments p LEFT JOIN ems_client_packages cp ON cp.id=p.client_package_id WHERE p.client_id=? ORDER BY p.paid_on DESC, p.id DESC').bind(id).all(),
     env.DB.prepare('SELECT * FROM ems_plans WHERE client_id=?').bind(id).first(),
@@ -722,6 +776,8 @@ async function clientView(env, id, staff) {
   delete client.pin_hash;
   const coach = c.coach_id ? await env.DB.prepare('SELECT name FROM ems_staff WHERE id=?').bind(c.coach_id).first() : null;
   client.coach_name = coach ? coach.name : null;
+  const hu = c.home_unit_id ? await getUnit(env, c.home_unit_id) : null;
+  client.unit_name = hu ? hu.name : null;
   const p = plan || { diet: 'kerala-balanced', water_target: 10, steps_target: 7000, sleep_target: 7, focus: null };
   const data = { client, packages: pkgs, appointments: appts.results || [], measurements: meas.results || [], payments: pays.results || [], plan: p, checkins: checks.results || [] };
   const { results: adms } = await env.DB.prepare('SELECT * FROM ems_admissions WHERE client_id=? ORDER BY id DESC').bind(id).all();
@@ -731,9 +787,10 @@ async function clientView(env, id, staff) {
   data.insights = insights(data, staff);
   if (!staff) {
     delete client.staff_notes; delete client.screening; delete client.lead_id;
-    data.appointments = data.appointments.map(({ staff_id, notes, ...a }) => a);
+    data.appointments = data.appointments.map(({ staff_id, notes, device_id, ...a }) => a);
+    data.units = (await listUnits(env, { activeOnly: true })).map(publicUnit);
     data.payments = data.payments.map(({ staff_id, ...x }) => x);
-    data.capacity = capacity(env);
+
   }
   return data;
 }
@@ -875,25 +932,25 @@ const fmtDay = d => new Date(d.slice(0, 10) + 'T00:00:00Z').toLocaleDateString('
 
 /* ---------------- Dashboard ---------------- */
 
-async function dashboard(env) {
+async function dashboard(env, sc, admin) {
   const t = today(), mon = mondayOf(t), monthStart = t.slice(0, 8) + '01';
+  const U = sc.sql;
   const q = (sql, ...b) => env.DB.prepare(sql).bind(...b);
   const [todayAppts, counts, weekly, revenue, leads, outstanding] = await Promise.all([
-    q(`SELECT a.*, c.name client_name, c.phone client_phone, c.coach_id, s.name coach_name FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id LEFT JOIN ems_staff s ON s.id=c.coach_id
-       WHERE substr(a.start_at,1,10)=? AND a.status != 'cancelled' ORDER BY a.start_at`, t).all(),
+    q(`${APPT_SELECT} WHERE substr(a.start_at,1,10)=? AND a.status != 'cancelled' AND a.unit_id IN (${U}) ORDER BY a.start_at`, t).all(),
     q(`SELECT
-       (SELECT COUNT(*) FROM ems_clients WHERE status='active') active_clients,
-       (SELECT COUNT(*) FROM ems_appointments WHERE status='attended' AND kind='session' AND substr(start_at,1,10) BETWEEN ? AND ?) week_sessions,
-       (SELECT COUNT(*) FROM ems_appointments WHERE status='booked' AND start_at >= ?) upcoming,
-       (SELECT IFNULL(SUM(amount),0) FROM ems_payments WHERE paid_on >= ?) month_revenue,
-       (SELECT COUNT(*) FROM ems_appointments WHERE status='no_show' AND substr(start_at,1,10) >= ?) month_noshow,
-       (SELECT COUNT(*) FROM ems_appointments WHERE status IN ('attended','no_show') AND substr(start_at,1,10) >= ?) month_closed`,
+       (SELECT COUNT(*) FROM ems_clients WHERE status='active' AND IFNULL(home_unit_id,1) IN (${U})) active_clients,
+       (SELECT COUNT(*) FROM ems_appointments WHERE status='attended' AND kind='session' AND unit_id IN (${U}) AND substr(start_at,1,10) BETWEEN ? AND ?) week_sessions,
+       (SELECT COUNT(*) FROM ems_appointments WHERE status='booked' AND unit_id IN (${U}) AND start_at >= ?) upcoming,
+       (SELECT IFNULL(SUM(amount),0) FROM ems_payments WHERE IFNULL(unit_id,1) IN (${U}) AND paid_on >= ?) month_revenue,
+       (SELECT COUNT(*) FROM ems_appointments WHERE status='no_show' AND unit_id IN (${U}) AND substr(start_at,1,10) >= ?) month_noshow,
+       (SELECT COUNT(*) FROM ems_appointments WHERE status IN ('attended','no_show') AND unit_id IN (${U}) AND substr(start_at,1,10) >= ?) month_closed`,
       mon, t, nowLocal(), monthStart, monthStart, monthStart).first(),
-    q(`SELECT substr(start_at,1,10) d, COUNT(*) n FROM ems_appointments WHERE status='attended' AND kind='session' AND substr(start_at,1,10) >= ? GROUP BY d`, addDays(mon, -49)).all(),
-    q(`SELECT substr(paid_on,1,7) m, SUM(amount) n FROM ems_payments WHERE paid_on >= ? GROUP BY m`, addDays(monthStart, -160).slice(0, 8) + '01').all(),
-    q(`SELECT COUNT(*) n FROM leads WHERE status='new' AND (interest LIKE '%EMS%' OR interest LIKE '%eight%' OR source='ems portal')`).first(),
+    q(`SELECT substr(start_at,1,10) d, COUNT(*) n FROM ems_appointments WHERE status='attended' AND kind='session' AND unit_id IN (${U}) AND substr(start_at,1,10) >= ? GROUP BY d`, addDays(mon, -49)).all(),
+    q(`SELECT substr(paid_on,1,7) m, SUM(amount) n FROM ems_payments WHERE IFNULL(unit_id,1) IN (${U}) AND paid_on >= ? GROUP BY m`, addDays(monthStart, -160).slice(0, 8) + '01').all(),
+    q(`SELECT COUNT(*) n FROM leads WHERE status='new' AND (interest LIKE '%EMS%' OR interest LIKE '%eight%' OR source='ems portal') AND (unit_id IS NULL OR unit_id IN (${U}))`).first(),
     q(`SELECT IFNULL(SUM(cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_payments p WHERE p.client_package_id=cp.id),0)),0) due
-       FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id WHERE cp.status != 'closed'`).first(),
+       FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id WHERE cp.status != 'closed' AND IFNULL(cp.unit_id,1) IN (${U})`).first(),
   ]);
   const weeks = [];
   for (let i = 7; i >= 0; i--) {
@@ -906,26 +963,28 @@ async function dashboard(env) {
     const key = d.toISOString().slice(0, 7);
     months.push({ label: key, value: ((revenue.results || []).find(r => r.m === key) || {}).n || 0 });
   }
-  const rem = await reminders(env);
-  return { today: todayAppts.results || [], counts: { ...counts, new_leads: leads ? leads.n : 0, outstanding: outstanding ? outstanding.due : 0, reminders: rem.length }, weeks, months, reminders: rem.slice(0, 6), capacity: capacity(env) };
+  const rem = await reminders(env, sc);
+  const units = await unitStats(env, sc.ids, mon, monthStart);
+  return { today: todayAppts.results || [], counts: { ...counts, new_leads: leads ? leads.n : 0, outstanding: outstanding ? outstanding.due : 0, reminders: rem.length }, weeks, months, reminders: rem.slice(0, 6), units };
 }
 
 /* ---------------- Reminders ---------------- */
 
-async function reminders(env) {
+async function reminders(env, sc) {
+  const U = sc ? sc.sql : '0';
   const t = today(), tomorrow = addDays(t, 1), now = nowLocal();
   const out = [];
   const q = (sql, ...b) => env.DB.prepare(sql).bind(...b).all().then(r => r.results || []);
   const [logged, tmr, clients, leads] = await Promise.all([
     q("SELECT kind, ref FROM ems_reminder_log WHERE created_at > strftime('%Y-%m-%dT%H:%M:%SZ','now','-3 days')"),
     q(`SELECT a.id, a.start_at, a.kind, a.guest_name, a.guest_phone, a.client_id, c.name, c.phone FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id
-       WHERE a.status='booked' AND substr(a.start_at,1,10)=? ORDER BY a.start_at`, tomorrow),
+       WHERE a.status='booked' AND substr(a.start_at,1,10)=? AND a.unit_id IN (${U}) ORDER BY a.start_at`, tomorrow),
     q(`SELECT c.id, c.name, c.phone,
        (SELECT MAX(start_at) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='attended') last_visit,
        (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='booked' AND a.start_at >= ?) upcoming,
        (SELECT MAX(measured_on) FROM ems_measurements m WHERE m.client_id=c.id) last_meas
-       FROM ems_clients c WHERE c.status='active'`, now),
-    q(`SELECT id, name, phone, created_at, interest FROM leads WHERE status='new' AND (interest LIKE '%EMS%' OR interest LIKE '%eight%' OR source='ems portal')
+       FROM ems_clients c WHERE c.status='active' AND IFNULL(c.home_unit_id,1) IN (${U})`, now),
+    q(`SELECT id, name, phone, created_at, interest FROM leads WHERE status='new' AND (interest LIKE '%EMS%' OR interest LIKE '%eight%' OR source='ems portal') AND (unit_id IS NULL OR unit_id IN (${U}))
        AND created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now','-2 hours') ORDER BY id DESC LIMIT 20`),
   ]);
   const done = new Set(logged.map(l => `${l.kind}:${l.ref}`));
@@ -949,7 +1008,7 @@ async function reminders(env) {
     if (c.last_visit && (!c.last_meas || daysBetween(c.last_meas, t) > 14) && (!c.last_meas || c.last_visit.slice(0, 10) > c.last_meas)) push({ kind: 'measure', ref: `${c.id}:${c.last_meas || 'none'}`, priority: 3, client_id: c.id, name: c.name, phone: c.phone, title: c.last_meas ? `Measurements due · last on ${fmtDay(c.last_meas)}` : 'No measurements recorded yet' });
   }
   const { results: adm } = await env.DB.prepare(`SELECT a.id, a.status, a.valid_until, a.updated_at, a.created_at, c.id cid, c.name, c.phone FROM ems_admissions a JOIN ems_clients c ON c.id=a.client_id
-    WHERE c.status='active' AND a.id=(SELECT MAX(id) FROM ems_admissions x WHERE x.client_id=c.id)
+    WHERE c.status='active' AND IFNULL(c.home_unit_id,1) IN (${U}) AND a.id=(SELECT MAX(id) FROM ems_admissions x WHERE x.client_id=c.id)
     AND (a.status IN ('screening','client_consent') OR (a.status='admitted' AND a.valid_until <= ?))`).bind(addDays(t, 21)).all();
   for (const a of adm || []) {
     if (a.status === 'screening') push({ kind: 'admission', ref: `${a.id}:screen`, priority: 2, client_id: a.cid, name: a.name, phone: a.phone, title: 'Admission: health questionnaire not filled in', step: 'screening' });
@@ -973,7 +1032,7 @@ async function logReminder(env, me, b) {
 
 /* ---------------- Leads (from the website) ---------------- */
 
-async function listLeads(env, url) {
+async function listLeads(env, url, sc, unitScope) {
   const scope = url.searchParams.get('scope') === 'all' ? '' : "AND (l.interest LIKE '%EMS%' OR l.interest LIKE '%eight%' OR l.source='ems portal')";
   const status = url.searchParams.get('status') || 'open';
   let sw = '';
@@ -983,11 +1042,17 @@ async function listLeads(env, url) {
   const { results } = await env.DB.prepare(`SELECT l.*,
     (SELECT id FROM ems_clients c WHERE substr(c.phone,-10)=substr(l.phone,-10) AND c.status != 'deleted') client_id,
     (SELECT MIN(start_at) FROM ems_appointments a WHERE a.lead_id=l.id AND a.status='booked') booked_at
-    FROM leads l WHERE 1=1 ${scope} ${sw} ORDER BY l.id DESC LIMIT 200`).bind(...binds).all();
+    , (SELECT name FROM ems_units u WHERE u.id=l.unit_id) unit_name
+    FROM leads l WHERE 1=1 ${scope} ${sw} AND (l.unit_id IN (${sc.sql}) ${sc.one ? '' : 'OR l.unit_id IS NULL'}) ORDER BY l.id DESC LIMIT 200`).bind(...binds).all();
   return api({ ok: true, leads: results });
 }
 
 async function updateLead(env, id, b) {
+  if (b.unit_id !== undefined) {
+    const u = parseInt(b.unit_id, 10) || null;
+    await env.DB.prepare("UPDATE leads SET unit_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?").bind(u, id).run();
+    if (!b.status) return api({ ok: true });
+  }
   const status = LEAD_STATUSES.includes(b.status) ? b.status : null;
   if (!status) return bad('Choose a status.');
   await env.DB.prepare("UPDATE leads SET status=?, notes=COALESCE(?,notes), updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?")
@@ -995,16 +1060,20 @@ async function updateLead(env, id, b) {
   return api({ ok: true });
 }
 
-async function convertLead(env, me, id, b) {
+async function convertLead(env, me, id, b, sc) {
   const l = await env.DB.prepare('SELECT * FROM leads WHERE id=?').bind(id).first();
   if (!l) return api({ ok: false, error: 'Not found' }, 404);
   const start = String(b.start_at || '');
   if (!isLocal(start)) return bad('Choose a date and time for the consultation.');
-  if (!b.force && !(await slotFree(env, start))) return bad('That time slot is full.');
+  const mode = b.mode === 'video' ? 'video' : 'in_person';
+  const unit = await unitFor(env, b, l.unit_id || sc.one || sc.ids[0]);
+  if (!unit) return bad('Choose a unit.');
+  const al = await allocate(env, unit.id, start, 'consultation', mode, { force: !!b.force });
+  if (!al.ok) return bad(al.error);
   const existing = await env.DB.prepare("SELECT id FROM ems_clients WHERE substr(phone,-10)=? AND status != 'deleted'").bind(last10(l.phone)).first();
-  await env.DB.prepare("INSERT INTO ems_appointments (client_id, lead_id, guest_name, guest_phone, kind, start_at, staff_id, notes) VALUES (?,?,?,?,'consultation',?,?,?)")
-    .bind(existing ? existing.id : null, id, l.name, l.phone, start, me.id, nz(clean(b.notes, 300) || l.concern)).run();
-  await env.DB.prepare("UPDATE leads SET status='booked', updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?").bind(id).run();
+  await env.DB.prepare("INSERT INTO ems_appointments (client_id, lead_id, guest_name, guest_phone, kind, mode, start_at, duration, staff_id, notes, unit_id, trainer_id) VALUES (?,?,?,?,'consultation',?,?,?,?,?,?,?)")
+    .bind(existing ? existing.id : null, id, l.name, l.phone, mode, start, al.duration, me.id, nz(clean(b.notes, 300) || l.concern), unit.id, al.trainer_id).run();
+  await env.DB.prepare("UPDATE leads SET status='booked', unit_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?").bind(unit.id, id).run();
   return api({ ok: true });
 }
 
@@ -1021,7 +1090,11 @@ async function savePackageDef(env, id, b) {
 }
 
 async function saveUser(env, id, b) {
-  const name = clean(b.name, 80), username = clean(b.username, 40).toLowerCase(), role = b.role === 'admin' ? 'admin' : 'staff';
+  const name = clean(b.name, 80), username = clean(b.username, 40).toLowerCase(), role = ['admin', 'manager'].includes(b.role) ? b.role : 'staff';
+  const skills = (Array.isArray(b.skills) ? b.skills : []).filter(k => SKILLS[k]);
+  const unitIds = (Array.isArray(b.units) ? b.units : []).map(Number).filter(Boolean);
+  if (role !== 'admin' && !unitIds.length) return bad('Choose at least one unit for this team member.');
+  if (skills.includes('doctor') && !clean(b.reg_no, 40)) return bad('Enter the doctor\'s registration number.');
   const cur = id ? await env.DB.prepare('SELECT username FROM ems_staff WHERE id=?').bind(id).first() : null;
   if (name.length < 2 || !/^[a-z0-9._-]{3,40}$/.test(username) || (username === 'hasta' && !(cur && cur.username === 'hasta'))) return bad('Enter a name and a username (letters and numbers, not "hasta").');
   if (cur && cur.username === 'hasta' && (username !== 'hasta' || b.role !== 'admin' || b.active === false)) return bad('The main clinic admin account keeps the username "hasta" and stays an active admin.');
@@ -1030,13 +1103,17 @@ async function saveUser(env, id, b) {
   if (pw && pw.length < 8) return bad('Passwords need at least 8 characters.');
   const dup = await env.DB.prepare('SELECT id FROM ems_staff WHERE username=? AND id != ?').bind(username, id || 0).first();
   if (dup) return bad('That username is taken.');
+  let staffId = id;
   if (id) {
-    await env.DB.prepare('UPDATE ems_staff SET name=?, username=?, role=?, active=? WHERE id=?').bind(name, username, role, b.active === false ? 0 : 1, id).run();
+    await env.DB.prepare('UPDATE ems_staff SET name=?, username=?, role=?, active=?, skills=?, reg_no=? WHERE id=?').bind(name, username, role, b.active === false ? 0 : 1, JSON.stringify(skills), nz(clean(b.reg_no, 40)), id).run();
     if (pw) await env.DB.prepare('UPDATE ems_staff SET pass_hash=? WHERE id=?').bind(await hashSecret(pw), id).run();
     if (b.active === false) await env.DB.prepare("DELETE FROM ems_sessions WHERE kind='staff' AND subject_id=?").bind(id).run();
   } else {
-    await env.DB.prepare('INSERT INTO ems_staff (name, username, role, pass_hash) VALUES (?,?,?,?)').bind(name, username, role, await hashSecret(pw)).run();
+    staffId = (await env.DB.prepare('INSERT INTO ems_staff (name, username, role, pass_hash, skills, reg_no) VALUES (?,?,?,?,?,?)').bind(name, username, role, await hashSecret(pw), JSON.stringify(skills), nz(clean(b.reg_no, 40))).run()).meta.last_row_id;
   }
+  await env.DB.prepare('DELETE FROM ems_staff_units WHERE staff_id=?').bind(staffId).run();
+  for (const u of unitIds) await env.DB.prepare('INSERT OR IGNORE INTO ems_staff_units (staff_id, unit_id) VALUES (?,?)').bind(staffId, u).run();
+  await env.DB.prepare(`DELETE FROM ems_rota WHERE staff_id=? AND unit_id NOT IN (${unitIds.length ? unitIds.join(',') : 0})`).bind(staffId).run();
   return api({ ok: true });
 }
 
