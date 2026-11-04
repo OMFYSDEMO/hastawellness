@@ -1,5 +1,6 @@
 import { PAGES } from './pages.js';
 import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify } from './util.js';
+import { handleEms, emsDaily } from './ems.js';
 import { handleCareers, handleApply, handleAdminJobs, handleAdminApplications, handleAdminCv, careerSitemapPaths, purgeOldApplications } from './careers.js';
 // Hasta Wellness — Cloudflare Worker
 // Serves the static site (./public) and a small lead-capture API.
@@ -23,6 +24,12 @@ export default {
     if (url.hostname.startsWith('www.')) {
       url.hostname = url.hostname.slice(4);
       return Response.redirect(url.toString(), 301);
+    }
+    // EMS progress platform: ems.* subdomain, or /ems on any other host.
+    if (url.hostname.startsWith('ems.')) return handleEms(request, env, url, ctx, '', serveAsset);
+    if (path === '/ems' || path.startsWith('/ems/')) {
+      if (/^\/ems\/[\w.\-/]+\.\w+$/.test(path)) return handleEms(request, env, url, ctx, '', serveAsset);
+      return handleEms(request, env, url, ctx, '/ems', serveAsset);
     }
     try {
       if (path === '/api/lead') return await handleLead(request, env, ctx);
@@ -49,6 +56,7 @@ export default {
     ).bind(`-${days} days`).run();
     console.log('Lead retention clean-up removed', r.meta && r.meta.changes, 'rows');
     await purgeOldApplications(env);
+    await emsDaily(env).catch(err => console.error('EMS daily job failed', err && err.stack || err));
   },
 };
 
@@ -60,7 +68,7 @@ const isPreviewHost = host => host.endsWith('.workers.dev') || host.startsWith('
 function robots(url) {
   const body = isPreviewHost(url.hostname)
     ? 'User-agent: *\nDisallow: /\n'
-    : `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\n\nSitemap: ${url.origin}/sitemap.xml\n`;
+    : `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /ems\n\nSitemap: ${url.origin}/sitemap.xml\n`;
   return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
 }
 

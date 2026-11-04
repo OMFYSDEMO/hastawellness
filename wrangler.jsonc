@@ -29,7 +29,10 @@
   "vars": {
     "LEAD_RETENTION_DAYS": "90",
     "ALERT_EMAILS": "hello@hastawellnessclinic.com,shajianandan@gmail.com",
-    "ALERT_FROM": "alerts@hastawellnessclinic.com"
+    "ALERT_FROM": "alerts@hastawellnessclinic.com",
+    // EMS platform (ems.hastawellnessclinic.com): clients per 30-minute slot, and the app address used in emails.
+    "EMS_SLOT_CAPACITY": "2",
+    "EMS_ORIGIN": "https://ems.hastawellnessclinic.com"
   }
   // Secret (set in Cloudflare dashboard, never in this file): ADMIN_PASSWORD
 }
