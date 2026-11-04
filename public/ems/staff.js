@@ -4,7 +4,9 @@ import {
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
 } from './core.js';
 
-let ME, APP, MAIN, BADGES = {};
+let ME, APP, MAIN, BADGES = {}, TEAM = null;
+async function team(fresh = false) { if (!TEAM || fresh) TEAM = (await api('/staff/team')).team; return TEAM; }
+const coachOptions = (list, value) => [['', 'Not allocated']].concat(list.map(t => [t.id, t.name + (t.role === 'admin' ? ' (admin)' : '')]));
 const NAV = [
   ['', 'layout-dashboard', 'Dashboard'], ['schedule', 'calendar-days', 'Schedule'], ['clients', 'users', 'Clients'],
   ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['payments', 'wallet', 'Payments'],
@@ -64,7 +66,7 @@ function apptRow(a, { showDate = false, link = true, own = false } = {}) {
   const name = a.client_name || a.guest_name || 'Client';
   const phone = a.client_phone || a.guest_phone;
   const when = showDate ? fWhen(a.start_at) : fTime(a.start_at);
-  const sub = [own ? null : KIND_LABEL[a.kind], a.package_name, a.notes].filter(Boolean).map(esc).join(' — ');
+  const sub = [own ? null : KIND_LABEL[a.kind], a.package_name, !own && a.coach_name ? 'Coach ' + first(a.coach_name) : null, a.notes].filter(Boolean).map(esc).join(' — ');
   const acts = a.status === 'booked' ? `
       <button class="btn sm ghost" data-act="attended" data-id="${a.id}" title="Mark attended">${icon('check', 16)}<span class="hide-m">Attended</span></button>
       <button class="btn sm quiet icon" data-act="more" data-id="${a.id}" aria-label="More actions">${icon('more-horizontal', 18)}</button>` : '';
@@ -267,15 +269,18 @@ async function viewSchedule(day) {
 async function viewClients(q) {
   const status = q.get('status') || 'active';
   const search = q.get('q') || '';
-  const { clients } = await api(`/staff/clients?status=${status}&q=${encodeURIComponent(search)}`);
+  const coach = q.get('coach') || '';
+  const [{ clients }, tm] = await Promise.all([api(`/staff/clients?status=${status}&q=${encodeURIComponent(search)}&coach=${coach}`), team()]);
   MAIN.innerHTML = `
     <div class="head"><div><h1>Clients</h1><p>${clients.length} ${status === 'all' ? '' : status} client${clients.length === 1 ? '' : 's'}</p></div>
       <div class="acts"><button class="btn gold" data-add>${icon('user-plus', 18)}Add client</button></div></div>
     <div class="toolbar"><form class="search" data-search>${icon('search', 18)}<input class="in" name="q" value="${esc(search)}" placeholder="Search name or mobile"></form>
-      <div class="seg">${['active', 'paused', 'completed', 'all'].map(s => `<button data-s="${s}" class="${s === status ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div></div>
-    <section class="panel flush">${clients.length ? `<table class="t"><thead><tr><th>Client</th><th>Sessions</th><th>Weight</th><th>Last visit</th><th>Next visit</th><th>Suitability</th></tr></thead><tbody>
+      <div class="seg">${['active', 'paused', 'completed', 'all'].map(s => `<button data-s="${s}" class="${s === status ? 'on' : ''}">${s[0].toUpperCase() + s.slice(1)}</button>`).join('')}</div>
+      <select class="in" data-coach style="width:auto;min-width:190px" aria-label="Coach">${[['', 'All coaches']].concat(tm.some(t => t.id === ME.id) ? [[String(ME.id), 'My clients']] : [], [['none', 'Not allocated']], tm.map(t => [String(t.id), t.name])).map(([v, l]) => `<option value="${v}"${v === coach ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></div>
+    <section class="panel flush">${clients.length ? `<table class="t"><thead><tr><th>Client</th><th>Coach</th><th>Sessions</th><th>Weight</th><th>Last visit</th><th>Next visit</th><th>Suitability</th></tr></thead><tbody>
       ${clients.map(c => { const diff = c.first_weight != null && c.last_weight != null ? Math.round((c.last_weight - c.first_weight) * 10) / 10 : null;
         return `<tr class="click" data-id="${c.id}"><td><div style="display:flex;gap:12px;align-items:center"><span class="avatar">${esc(initials(c.name))}</span><div><b>${esc(c.name)}</b><div class="small muted">${esc(prettyPhone(c.phone))}</div></div></div></td>
+        <td>${c.coach_name ? esc(c.coach_name) : '<span style="color:var(--warn)">Not allocated</span>'}</td>
         <td class="num">${c.attended}${c.sessions_total ? ` <span class="muted">/ ${c.sessions_total}</span>` : ''}</td>
         <td>${c.last_weight != null ? `<span class="num">${kg(c.last_weight)} kg</span> ${deltaTag(diff, ' kg')}` : '<span class="faint">—</span>'}</td>
         <td>${c.last_visit ? esc(fDay(c.last_visit)) : '<span class="faint">—</span>'}</td>
@@ -285,22 +290,25 @@ async function viewClients(q) {
   const setQ = (k, v) => { const p = new URLSearchParams(q); p.set(k, v); location.hash = '#/clients?' + p; };
   MAIN.querySelector('[data-search]').addEventListener('submit', e => { e.preventDefault(); setQ('q', e.target.q.value.trim()); });
   MAIN.querySelectorAll('[data-s]').forEach(b => b.addEventListener('click', () => setQ('status', b.dataset.s)));
+  MAIN.querySelector('[data-coach]').addEventListener('change', e => setQ('coach', e.target.value));
   MAIN.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => clientModal()));
   MAIN.querySelectorAll('tr[data-id]').forEach(r => r.addEventListener('click', () => go('#/clients/' + r.dataset.id)));
 }
 
-function clientForm(c = {}, isNew = true) {
-  return `<div class="grid2">${field('Full name', inp('name', c.name, 'required autocomplete="off"'))}${field('Mobile number', inp('phone', c.phone, 'type="tel" required'), 'used to sign in')}</div>
+function clientForm(c = {}, isNew = true, tm = []) {
+  return `${field('Coach', sel('coach_id', coachOptions(tm), c.coach_id ?? (isNew && tm.some(t => t.id === ME.id) ? ME.id : '')), 'team member responsible for this client')}
+    <div class="grid2">${field('Full name', inp('name', c.name, 'required autocomplete="off"'))}${field('Mobile number', inp('phone', c.phone, 'type="tel" required'), 'used to sign in')}</div>
     <div class="grid3">${field('Gender', sel('gender', [['', 'Select'], ['female', 'Female'], ['male', 'Male'], ['other', 'Other']], c.gender))}${field('Year of birth', inp('birth_year', c.birth_year, 'type="number" inputmode="numeric" placeholder="1990"'))}${field('Height (cm)', inp('height_cm', c.height_cm, 'type="number" step="0.5" inputmode="decimal"'))}</div>
     <div class="grid2">${field('Target weight (kg)', inp('target_weight', c.target_weight, 'type="number" step="0.1" inputmode="decimal"'), 'optional')}${field('Email', inp('email', c.email, 'type="email"'), 'optional')}</div>
     ${field('Goal', inp('goal', c.goal, 'maxlength="200" placeholder="e.g. Lose 6 kg before wedding, tone core after pregnancy"'))}
     ${isNew ? `<label class="check"><input type="checkbox" name="consent"> <span>The client has agreed to Hasta Wellness keeping their details, measurements and progress records for their programme.</span></label>` : ''}`;
 }
 
-function clientModal(prefill = {}, after) {
+async function clientModal(prefill = {}, after) {
+  const tm = await team().catch(() => []);
   modal({
     title: 'Add client', wide: true,
-    body: `<form class="stack" style="gap:14px" data-f>${clientForm(prefill, true)}</form>`,
+    body: `<form class="stack" style="gap:14px" data-f>${clientForm(prefill, true, tm)}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>${icon('user-plus', 18)}Add client</button>`,
     onMount(el, close) {
       const f = el.querySelector('[data-f]'), save = el.querySelector('[data-save]');
@@ -330,7 +338,8 @@ function showPin({ id, name, phone, pin, isNew }) {
 const TABS = [['overview', 'layout-dashboard', 'Overview'], ['sessions', 'calendar-days', 'Sessions & packages'], ['progress', 'line-chart', 'Progress'], ['payments', 'wallet', 'Payments'], ['plan', 'salad', 'Lifestyle plan'], ['profile', 'user', 'Profile & suitability']];
 
 async function viewClient(id, tab) {
-  const d = await api('/staff/clients/' + id);
+  const [d, tm] = await Promise.all([api('/staff/clients/' + id), team()]);
+  d.team = tm;
   const c = d.client;
   const age = ageFrom(c.birth_year);
   const act = d.packages.filter(p => p.state === 'active');
@@ -342,7 +351,8 @@ async function viewClient(id, tab) {
         <span>${icon('phone', 15)}<a href="tel:${esc(c.phone)}">${esc(prettyPhone(c.phone))}</a></span>
         ${age ? `<span>${icon('user', 15)}${age} yrs${c.gender ? ', ' + esc(c.gender) : ''}</span>` : ''}
         ${c.height_cm ? `<span>${icon('ruler', 15)}${c.height_cm} cm</span>` : ''}
-        <span>${icon('package', 15)}${left} session${left === 1 ? '' : 's'} available</span></div></div>
+        <span>${icon('package', 15)}${left} session${left === 1 ? '' : 's'} available</span>
+        <button type="button" class="btn sm ghost" data-coach style="height:28px">${icon('users', 15)}${c.coach_name ? 'Coach: ' + esc(c.coach_name) : '<span style="color:var(--warn)">Allocate a coach</span>'}</button></div></div>
       <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${pill(c.status)}${c.cleared ? pill('cleared', 'Cleared for EMS') : pill('not-cleared', 'Suitability check needed')}</div>
     </div>
     <div class="head" style="margin-bottom:14px"><div></div><div class="acts">
@@ -355,6 +365,12 @@ async function viewClient(id, tab) {
   const after = () => viewClient(id, tab);
   MAIN.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => history.replaceState(null, '', `#/clients/${id}?tab=${b.dataset.tab}`) || viewClient(id, b.dataset.tab)));
   MAIN.querySelector('[data-book]').addEventListener('click', () => bookModal({ client: c, after }));
+  MAIN.querySelector('[data-coach]').addEventListener('click', () => modal({
+    title: 'Allocate coach · ' + c.name,
+    body: `<form data-f>${field('Coach', sel('coach_id', coachOptions(tm), c.coach_id))}</form><p class="small muted">The coach sees this client under "My clients", and their name shows on the client's bookings and in the client's app.</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
+    onMount(el, close) { const b = el.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api('/staff/clients/' + c.id, { method: 'PUT', body: { coach_id: el.querySelector('[name=coach_id]').value } })).then(() => { close(); toast('Coach allocated'); team(true); after(); }).catch(() => {})); },
+  }));
   MAIN.querySelector('[data-measure]').addEventListener('click', () => measureModal(c, after));
   MAIN.querySelector('[data-pay]').addEventListener('click', () => payModal(c, d.packages, after));
   const body = MAIN.querySelector('[data-body]');
@@ -549,7 +565,7 @@ function tabPlan(el, d, after) {
 function tabProfile(el, d, after) {
   const c = d.client;
   el.innerHTML = `<div class="cols"><section class="panel"><form class="stack" style="gap:14px" data-f>
-      <h3>Details</h3>${clientForm(c, false)}
+      <h3>Details</h3>${clientForm(c, false, d.team || [])}
       ${field('Programme status', sel('status', [['active', 'Active'], ['paused', 'Paused'], ['completed', 'Completed']], c.status))}
       ${field('Team notes', `<textarea class="in" name="staff_notes" maxlength="2000" placeholder="Visible to the team only">${esc(c.staff_notes || '')}</textarea>`)}
       <div><button class="btn" data-save>Save details</button></div></form></section>
@@ -681,15 +697,16 @@ async function viewPayments(q) {
 
 async function viewSettings() {
   const admin = ME.role === 'admin';
-  const [{ packages }, users] = await Promise.all([api('/staff/packages'), admin ? api('/staff/users').then(r => r.users) : Promise.resolve([])]);
+  const [{ packages }, users, tm] = await Promise.all([api('/staff/packages'), admin ? api('/staff/users').then(r => r.users) : Promise.resolve([]), team(true)]);
+  const clientsOf = id => (tm.find(t => t.id === id) || {}).clients || 0;
   MAIN.innerHTML = `<div class="head"><div><h1>Settings</h1><p>Packages, team access and your account.</p></div></div>
     <div class="stack">
       <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('package', 20)}<h3>Package catalogue</h3></div>${admin ? `<button class="btn sm gold" data-new-pkg>${icon('plus', 16)}New package</button>` : ''}</div>
         <table class="t"><thead><tr><th>Package</th><th class="n">Sessions</th><th class="n">Price</th><th class="n">Valid for</th><th>Status</th></tr></thead><tbody>
         ${packages.map(p => `<tr class="${admin ? 'click' : ''}" data-pkg="${p.id}"><td><b>${esc(p.name)}</b><div class="small muted">${esc(p.description || '')}</div></td><td class="n">${p.sessions}</td><td class="n">${p.price != null ? inr(p.price) : '<span style="color:var(--warn)">Set price</span>'}</td><td class="n">${p.validity_days} days</td><td>${p.active ? pill('active') : pill('closed', 'Hidden')}</td></tr>`).join('')}</tbody></table></section>
       ${admin ? `<section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('users', 20)}<h3>Team accounts</h3></div><button class="btn sm gold" data-new-user>${icon('user-plus', 16)}Add team member</button></div>
-        <div class="rows"><div class="row"><span class="avatar">CA</span><div class="grow"><b>Clinic admin</b><span>Username "hasta" — password is the website admin password</span></div>${pill('active', 'Admin')}</div>
-        ${users.map(u => `<div class="row click" data-user="${u.id}"><span class="avatar">${esc(initials(u.name))}</span><div class="grow"><b>${esc(u.name)}</b><span>${esc(u.username)}</span></div>${pill(u.active ? 'active' : 'closed', u.active ? (u.role === 'admin' ? 'Admin' : 'Team') : 'Disabled')}</div>`).join('')}</div></section>` : ''}
+        <div class="rows">${users.some(u => u.username === 'hasta') ? '' : `<div class="row"><span class="avatar">CA</span><div class="grow"><b>Clinic admin</b><span>Username "hasta" — password is the website admin password</span></div>${pill('active', 'Admin')}</div>`}
+        ${users.map(u => `<div class="row click" data-user="${u.id}"><span class="avatar">${esc(initials(u.name))}</span><div class="grow"><b>${esc(u.name)}</b><span>${esc(u.username)}</span></div><a class="btn sm quiet" href="#/clients?coach=${u.id}" onclick="event.stopPropagation()">${clientsOf(u.id)} active client${clientsOf(u.id) === 1 ? '' : 's'}</a>${pill(u.active ? 'active' : 'closed', u.active ? (u.role === 'admin' ? 'Admin' : 'Team') : 'Disabled')}</div>`).join('')}</div></section>` : ''}
       <section class="panel"><div class="panel-h"><div class="t">${icon('key-round', 20)}<h3>Your account</h3></div></div>
         ${ME.id === 0 ? '<p class="muted">You are signed in with the clinic admin account. Its password is the ADMIN_PASSWORD secret in Cloudflare. Add personal team accounts above so each person signs in as themselves.</p>'
           : `<form class="grid3" data-pw style="align-items:end">${field('Current password', inp('current', '', 'type="password" autocomplete="current-password"'))}${field('New password', inp('next', '', 'type="password" autocomplete="new-password" minlength="8"'))}<div><button class="btn">Change password</button></div></form>`}</section>
@@ -733,7 +750,7 @@ function userModal(u) {
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
     onMount(el, close) {
       const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => { const b = formData(el.querySelector('[data-f]')); if (!u.id) b.active = true; return api('/staff/users' + (u.id ? '/' + u.id : ''), { method: u.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Team member saved'); reload(); }).catch(() => {}));
+      save.addEventListener('click', () => busy(save, () => { const b = formData(el.querySelector('[data-f]')); if (!u.id) b.active = true; return api('/staff/users' + (u.id ? '/' + u.id : ''), { method: u.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Team member saved'); team(true); reload(); }).catch(() => {}));
     },
   });
 }

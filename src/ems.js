@@ -166,9 +166,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=1">
+<link rel="stylesheet" href="/ems/app.css?v=2">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=1"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=2"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -251,6 +251,11 @@ async function route(request, env, url, ctx, base, p) {
   }
   if (p === '/staff/packages' && m === 'POST') return admin ? savePackageDef(env, null, body) : api({ ok: false, error: 'Admins only.' }, 403);
   if ((r = p.match(/^\/staff\/packages\/(\d+)$/)) && m === 'PUT') return admin ? savePackageDef(env, +r[1], body) : api({ ok: false, error: 'Admins only.' }, 403);
+  if (p === '/staff/team' && m === 'GET') {
+    const { results } = await env.DB.prepare(`SELECT s.id, s.name, s.role, (SELECT COUNT(*) FROM ems_clients c WHERE c.coach_id=s.id AND c.status='active') clients
+      FROM ems_staff s WHERE s.active=1 ORDER BY s.name`).all();
+    return api({ ok: true, team: results, me: me.id });
+  }
   if (p === '/staff/users' && m === 'GET') {
     if (!admin) return api({ ok: false, error: 'Admins only.' }, 403);
     const { results } = await env.DB.prepare('SELECT id, name, username, role, active, created_at FROM ems_staff ORDER BY active DESC, name').all();
@@ -471,8 +476,9 @@ async function updateAppointment(env, id, b) {
 async function listAppointments(env, url) {
   const from = isDate(url.searchParams.get('from')) ? url.searchParams.get('from') : today();
   const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : from;
-  const { results } = await env.DB.prepare(`SELECT a.*, c.name client_name, c.phone client_phone, cp.name package_name
+  const { results } = await env.DB.prepare(`SELECT a.*, c.name client_name, c.phone client_phone, cp.name package_name, c.coach_id, s.name coach_name
     FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id LEFT JOIN ems_client_packages cp ON cp.id=a.client_package_id
+    LEFT JOIN ems_staff s ON s.id=c.coach_id
     WHERE substr(a.start_at,1,10) BETWEEN ? AND ? ORDER BY a.start_at, a.id`).bind(from, to).all();
   return api({ ok: true, appointments: results, capacity: capacity(env) });
 }
@@ -486,7 +492,11 @@ async function listClients(env, url) {
   let where = "c.status != 'deleted'";
   if (['active', 'paused', 'completed'].includes(status)) { where += ' AND c.status=?'; binds.push(status); }
   if (q) { where += ' AND (c.name LIKE ? OR c.phone LIKE ?)'; binds.push(`%${q}%`, `%${q.replace(/\D/g, '') || q}%`); }
-  const { results } = await env.DB.prepare(`SELECT c.id, c.name, c.phone, c.status, c.goal, c.cleared, c.target_weight, c.created_at,
+  const coach = url.searchParams.get('coach') || '';
+  if (coach === 'none') where += ' AND c.coach_id IS NULL';
+  else if (/^\d+$/.test(coach)) { where += ' AND c.coach_id=?'; binds.push(+coach); }
+  const { results } = await env.DB.prepare(`SELECT c.id, c.name, c.phone, c.status, c.goal, c.cleared, c.target_weight, c.created_at, c.coach_id,
+    (SELECT name FROM ems_staff s WHERE s.id=c.coach_id) coach_name,
     (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='attended') attended,
     (SELECT MAX(start_at) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='attended') last_visit,
     (SELECT MIN(start_at) FROM ems_appointments a WHERE a.client_id=c.id AND a.status='booked' AND a.start_at >= ?) next_visit,
@@ -508,6 +518,7 @@ function readClientFields(b, partial) {
   if (b.height_cm !== undefined) { f.height_cm = num(b.height_cm, 120, 230); if (f.height_cm === undefined) bad.push('height'); }
   if (b.target_weight !== undefined) { f.target_weight = num(b.target_weight, 30, 250); if (f.target_weight === undefined) bad.push('target weight'); }
   if (b.goal !== undefined) f.goal = clean(b.goal, 200) || null;
+  if (b.coach_id !== undefined) { const v = parseInt(b.coach_id, 10); f.coach_id = v > 0 ? v : null; }
   if (b.staff_notes !== undefined) f.staff_notes = String(b.staff_notes || '').slice(0, 2000) || null;
   if (b.status !== undefined && ['active', 'paused', 'completed'].includes(b.status)) f.status = b.status;
   if (b.cleared !== undefined) f.cleared = b.cleared ? 1 : 0;
@@ -671,6 +682,8 @@ async function clientView(env, id, staff) {
   ]);
   const client = { ...c, screening: safeJson(c.screening) };
   delete client.pin_hash;
+  const coach = c.coach_id ? await env.DB.prepare('SELECT name FROM ems_staff WHERE id=?').bind(c.coach_id).first() : null;
+  client.coach_name = coach ? coach.name : null;
   const p = plan || { diet: 'kerala-balanced', water_target: 10, steps_target: 7000, sleep_target: 7, focus: null };
   const data = { client, packages: pkgs, appointments: appts.results || [], measurements: meas.results || [], payments: pays.results || [], plan: p, checkins: checks.results || [] };
   data.insights = insights(data, staff);
@@ -824,7 +837,7 @@ async function dashboard(env) {
   const t = today(), mon = mondayOf(t), monthStart = t.slice(0, 8) + '01';
   const q = (sql, ...b) => env.DB.prepare(sql).bind(...b);
   const [todayAppts, counts, weekly, revenue, leads, outstanding] = await Promise.all([
-    q(`SELECT a.*, c.name client_name, c.phone client_phone FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id
+    q(`SELECT a.*, c.name client_name, c.phone client_phone, c.coach_id, s.name coach_name FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id LEFT JOIN ems_staff s ON s.id=c.coach_id
        WHERE substr(a.start_at,1,10)=? AND a.status != 'cancelled' ORDER BY a.start_at`, t).all(),
     q(`SELECT
        (SELECT COUNT(*) FROM ems_clients WHERE status='active') active_clients,
@@ -958,7 +971,9 @@ async function savePackageDef(env, id, b) {
 
 async function saveUser(env, id, b) {
   const name = clean(b.name, 80), username = clean(b.username, 40).toLowerCase(), role = b.role === 'admin' ? 'admin' : 'staff';
-  if (name.length < 2 || !/^[a-z0-9._-]{3,40}$/.test(username) || username === 'hasta') return bad('Enter a name and a username (letters and numbers, not "hasta").');
+  const cur = id ? await env.DB.prepare('SELECT username FROM ems_staff WHERE id=?').bind(id).first() : null;
+  if (name.length < 2 || !/^[a-z0-9._-]{3,40}$/.test(username) || (username === 'hasta' && !(cur && cur.username === 'hasta'))) return bad('Enter a name and a username (letters and numbers, not "hasta").');
+  if (cur && cur.username === 'hasta' && (username !== 'hasta' || b.role !== 'admin' || b.active === false)) return bad('The main clinic admin account keeps the username "hasta" and stays an active admin.');
   const pw = String(b.password || '');
   if (!id && pw.length < 8) return bad('Set a password of at least 8 characters.');
   if (pw && pw.length < 8) return bad('Passwords need at least 8 characters.');

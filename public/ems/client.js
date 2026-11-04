@@ -44,7 +44,7 @@ function home() {
   const checkedToday = DATA.checkins.some(c => c.day === today());
   BODY.innerHTML = `
     <section class="hero">
-      <p class="hi">${hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening'}</p><h1>${esc(first(ME.name))}</h1>
+      <p class="hi">${hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening'}</p><h1>${esc(first(ME.name))}</h1>${DATA.client.coach_name ? `<p class="hi" style="margin-top:2px">Your coach: ${esc(DATA.client.coach_name)}</p>` : ''}
       <div class="hero-grid">${p ? ring(p.used, p.sessions_total, p.booked) : ring(0, 0)}
         <div class="hero-stats">
           <div>${icon('zap', 20)}<p><b>${attendedCount()}</b><span>sessions completed</span></p></div>
@@ -147,7 +147,7 @@ function plan() {
 /* ---------- Account ---------- */
 function account() {
   const C = DATA.client;
-  BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>${esc(C.name)}</h1><p>${esc(prettyPhone(C.phone))}</p></div></div>
+  BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>${esc(C.name)}</h1><p>${esc(prettyPhone(C.phone))}${C.coach_name ? ` · Coach: ${esc(C.coach_name)}` : ''}</p></div></div>
     <section class="panel flush"><div class="panel-h" style="padding:16px 16px 4px"><div class="t">${icon('package', 20)}<h3>My packages</h3></div></div>
       ${DATA.packages.length ? DATA.packages.slice().reverse().map(p => `<div class="pkg" style="grid-template-columns:1fr"><div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(p.name)}</b>${pill(p.state)}</div>
         <div class="bar" style="margin:8px 0 6px"><i style="width:${p.used / p.sessions_total * 100}%"></i><i class="b" style="width:${p.booked / p.sessions_total * 100}%"></i></div>
