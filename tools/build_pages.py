@@ -14,8 +14,8 @@ PUB = os.path.join(ROOT, 'public')
 BY_SLUG = {p['slug']: p for p in PAGES}
 e = lambda s: html.escape(s, quote=True)
 ADDRESS_LINES = ["1st floor, Anjali Arcade", "Near Nippon Toyota", "Technopark Phase 3 Service Road",
-                 "Kazhakkoottam, Thiruvananthapuram", "Kerala 695583, India"]
-MAP = "https://www.google.com/maps/search/?api=1&query=Hasta+Wellness+Anjali+Arcade+Nippon+Toyota+Technopark+Phase+3+Service+Road+Kazhakkoottam+695583"
+                 "Kazhakkoottam, Thiruvananthapuram", "Kerala 695582, India"]
+MAP = "https://www.google.com/maps/search/?api=1&query=Hasta+Wellness+Anjali+Arcade+Nippon+Toyota+Technopark+Phase+3+Service+Road+Kazhakkoottam+695582"
 IG_SVG = ('<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8">'
           '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4.2"/><circle cx="17.4" cy="6.6" r="1" fill="currentColor" stroke="none"/></svg>')
 
@@ -64,7 +64,7 @@ def page(p):
                "url": path, "specialty": p['specialty'], "inLanguage": "en-IN",
                "about": {"@type": "MedicalClinic", "name": "Hasta Wellness", "telephone": PHONE_DISPLAY,
                          "address": {"@type": "PostalAddress", "streetAddress": "1st floor, Anjali Arcade, Near Nippon Toyota, Technopark Phase 3 Service Road",
-                                     "addressLocality": "Kazhakkoottam, Thiruvananthapuram", "addressRegion": "Kerala", "postalCode": "695583", "addressCountry": "IN"}}}
+                                     "addressLocality": "Kazhakkoottam, Thiruvananthapuram", "addressRegion": "Kerala", "postalCode": "695582", "addressCountry": "IN"}}}
     out = [head(p['title'], p['description'], path, [page_ld, faq_ld, crumbs_ld])]
     # hero
     if p['image']:
@@ -132,7 +132,7 @@ def privacy():
     p = '/privacy/'
     body = f'''<div class="wrap" style="max-width:820px;padding:30px 0 80px"><p class="crumbs"><a href="/">Home</a> / Privacy notice</p>
 <div class="eyebrow" style="margin-top:20px">PRIVACY NOTICE</div><h1 style="font-size:44px;margin:16px 0 30px">How we use your details</h1>
-<p><strong>Who we are.</strong> Hasta Wellness is a venture of HASWEL CARE Private Limited, 1st floor, Anjali Arcade, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram, Kerala 695583.</p>
+<p><strong>Who we are.</strong> Hasta Wellness is a venture of HASWEL CARE Private Limited, 1st floor, Anjali Arcade, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram, Kerala 695582.</p>
 <p><strong>What we collect.</strong> When you use the care guide or an enquiry form and tick the consent box, we store your name, mobile number, the area of care you chose, your preferred timing or date, and which form you used. We do not ask for medical history, photographs, identity documents or payment details on this website — please don’t share them.</p>
 <p><strong>Why.</strong> Only to contact you about your request: to confirm availability, answer questions and arrange a consultation if you wish. We do not sell your details or use them for unrelated marketing.</p>
 <p><strong>Where and how long.</strong> Details are stored securely with our website host, Cloudflare, and are deleted automatically after 90 days unless you become a client of the clinic. Messages you send on WhatsApp are also handled under WhatsApp’s own terms.</p>

@@ -46,7 +46,7 @@ PAGES = [
       "Before you apply, compare the financed amount, down payment, repayment period, interest or APR, processing fees and total repayment with paying directly. Finance is optional and subject to clinic availability, provider eligibility and final terms — no approval, zero-interest offer or fixed EMI is promised. Please don’t share Aadhaar, PAN or bank details on this website.",
     ],
     faqs=[
-      ("Where is your dental clinic?", "We’re on the first floor of Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram 695583. We’re open Monday to Saturday 10 am – 8 pm and Sunday 10 am – 2 pm."),
+      ("Where is your dental clinic?", "We’re on the first floor of Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram 695582. We’re open Monday to Saturday 10 am – 8 pm and Sunday 10 am – 2 pm."),
       ("Do I have to start treatment at my first visit?", "No. Your first visit is a conversation and assessment. You’ll understand your options and costs, and you can take time to decide."),
       ("How much will my dental treatment cost?", "Costs depend on your assessment and proposed care. Ask for an itemised written estimate, including reviews and any retainers, before agreeing to treatment."),
       ("What should I know before smile correction?", "Discuss the benefits, risks, maintenance and alternatives — including choosing no cosmetic treatment. Some cosmetic procedures remove tooth structure; your clinician should explain any irreversible changes before you consent."),
