@@ -2,7 +2,8 @@
 //
 // A slot at a unit is offered only when, for its whole length:
 //   • the unit is open (its own weekly hours),
-//   • for EMS sessions: an active device is free AND a rostered trainer has room
+//   • for EMS sessions: an active device of a machine type the package allows is free
+//     AND a rostered trainer certified for that machine type is free
 //     (each trainer supervises one client at a time),
 //   • for in-person consultations/reviews: a rostered coach or doctor is free,
 //   • for video consultations: any coach or doctor rostered for video (any unit) is free.
@@ -53,21 +54,39 @@ export function selectedUnits(url, scope) {
 async function dayData(env, unitId, d, withVideo) {
   const wd = dowOf(d);
   const q = (sql, ...b) => env.DB.prepare(sql).bind(...b).all().then(r => r.results || []);
-  const [unit, devices, rota, leave, appts] = await Promise.all([
+  const [unit, devices, rota, leave, appts, certs] = await Promise.all([
     getUnit(env, unitId),
-    q("SELECT id, name FROM ems_devices WHERE unit_id=? AND status='active' ORDER BY id", unitId),
+    q("SELECT id, name, machine_type_id FROM ems_devices WHERE unit_id=? AND status='active' ORDER BY id", unitId),
     q(`SELECT r.*, s.name, s.skills FROM ems_rota r JOIN ems_staff s ON s.id=r.staff_id AND s.active=1 WHERE r.weekday=? ${withVideo ? '' : 'AND r.unit_id=?'}`, ...(withVideo ? [wd] : [wd, unitId])),
     q('SELECT staff_id FROM ems_leave WHERE day=?', d),
     q("SELECT id, unit_id, kind, mode, start_at, duration, device_id, trainer_id, client_id FROM ems_appointments WHERE substr(start_at,1,10)=? AND status IN ('booked','attended')", d),
+    q("SELECT staff_id, machine_type_id FROM ems_certifications WHERE status='active' AND issued_on <= ? AND valid_until >= ?", d, d),
   ]);
+  const certified = {};
+  for (const c of certs) (certified[c.staff_id] ||= new Set()).add(c.machine_type_id);
   const off = new Set(leave.map(l => l.staff_id));
-  return { unit, devices, rota: rota.filter(r => !off.has(r.staff_id)).map(r => ({ ...r, skills: parse(r.skills, []) })), appts };
+  return { unit, devices, certified, rota: rota.filter(r => !off.has(r.staff_id)).map(r => ({ ...r, skills: parse(r.skills, []) })), appts };
 }
 
 const overlaps = (a, t, dur) => { const s = toMin(a.start_at.slice(11, 16)); return s < t + dur && s + (a.duration || 30) > t; };
 
 // Evaluate one start time. Returns { left, device, staff } for the best allocation.
-function evaluate(dd, d, t, kind, mode, { exceptId = 0, prefer = null } = {}) {
+// Largest set of (device, trainer) pairs where the trainer is certified for the device's machine type.
+function bestPairs(devices, trainers, certified, prefer) {
+  const ok = (dv, tr) => dv.machine_type_id && certified[tr] && certified[tr].has(dv.machine_type_id);
+  let best = [];
+  const order = trainers.slice().sort((a, b) => (b === prefer) - (a === prefer));
+  const walk = (i, used, pairs) => {
+    if (pairs.length > best.length) best = pairs.slice();
+    if (i >= devices.length || best.length === Math.min(devices.length, order.length)) return;
+    for (const tr of order) if (!used.has(tr) && ok(devices[i], tr)) { used.add(tr); pairs.push([devices[i].id, tr]); walk(i + 1, used, pairs); pairs.pop(); used.delete(tr); }
+    walk(i + 1, used, pairs);
+  };
+  walk(0, new Set(), []);
+  return best;
+}
+
+function evaluate(dd, d, t, kind, mode, { exceptId = 0, prefer = null, types = [] } = {}) {
   const u = dd.unit, dur = u.slot_minutes;
   const live = dd.appts.filter(a => a.id !== exceptId && overlaps(a, t, dur));
   const busyOf = id => live.filter(a => a.trainer_id === id);
@@ -75,26 +94,15 @@ function evaluate(dd, d, t, kind, mode, { exceptId = 0, prefer = null } = {}) {
   if (kind === 'session') {
     const here = live.filter(a => a.unit_id === u.id && a.kind === 'session');
     const usedDevices = new Set(here.map(a => a.device_id).filter(Boolean));
-    const anonymous = here.filter(a => !a.device_id).length;           // older bookings without a device
-    const freeDevices = dd.devices.filter(x => !usedDevices.has(x.id));
-    const deviceLeft = Math.max(0, freeDevices.length - anonymous);
-    const cpt = 1;                                                     // clinic rule: one trainer supervises one client at a time
-    const trainers = dd.rota.filter(r => onShift(r, true) && r.skills.includes('trainer'));
-    const seen = new Set();
-    const room = [];
-    for (const r of trainers) {
-      if (seen.has(r.staff_id)) continue; seen.add(r.staff_id);
-      const b = busyOf(r.staff_id);
-      if (b.some(a => a.kind !== 'session')) continue;                 // in a consultation
-      const left = cpt - b.length;
-      if (left > 0) room.push({ id: r.staff_id, left, load: b.length });
-    }
-    const unassigned = here.filter(a => !a.trainer_id).length;
-    const trainerLeft = Math.max(0, room.reduce((s, r) => s + r.left, 0) - unassigned);
-    const left = Math.min(deviceLeft, trainerLeft);
+    const anonymous = here.filter(a => !a.device_id || !a.trainer_id).length;    // older bookings without an assignment
+    const freeDevices = dd.devices.filter(x => !usedDevices.has(x.id) && (!types.length || types.includes(x.machine_type_id)));
+    const trainers = [...new Set(dd.rota.filter(r => onShift(r, true) && r.skills.includes('trainer')).map(r => r.staff_id))]
+      .filter(id => !busyOf(id).length);                                       // one client at a time
+    const pairs = bestPairs(freeDevices, trainers, dd.certified, prefer);
+    const left = Math.max(0, pairs.length - anonymous);
     if (!left) return { left: 0 };
-    room.sort((a, b) => (b.id === prefer) - (a.id === prefer) || a.load - b.load);
-    return { left, device: freeDevices[0] ? freeDevices[0].id : null, staff: room[0].id };
+    const pick = pairs.find(p => p[1] === prefer) || pairs[0];
+    return { left, device: pick[0], staff: pick[1] };
   }
   const video = mode === 'video';
   const clin = dd.rota.filter(r => onShift(r, !video) && (!video || r.video) && (r.skills.includes('coach') || r.skills.includes('doctor')));
@@ -113,27 +121,27 @@ function times(u, d, mode) {
   return out;
 }
 
-export async function unitSlots(env, unitId, d, kind = 'session', mode = 'in_person', { minAheadH = 0, nowLocal, prefer = null } = {}) {
+export async function unitSlots(env, unitId, d, kind = 'session', mode = 'in_person', { minAheadH = 0, nowLocal, prefer = null, types = [] } = {}) {
   const dd = await dayData(env, unitId, d, mode === 'video');
   if (!dd.unit || !dd.unit.active) return [];
   const now = nowLocal ? toMin(nowLocal.slice(11)) : 0;
   const isToday = nowLocal && nowLocal.slice(0, 10) === d;
   return times(dd.unit, d, mode)
     .filter(t => !isToday || t - now >= minAheadH * 60)
-    .map(t => ({ time: fromMin(t), left: evaluate(dd, d, t, kind, mode, { prefer }).left }));
+    .map(t => ({ time: fromMin(t), left: evaluate(dd, d, t, kind, mode, { prefer, types }).left }));
 }
 
 // Allocate a device and staff member for a booking; { ok, device_id, trainer_id, error }.
-export async function allocate(env, unitId, start, kind, mode, { exceptId = 0, prefer = null, force = false } = {}) {
+export async function allocate(env, unitId, start, kind, mode, { exceptId = 0, prefer = null, force = false, types = [] } = {}) {
   const d = start.slice(0, 10), t = toMin(start.slice(11, 16));
   const dd = await dayData(env, unitId, d, mode === 'video');
   if (!dd.unit || !dd.unit.active) return { ok: false, error: 'That unit is not taking bookings.' };
   const inHours = times(dd.unit, d, mode).includes(t);
-  const r = evaluate(dd, d, t, kind, mode, { exceptId, prefer });
+  const r = evaluate(dd, d, t, kind, mode, { exceptId, prefer, types });
   if (r.left && inHours) return { ok: true, device_id: r.device || null, trainer_id: r.staff || null, duration: dd.unit.slot_minutes };
   if (force) return { ok: true, device_id: null, trainer_id: null, duration: dd.unit.slot_minutes, warning: inHours ? 'Overbooked: no free device or trainer was left.' : 'Outside this unit\'s opening hours.' };
   if (!inHours) return { ok: false, error: 'That time is outside the unit\'s opening hours.' };
-  return { ok: false, error: kind === 'session' ? 'No free device or trainer at that time. Choose another slot.' : mode === 'video' ? 'No coach or doctor is free for a video call then.' : 'No coach or doctor is free at that time.' };
+  return { ok: false, error: kind === 'session' ? 'No free device with a certified trainer at that time. Choose another slot.' : mode === 'video' ? 'No coach or doctor is free for a video call then.' : 'No coach or doctor is free at that time.' };
 }
 
 // Unit for a new lead: matching pin code, else district, else none (head office assigns).
@@ -177,10 +185,12 @@ export async function saveUnit(env, id, b) {
     const { results: cur } = await env.DB.prepare("SELECT id FROM ems_devices WHERE unit_id=? AND status != 'retired'").bind(unitId).all();
     const total = (cur || []).filter(x => !listed.has(x.id)).length + list.filter(x => x.status !== 'retired').length;
     if (total > MAX_DEVICES) return [400, `A unit can have at most ${MAX_DEVICES} EMS devices. Retire one first.`];
+    for (const x of list) if (x.status !== 'retired' && !parseInt(x.machine_type_id, 10)) return [400, `Choose the machine type for ${clean(x.name, 40)}.`];
     for (const x of list) {
       const st = ['active', 'maintenance', 'retired'].includes(x.status) ? x.status : 'active';
-      if (x.id) await env.DB.prepare('UPDATE ems_devices SET name=?, status=?, notes=? WHERE id=? AND unit_id=?').bind(clean(x.name, 40), st, nz(clean(x.notes, 200)), parseInt(x.id, 10), unitId).run();
-      else await env.DB.prepare('INSERT INTO ems_devices (unit_id, name, status, notes) VALUES (?,?,?,?)').bind(unitId, clean(x.name, 40), st, nz(clean(x.notes, 200))).run();
+      const mt = parseInt(x.machine_type_id, 10) || null, sn = nz(clean(x.serial_no, 60));
+      if (x.id) await env.DB.prepare('UPDATE ems_devices SET name=?, status=?, notes=?, machine_type_id=?, serial_no=? WHERE id=? AND unit_id=?').bind(clean(x.name, 40), st, nz(clean(x.notes, 200)), mt, sn, parseInt(x.id, 10), unitId).run();
+      else await env.DB.prepare('INSERT INTO ems_devices (unit_id, name, status, notes, machine_type_id, serial_no) VALUES (?,?,?,?,?,?)').bind(unitId, clean(x.name, 40), st, nz(clean(x.notes, 200)), mt, sn).run();
     }
   }
   return [200, null, { id: unitId }];
@@ -191,12 +201,13 @@ export async function unitDetail(env, id) {
   if (!u) return null;
   const q = (sql, ...b) => env.DB.prepare(sql).bind(...b).all().then(r => r.results || []);
   const [devices, staff, rota, leave] = await Promise.all([
-    q('SELECT * FROM ems_devices WHERE unit_id=? ORDER BY status, id', id),
+    q('SELECT d.*, m.name machine_name FROM ems_devices d LEFT JOIN ems_machine_types m ON m.id=d.machine_type_id WHERE d.unit_id=? ORDER BY d.status, d.id', id),
     q('SELECT s.id, s.name, s.role, s.skills FROM ems_staff s JOIN ems_staff_units x ON x.staff_id=s.id WHERE x.unit_id=? AND s.active=1 ORDER BY s.name', id),
     q('SELECT r.*, s.name FROM ems_rota r JOIN ems_staff s ON s.id=r.staff_id WHERE r.unit_id=? ORDER BY r.weekday, r.start_time', id),
     q("SELECT l.*, s.name FROM ems_leave l JOIN ems_staff s ON s.id=l.staff_id JOIN ems_staff_units x ON x.staff_id=s.id AND x.unit_id=? WHERE l.day >= date('now','-1 day') ORDER BY l.day", id),
   ]);
-  return { unit: u, devices, staff: staff.map(s => ({ ...s, skills: parse(s.skills, []) })), rota, leave };
+  const { results: certs } = await env.DB.prepare("SELECT c.staff_id, c.machine_type_id, c.valid_until, m.name machine_name FROM ems_certifications c JOIN ems_machine_types m ON m.id=c.machine_type_id WHERE c.status='active' AND c.valid_until >= date('now')").all();
+  return { unit: u, devices, staff: staff.map(s => ({ ...s, skills: parse(s.skills, []), certs: (certs || []).filter(c => c.staff_id === s.id) })), rota, leave };
 }
 
 export async function saveShift(env, b) {
@@ -255,4 +266,64 @@ export async function unitStats(env, ids, mon, monthStart) {
     out.push({ id: u.id, name: u.name, code: u.code, ownership: u.ownership, devices: u.devices, capacity, ...r, utilisation: capacity ? Math.round(r.week_booked / capacity * 100) : 0 });
   }
   return out;
+}
+
+/* ---------------- machines & trainer certification ---------------- */
+
+export const MACHINE_CATEGORIES = ['Whole-body EMS suit', 'Wireless EMS suit', 'EMS vest / partial body', 'Pelvic-floor EMS chair', 'Body-sculpting (HIFEM)', 'Other'];
+
+export async function listMachines(env) {
+  const { results } = await env.DB.prepare(`SELECT m.*, (SELECT COUNT(*) FROM ems_devices d WHERE d.machine_type_id=m.id AND d.status != 'retired') devices,
+    (SELECT COUNT(DISTINCT staff_id) FROM ems_certifications c WHERE c.machine_type_id=m.id AND c.status='active' AND c.valid_until >= date('now')) trainers
+    FROM ems_machine_types m ORDER BY m.active DESC, m.name`).all();
+  return (results || []).map(m => ({ ...m, features: parse(m.features, []) }));
+}
+
+export async function saveMachine(env, id, b) {
+  const name = clean(b.name, 80), category = MACHINE_CATEGORIES.includes(b.category) ? b.category : null;
+  if (name.length < 2 || !category) return [400, 'Enter the machine name and choose its type.'];
+  const feats = (Array.isArray(b.features) ? b.features : String(b.features || '').split('\n')).map(x => clean(x, 80)).filter(Boolean).slice(0, 15);
+  const vals = [name, nz(clean(b.brand, 60)), category, JSON.stringify(feats), nz(clean(b.notes, 400)), b.active === false ? 0 : 1];
+  if (id) await env.DB.prepare('UPDATE ems_machine_types SET name=?, brand=?, category=?, features=?, notes=?, active=? WHERE id=?').bind(...vals, id).run();
+  else id = (await env.DB.prepare('INSERT INTO ems_machine_types (name, brand, category, features, notes, active) VALUES (?,?,?,?,?,?)').bind(...vals).run()).meta.last_row_id;
+  return [200, null, { id }];
+}
+
+export async function listCertifications(env) {
+  const { results } = await env.DB.prepare(`SELECT c.*, s.name trainer_name, m.name machine_name FROM ems_certifications c
+    JOIN ems_staff s ON s.id=c.staff_id JOIN ems_machine_types m ON m.id=c.machine_type_id ORDER BY c.status, c.valid_until DESC`).all();
+  return results || [];
+}
+
+// Only a wellness coach or doctor can certify, and never themselves.
+export async function certify(env, me, b) {
+  const meRow = me.id ? await env.DB.prepare('SELECT skills, reg_no FROM ems_staff WHERE id=?').bind(me.id).first() : null;
+  const mySkills = parse(meRow && meRow.skills, []);
+  const role = mySkills.includes('doctor') ? 'Doctor' : mySkills.includes('coach') ? 'Wellness coach' : null;
+  if (!role) return [403, 'Only a Hasta wellness coach or doctor can certify trainers. Sign in with your own account.'];
+  const staffId = parseInt(b.staff_id, 10), mt = parseInt(b.machine_type_id, 10);
+  if (!staffId || !mt) return [400, 'Choose the trainer and the machine.'];
+  if (staffId === me.id) return [400, 'You cannot certify yourself. Ask another coach or doctor.'];
+  const tr = await env.DB.prepare('SELECT skills, active FROM ems_staff WHERE id=?').bind(staffId).first();
+  if (!tr || !tr.active || !parse(tr.skills, []).includes('trainer')) return [400, 'That person is not an active EMS trainer. Add the EMS trainer skill first.'];
+  const m = await env.DB.prepare('SELECT id FROM ems_machine_types WHERE id=? AND active=1').bind(mt).first();
+  if (!m) return [400, 'Choose an active machine.'];
+  const months = Math.min(24, Math.max(1, parseInt(b.months, 10) || 12));
+  if (b.confirm !== true) return [400, 'Confirm that you have assessed the trainer on this machine.'];
+  const notes = clean(b.notes, 500);
+  if (notes.length < 10) return [400, 'Write a short note on what you assessed (e.g. set-up, pad placement, intensity control, contraindication checks, emergency stop).'];
+  const issued = new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  const until = new Date(issued + 'T00:00:00Z'); until.setUTCMonth(until.getUTCMonth() + months);
+  await env.DB.prepare("UPDATE ems_certifications SET status='revoked', revoked_at=?, revoked_reason='Replaced by a new certificate' WHERE staff_id=? AND machine_type_id=? AND status='active'").bind(issued, staffId, mt).run();
+  await env.DB.prepare('INSERT INTO ems_certifications (staff_id, machine_type_id, certified_by, certifier_name, certifier_role, issued_on, valid_until, notes) VALUES (?,?,?,?,?,?,?,?)')
+    .bind(staffId, mt, me.id, me.name + (role === 'Doctor' && meRow.reg_no ? ` (Reg. ${meRow.reg_no})` : ''), role, issued, until.toISOString().slice(0, 10), notes).run();
+  return [200];
+}
+
+export async function revokeCert(env, me, id, b) {
+  const meRow = me.id ? await env.DB.prepare('SELECT skills FROM ems_staff WHERE id=?').bind(me.id).first() : null;
+  const sk = parse(meRow && meRow.skills, []);
+  if (!(me.role === 'admin' || sk.includes('coach') || sk.includes('doctor'))) return [403, 'Only a coach, doctor or admin can revoke a certificate.'];
+  await env.DB.prepare("UPDATE ems_certifications SET status='revoked', revoked_at=date('now'), revoked_reason=? WHERE id=?").bind(clean(b.reason, 200) || `Revoked by ${me.name}`, id).run();
+  return [200];
 }

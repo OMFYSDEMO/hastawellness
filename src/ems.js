@@ -12,7 +12,7 @@
 // consultation enquiries from the website appear here automatically.
 
 import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify } from './util.js';
-import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS } from './units.js';
+import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
 
 const STAFF_TTL_H = 12;
@@ -177,9 +177,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=4">
+<link rel="stylesheet" href="/ems/app.css?v=5">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=4"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=5"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -217,11 +217,14 @@ async function route(request, env, url, ctx, base, p) {
     const mode = kind !== 'session' && url.searchParams.get('mode') === 'video' ? 'video' : 'in_person';
     let unitId = parseInt(url.searchParams.get('unit'), 10);
     let prefer = null;
-    if (me.kind === 'client') {
-      const c = await env.DB.prepare('SELECT home_unit_id, coach_id FROM ems_clients WHERE id=?').bind(me.id).first();
-      unitId = unitId || c.home_unit_id || 1; prefer = c.coach_id;
+    let types = [];
+    const cid = me.kind === 'client' ? me.id : parseInt(url.searchParams.get('client'), 10);
+    if (cid) {
+      const c = await env.DB.prepare('SELECT home_unit_id, coach_id FROM ems_clients WHERE id=?').bind(cid).first();
+      if (c) { unitId = unitId || c.home_unit_id || 1; prefer = c.coach_id; }
+      if (kind === 'session') types = typesOf(await bookablePackage(env, cid));
     }
-    const list = await unitSlots(env, unitId || 1, d, kind, mode, { minAheadH: me.kind === 'staff' ? 0 : 2, nowLocal: nowLocal(), prefer });
+    const list = await unitSlots(env, unitId || 1, d, kind, mode, { minAheadH: me.kind === 'staff' ? 0 : 2, nowLocal: nowLocal(), prefer, types });
     return api({ ok: true, slots: list });
   }
   if (p === '/me/secret' && m === 'POST') return changeSecret(env, me, body);
@@ -263,6 +266,12 @@ async function route(request, env, url, ctx, base, p) {
     if (m === 'GET') { const d = await unitDetail(env, +r[1]); return d ? api({ ok: true, ...d }) : api({ ok: false, error: 'Not found' }, 404); }
     if (m === 'PUT') return admin ? done(await saveUnit(env, +r[1], body)) : api({ ok: false, error: 'Only head-office admins can change unit settings.' }, 403);
   }
+  if (p === '/staff/machines' && m === 'GET') return api({ ok: true, machines: await listMachines(env), categories: MACHINE_CATEGORIES });
+  if (p === '/staff/machines' && m === 'POST') return admin ? done(await saveMachine(env, null, body)) : api({ ok: false, error: 'Only admins can add machines.' }, 403);
+  if ((r = p.match(/^\/staff\/machines\/(\d+)$/)) && m === 'PUT') return admin ? done(await saveMachine(env, +r[1], body)) : api({ ok: false, error: 'Only admins can change machines.' }, 403);
+  if (p === '/staff/certifications' && m === 'GET') return api({ ok: true, certifications: await listCertifications(env) });
+  if (p === '/staff/certifications' && m === 'POST') return done(await certify(env, me, body));
+  if ((r = p.match(/^\/staff\/certifications\/(\d+)\/revoke$/)) && m === 'POST') return done(await revokeCert(env, me, +r[1], body));
   if (p === '/staff/rota' && m === 'POST') {
     if (!manager || !scope.units.includes(parseInt(body.unit_id, 10))) return api({ ok: false, error: 'Only a unit manager or admin can change the rota.' }, 403);
     return done(await saveShift(env, body));
@@ -428,6 +437,7 @@ const emsOrigin = (env, url) => env.EMS_ORIGIN || (url.hostname.startsWith('ems.
 /* ---------------- Slots & booking ---------------- */
 
 const APPT_MODES = ['in_person', 'video'];
+const typesOf = p => { try { const v = JSON.parse((p && p.machine_types) || '[]'); return Array.isArray(v) ? v.map(Number).filter(Boolean) : []; } catch { return []; } };
 async function unitFor(env, b, fallback) {
   const id = parseInt(b.unit_id, 10) || fallback || 1;
   const u = await getUnit(env, id);
@@ -476,8 +486,8 @@ async function clientBook(env, ctx, url, me, b) {
   if (!el.ok) return bad('Your admission needs to be completed (or renewed) before you can book. Open "Admission" in the app, or contact the clinic.');
   const clash = await recoveryClash(env, me.id, start);
   if (clash) return bad('EMS works best with about 48 hours of recovery between sessions. Please pick a time further from your other session.');
-  const al = await allocate(env, unit.id, start, 'session', 'in_person', { prefer: c.coach_id });
-  if (!al.ok) return bad(al.error === 'No free device or trainer at that time. Choose another slot.' ? 'That time has just been taken. Please choose another.' : al.error);
+  const al = await allocate(env, unit.id, start, 'session', 'in_person', { prefer: c.coach_id, types: typesOf(pkg) });
+  if (!al.ok) return bad(al.error.startsWith('No free device') ? 'That time has just been taken. Please choose another.' : al.error);
   await env.DB.prepare("INSERT INTO ems_appointments (client_id, kind, start_at, duration, client_package_id, created_by, unit_id, device_id, trainer_id) VALUES (?,'session',?,?,?,'client',?,?,?)")
     .bind(me.id, start, al.duration, pkg.id, unit.id, al.device_id, al.trainer_id).run();
   const alert = notify(env, `EMS session booked by ${me.name} at ${unit.name}`, [['Client', me.name], ['Mobile', me.phone], ['Unit', unit.name], ['When', start.replace('T', ' ') + ' IST'], ['Package', pkg.name]], '/#/schedule', emsOrigin(env, url));
@@ -504,20 +514,20 @@ async function staffBook(env, me, b, sc) {
     guestName = clean(b.guest_name, 80); guestPhone = normalisePhone(b.guest_phone);
     if (!guestName || !guestPhone) return bad('Choose a client, or enter a name and mobile for a new consultation.');
   }
-  let pkgId = null;
+  let pkgId = null, types = [];
   const warnings = [];
   if (clientId && kind === 'session') {
     const pkg = await bookablePackage(env, clientId);
     if (!pkg) return bad('This client has no sessions left. Add a package first.');
     const el = await eligible(env, clientId, needsProgrammes(pkg.programme));
     if (!el.ok) return bad(el.reason);
-    pkgId = pkg.id;
+    pkgId = pkg.id; types = typesOf(pkg);
     if (await recoveryClash(env, clientId, start)) warnings.push('Less than 48 hours from another session.');
   }
   const cl = clientId ? await env.DB.prepare('SELECT home_unit_id, coach_id FROM ems_clients WHERE id=?').bind(clientId).first() : null;
   const unit = await unitFor(env, b, (cl && cl.home_unit_id) || sc.one || sc.ids[0]);
   if (!unit || !sc.ids.concat(sc.one || []).length) return bad('Choose a unit.');
-  const al = await allocate(env, unit.id, start, kind, mode, { prefer: cl && cl.coach_id, force: !!b.force });
+  const al = await allocate(env, unit.id, start, kind, mode, { prefer: cl && cl.coach_id, force: !!b.force, types });
   if (!al.ok) return bad(al.error + ' Or tick "overbook".');
   if (al.warning) warnings.push(al.warning);
   await env.DB.prepare('INSERT INTO ems_appointments (client_id, lead_id, guest_name, guest_phone, kind, mode, start_at, duration, client_package_id, staff_id, notes, unit_id, device_id, trainer_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
@@ -535,7 +545,8 @@ async function updateAppointment(env, id, b) {
   const moving = start !== a.start_at || unitId !== a.unit_id || (status === 'booked' && a.status !== 'booked');
   if (moving && ['booked', 'attended'].includes(status)) {
     const cl = a.client_id ? await env.DB.prepare('SELECT coach_id FROM ems_clients WHERE id=?').bind(a.client_id).first() : null;
-    const al = await allocate(env, unitId, start, a.kind, a.mode || 'in_person', { exceptId: a.id, prefer: cl && cl.coach_id, force: !!b.force });
+    const pk = a.client_package_id ? await env.DB.prepare('SELECT machine_types FROM ems_client_packages WHERE id=?').bind(a.client_package_id).first() : null;
+    const al = await allocate(env, unitId, start, a.kind, a.mode || 'in_person', { exceptId: a.id, prefer: cl && cl.coach_id, force: !!b.force, types: typesOf(pk) });
     if (!al.ok) return bad(al.error);
     deviceId = al.device_id; trainerId = al.trainer_id;
   }
@@ -700,8 +711,9 @@ async function assignPackage(env, clientId, b) {
   const expiry = isDate(b.expiry_date) ? b.expiry_date : addDays(start, validity);
   const cl = await env.DB.prepare('SELECT home_unit_id FROM ems_clients WHERE id=?').bind(clientId).first();
   const unitId = parseInt(b.unit_id, 10) || (cl && cl.home_unit_id) || 1;
-  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme, unit_id) VALUES (?,?,?,?,?,?,?,?,?,?)')
-    .bind(clientId, def ? def.id : null, name, sessions, price, discount, start, expiry, programme, unitId).run();
+  const mts = def ? (def.machine_types || '[]') : JSON.stringify((Array.isArray(b.machine_types) ? b.machine_types : []).map(Number).filter(Boolean));
+  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme, unit_id, machine_types) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
+    .bind(clientId, def ? def.id : null, name, sessions, price, discount, start, expiry, programme, unitId, mts).run();
   return api({ ok: true, id: r.meta.last_row_id });
 }
 
@@ -1084,8 +1096,10 @@ async function savePackageDef(env, id, b) {
   if (!name || !sessions || price === undefined || !validity) return bad('Enter a name, sessions, price and validity.');
   const desc = nz(clean(b.description, 200)), active = b.active === false ? 0 : 1;
   const prog = ['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems';
-  if (id) await env.DB.prepare('UPDATE ems_packages SET name=?, sessions=?, price=?, validity_days=?, description=?, active=?, programme=? WHERE id=?').bind(name, sessions, price, validity, desc, active, prog, id).run();
-  else await env.DB.prepare('INSERT INTO ems_packages (name, sessions, price, validity_days, description, active, programme) VALUES (?,?,?,?,?,?,?)').bind(name, sessions, price, validity, desc, active, prog).run();
+  const mts = JSON.stringify((Array.isArray(b.machine_types) ? b.machine_types : []).map(Number).filter(Boolean));
+  if (prog !== 'weight' && mts === '[]' && b.require_machine) return bad('Link at least one machine to this package.');
+  if (id) await env.DB.prepare('UPDATE ems_packages SET name=?, sessions=?, price=?, validity_days=?, description=?, active=?, programme=?, machine_types=? WHERE id=?').bind(name, sessions, price, validity, desc, active, prog, mts, id).run();
+  else await env.DB.prepare('INSERT INTO ems_packages (name, sessions, price, validity_days, description, active, programme, machine_types) VALUES (?,?,?,?,?,?,?,?)').bind(name, sessions, price, validity, desc, active, prog, mts).run();
   return api({ ok: true });
 }
 

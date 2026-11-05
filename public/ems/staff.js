@@ -5,7 +5,9 @@ import {
   PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
 } from './core.js';
 
-let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {};
+let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
+const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';
+const machineList = json => { try { const v = typeof json === 'string' ? JSON.parse(json || '[]') : (json || []); return Array.isArray(v) ? v.map(Number) : []; } catch { return []; } };
 const multi = () => UNITS.length > 1;
 const U = (path) => UNIT ? path + (path.includes('?') ? '&' : '?') + 'unit=' + UNIT : path;
 const unitName = id => (ALL_UNITS.find(u => u.id === id) || {}).name || '';
@@ -33,8 +35,8 @@ export function mount(app, me) {
 }
 
 async function loadUnits() {
-  const r = await api('/staff/units');
-  UNITS = r.units; ALL_UNITS = r.all_units; SKILLS = r.skills;
+  const [r, mr] = await Promise.all([api('/staff/units'), api('/staff/machines')]);
+  UNITS = r.units; ALL_UNITS = r.all_units; SKILLS = r.skills; MACHINES = mr.machines; CATEGORIES = mr.categories;
   let saved = null;
   try { saved = parseInt(localStorage.getItem('ems_unit'), 10); } catch {}
   UNIT = UNITS.some(u => u.id === saved) ? saved : (UNITS.length === 1 ? UNITS[0].id : null);
@@ -142,7 +144,7 @@ function rescheduleModal(a, after) {
       const save = el.querySelector('[data-save]');
       const uSel = el.querySelector('[name=unit_id]');
       const unitNow = () => (uSel ? +uSel.value : a.unit_id) || 1;
-      const sp = slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, query: () => `&unit=${unitNow()}&kind=${a.kind}&mode=${a.mode || 'in_person'}`, onPick: (v, f) => { pick = v; full = f; save.disabled = !v; el.querySelector('[data-over]').hidden = !f; } });
+      const sp = slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, query: () => `&unit=${unitNow()}&kind=${a.kind}&mode=${a.mode || 'in_person'}${a.client_id ? '&client=' + a.client_id : ''}`, onPick: (v, f) => { pick = v; full = f; save.disabled = !v; el.querySelector('[data-over]').hidden = !f; } });
       uSel && uSel.addEventListener('change', () => sp.reload());
       save.addEventListener('click', () => busy(save, () => api('/staff/appointments/' + a.id, { method: 'PUT', body: { start_at: pick, unit_id: unitNow(), force: el.querySelector('[name=force]').checked } }))
         .then(() => { close(); toast('Booking moved to ' + fWhen(pick)); after(); }).catch(() => {}));
@@ -172,6 +174,7 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
       const who = el.querySelector('[data-who]');
       const drawWho = () => {
         if (!who) return;
+ if (chosen && sp) setTimeout(() => sp.reload(), 0);
         if (chosen) { who.innerHTML = `<div class="row" style="border:1px solid var(--line);border-radius:12px"><span class="avatar">${esc(initials(chosen.name))}</span><div class="grow"><b>${esc(chosen.name)}</b><span>${esc(prettyPhone(chosen.phone))}</span></div>${client ? '' : `<button type="button" class="btn sm quiet" data-change>Change</button>`}</div>`; ready(); return; }
         who.innerHTML = `${field('Client', `<div class="search" style="max-width:none">${icon('search', 18)}<input class="in" data-q placeholder="Search by name or mobile" autocomplete="off"></div>`)}<div class="rows" data-res style="margin-top:6px"></div>
           ${kind !== 'session' ? `<details style="margin-top:6px"><summary class="small" style="cursor:pointer;color:var(--teal)">Someone new? Enter their details</summary><div class="grid2" style="margin-top:10px">${field('Name', inp('guest_name'))}${field('Mobile', inp('guest_phone', '', 'type="tel"'))}</div></details>` : ''}`;
@@ -191,7 +194,7 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
       el.querySelector('[data-kind]')?.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (!b) return; kind = b.dataset.k; el.querySelectorAll('[data-kind] button').forEach(x => x.classList.toggle('on', x === b)); el.querySelector('[data-mode]').hidden = kind === 'session'; if (kind === 'session') mode = 'in_person'; if (!client) drawWho(); sp.reload(); ready(); });
       el.querySelector('[data-mode]').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; mode = b.dataset.m; el.querySelectorAll('[data-mode] button').forEach(x => x.classList.toggle('on', x === b)); sp.reload(); });
       uSel.addEventListener('change', () => sp.reload());
-      sp = slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, query: () => `&unit=${uSel.value}&kind=${lead ? 'consultation' : kind}&mode=${mode}`, startDate: lead && lead.preferred_date >= today() && lead.preferred_date <= addDays(today(), 29) ? lead.preferred_date : undefined, onPick: (v, full) => { pick = v; el.querySelector('[data-over]').hidden = !full; ready(); } });
+      sp = slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, query: () => `&unit=${uSel.value}&kind=${lead ? 'consultation' : kind}&mode=${mode}${chosen ? '&client=' + chosen.id : ''}`, startDate: lead && lead.preferred_date >= today() && lead.preferred_date <= addDays(today(), 29) ? lead.preferred_date : undefined, onPick: (v, full) => { pick = v; el.querySelector('[data-over]').hidden = !full; ready(); } });
       save.addEventListener('click', () => busy(save, async () => {
         const notes = el.querySelector('[name=notes]').value, force = el.querySelector('[name=force]').checked;
         let r;
@@ -466,7 +469,7 @@ async function packageModal(c, after) {
   modal({
     title: 'Add package · ' + c.name,
     body: `<form class="stack" style="gap:14px" data-f>
-      ${field('Package', sel('package_id', defs.map(p => [p.id, `${p.name} (${PROGRAMME_LABEL[p.programme] || 'EMS'}) — ${p.sessions} sessions${p.price ? ', ' + inr(p.price) : ''}`]).concat([['', 'Custom package']]), defs[0] && defs[0].id))}
+      ${field('Package', sel('package_id', defs.map(p => [p.id, `${p.name} (${PROGRAMME_LABEL[p.programme] || 'EMS'}${machineList(p.machine_types).length ? ', ' + machineList(p.machine_types).map(machineName).join('/') : ''}) — ${p.sessions} sessions${p.price ? ', ' + inr(p.price) : ''}`]).concat([['', 'Custom package']]), defs[0] && defs[0].id))}
       <div class="grid3">${field('Sessions', inp('sessions_total', defs[0] && defs[0].sessions, 'type="number" min="1"'))}${field('Price (₹)', inp('price', defs[0] && defs[0].price, 'type="number" min="0" inputmode="numeric"'))}${field('Discount (₹)', inp('discount', 0, 'type="number" min="0" inputmode="numeric"'))}</div>
       <div class="grid2">${field('Start date', inp('start_date', today(), 'type="date"'))}${field('Name', inp('name', defs[0] && defs[0].name, 'maxlength="80"'), 'shown to client')}</div>
       ${multi() ? field('Sold by unit', sel('unit_id', unitOpts(), c.home_unit_id), 'payments go to this unit; sessions can be used at any unit') : ''}
@@ -744,9 +747,13 @@ async function viewSettings() {
       <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('home', 20)}<h3>Units</h3></div>${admin ? `<button class="btn sm gold" data-new-unit>${icon('plus', 16)}New unit</button>` : ''}</div>
         <table class="t"><thead><tr><th>Unit</th><th>Ownership</th><th class="n">Devices</th><th>Hours</th><th>Status</th></tr></thead><tbody>
         ${UNITS.map(u => `<tr class="${admin ? 'click' : ''}" data-unit-row="${u.id}"><td><b>${esc(u.name)}</b><div class="small muted">${esc(u.code)}${u.district ? ' — ' + esc(u.district) : ''}</div></td><td>${u.ownership === 'franchise' ? `Franchise<div class="small muted">${esc(u.franchise_name || '')} · ${u.revenue_share}% share</div>` : 'Company-owned'}</td><td class="n">${u.devices}</td><td class="small">${hoursText(u.hours)}</td><td>${u.active ? pill('active') : pill('closed', 'Closed')}</td></tr>`).join('')}</tbody></table></section>
+      <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('zap', 20)}<h3>Machines</h3></div>${admin ? `<button class="btn sm gold" data-new-machine>${icon('plus', 16)}New machine</button>` : ''}</div>
+        <table class="t"><thead><tr><th>Machine</th><th>Type</th><th>Features</th><th class="n">Devices</th><th class="n">Certified trainers</th></tr></thead><tbody>
+        ${MACHINES.map(m => `<tr class="${admin ? 'click' : ''}" data-machine="${m.id}"><td><b>${esc(m.name)}</b><div class="small muted">${esc(m.brand || '')}${m.active ? '' : ' (hidden)'}</div></td><td>${esc(m.category)}</td><td class="small">${esc((m.features || []).join(' · '))}</td><td class="n">${m.devices}</td><td class="n">${m.trainers ? m.trainers : '<span style="color:var(--warn)">0</span>'}</td></tr>`).join('') || `<tr><td colspan="5">${emptyState('zap', 'No machines yet.')}</td></tr>`}</tbody></table></section>
+      <section class="panel flush" data-certs></section>
       <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('package', 20)}<h3>Package catalogue</h3></div>${admin ? `<button class="btn sm gold" data-new-pkg>${icon('plus', 16)}New package</button>` : ''}</div>
         <table class="t"><thead><tr><th>Package</th><th class="n">Sessions</th><th class="n">Price</th><th class="n">Valid for</th><th>Status</th></tr></thead><tbody>
-        ${packages.map(p => `<tr class="${admin ? 'click' : ''}" data-pkg="${p.id}"><td><b>${esc(p.name)}</b><div class="small muted">${esc(PROGRAMME_LABEL[p.programme] || 'EMS programme')}${p.description ? ' — ' + esc(p.description) : ''}</div></td><td class="n">${p.sessions}</td><td class="n">${p.price != null ? inr(p.price) : '<span style="color:var(--warn)">Set price</span>'}</td><td class="n">${p.validity_days} days</td><td>${p.active ? pill('active') : pill('closed', 'Hidden')}</td></tr>`).join('')}</tbody></table></section>
+        ${packages.map(p => `<tr class="${admin ? 'click' : ''}" data-pkg="${p.id}"><td><b>${esc(p.name)}</b><div class="small muted">${esc(PROGRAMME_LABEL[p.programme] || 'EMS programme')} — ${machineList(p.machine_types).length ? esc(machineList(p.machine_types).map(machineName).join(', ')) : 'any machine'}${p.description ? ' — ' + esc(p.description) : ''}</div></td><td class="n">${p.sessions}</td><td class="n">${p.price != null ? inr(p.price) : '<span style="color:var(--warn)">Set price</span>'}</td><td class="n">${p.validity_days} days</td><td>${p.active ? pill('active') : pill('closed', 'Hidden')}</td></tr>`).join('')}</tbody></table></section>
       ${admin ? `<section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('users', 20)}<h3>Team accounts</h3></div><button class="btn sm gold" data-new-user>${icon('user-plus', 16)}Add team member</button></div>
         <div class="rows">${users.some(u => u.username === 'hasta') ? '' : `<div class="row"><span class="avatar">CA</span><div class="grow"><b>Clinic admin</b><span>Username "hasta" — password is the website admin password</span></div>${pill('active', 'Admin')}</div>`}
         ${users.map(u => `<div class="row click" data-user="${u.id}"><span class="avatar">${esc(initials(u.name))}</span><div class="grow"><b>${esc(u.name)}</b><span>${esc(u.username)} — ${esc((u.skills || []).map(k => SKILLS[k]).join(', ') || 'no skills set')}${ALL_UNITS.length > 1 ? ' — ' + esc(u.role === 'admin' ? 'all units' : (u.units || []).map(unitName).join(', ')) : ''}</span></div><a class="btn sm quiet" href="#/clients?coach=${u.id}" onclick="event.stopPropagation()">${clientsOf(u.id)} active client${clientsOf(u.id) === 1 ? '' : 's'}</a>${pill(u.active ? 'active' : 'closed', u.active ? ({ admin: 'Admin', manager: 'Unit manager' }[u.role] || 'Team') : 'Disabled')}</div>`).join('')}</div></section>` : ''}
@@ -756,7 +763,10 @@ async function viewSettings() {
       <section class="panel"><div class="panel-h"><div class="t">${icon('phone', 20)}<h3>Client app</h3></div></div>
         <p class="muted">Clients sign in at <b>${esc(APP_URL)}</b> with their mobile number and PIN, and can book at any unit with a free device and trainer. Each trainer supervises one client at a time.</p></section>
     </div>`;
+  renderCerts(MAIN.querySelector('[data-certs]'), tm);
   if (admin) {
+    MAIN.querySelector('[data-new-machine]').addEventListener('click', () => machineModal(null));
+    MAIN.querySelectorAll('[data-machine]').forEach(r => r.addEventListener('click', () => machineModal(MACHINES.find(m => m.id === +r.dataset.machine))));
     MAIN.querySelector('[data-new-unit]').addEventListener('click', () => unitModal(null));
     MAIN.querySelectorAll('[data-unit-row]').forEach(r => r.addEventListener('click', async () => unitModal((await api('/staff/units/' + r.dataset.unitRow)))));
     MAIN.querySelector('[data-new-pkg]').addEventListener('click', () => pkgDefModal(null));
@@ -775,13 +785,14 @@ function pkgDefModal(p) {
     body: `<form class="stack" style="gap:14px" data-f>${field('Name', inp('name', p.name, 'maxlength="80"'))}
       <div class="grid3">${field('Sessions', inp('sessions', p.sessions, 'type="number" min="1"'))}${field('Price (₹)', inp('price', p.price, 'type="number" min="0"'))}${field('Valid for (days)', inp('validity_days', p.validity_days, 'type="number" min="7"'))}</div>
       ${field('Programme', sel('programme', [['ems', 'EMS programme'], ['weight', 'Weight management'], ['combined', 'EMS + weight management']], p.programme || 'ems'), 'the client\'s admission must cover this')}
+      <div><h4 style="margin-bottom:8px">Machines this package uses</h4><div class="chips">${MACHINES.filter(m => m.active).map(m => `<label class="chip"><input type="checkbox" name="mt_${m.id}" ${machineList(p.machine_types).includes(m.id) ? 'checked' : ''}>${esc(m.name)}</label>`).join('') || '<span class="muted small">Add machines first.</span>'}</div><p class="small muted" style="margin-top:6px">Sessions are only booked on these machines, with a trainer certified for them. Leave all unticked to allow any machine.</p></div>
       ${field('Description', inp('description', p.description, 'maxlength="200"'))}
       <label class="check"><input type="checkbox" name="active" ${p.active ? 'checked' : ''}> Available to assign</label></form>
       <p class="small muted">Changing a package here doesn't change packages already given to clients.</p>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save package</button>`,
     onMount(el, close) {
       const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => api('/staff/packages' + (p.id ? '/' + p.id : ''), { method: p.id ? 'PUT' : 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Package saved'); reload(); }).catch(() => {}));
+      save.addEventListener('click', () => busy(save, () => { const b = formData(el.querySelector('[data-f]')); b.machine_types = MACHINES.filter(m => b['mt_' + m.id]).map(m => m.id); return api('/staff/packages' + (p.id ? '/' + p.id : ''), { method: p.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Package saved'); reload(); }).catch(() => {}));
     },
   });
 }
@@ -933,8 +944,10 @@ function hoursText(h) {
 
 function unitModal(d) {
   const u = d ? d.unit : { name: '', code: '', ownership: 'owned', revenue_share: 100, hours: { 0: ['10:00', '14:00'], 1: ['10:00', '20:00'], 2: ['10:00', '20:00'], 3: ['10:00', '20:00'], 4: ['10:00', '20:00'], 5: ['10:00', '20:00'], 6: ['10:00', '20:00'] }, slot_minutes: 30, active: 1 };
-  const devices = d ? d.devices.slice() : [{ name: 'EMS device 1', status: 'active' }];
-  const devRow = (x, i) => `<div class="grid3" data-dev="${i}" style="align-items:end">${field('Device name', `<input class="in" data-dn value="${esc(x.name)}">`)}${field('Status', `<select class="in" data-ds>${[['active', 'Active'], ['maintenance', 'Under maintenance'], ['retired', 'Retired']].map(([v, l]) => `<option value="${v}"${x.status === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`)}${field('Notes', `<input class="in" data-dno value="${esc(x.notes || '')}">`)}</div>`;
+  const devices = d ? d.devices.slice() : [{ name: 'EMS device 1', status: 'active', machine_type_id: MACHINES[0] && MACHINES[0].id }];
+  const devRow = (x, i) => `<div data-dev="${i}" style="border:1px solid var(--line-soft);border-radius:12px;padding:12px;display:grid;gap:10px">
+    <div class="grid3" style="align-items:end">${field('Device name', `<input class="in" data-dn value="${esc(x.name)}">`)}${field('Machine', `<select class="in" data-dm><option value="">Choose machine</option>${MACHINES.filter(m => m.active || m.id === x.machine_type_id).map(m => `<option value="${m.id}"${m.id === x.machine_type_id ? ' selected' : ''}>${esc(m.name)}</option>`).join('')}</select>`)}${field('Status', `<select class="in" data-ds>${[['active', 'Active'], ['maintenance', 'Under maintenance'], ['retired', 'Retired']].map(([v, l]) => `<option value="${v}"${x.status === v ? ' selected' : ''}>${l}</option>`).join('')}</select>`)}</div>
+    <div class="grid2">${field('Serial no.', `<input class="in" data-dsn value="${esc(x.serial_no || '')}">`)}${field('Notes', `<input class="in" data-dno value="${esc(x.notes || '')}">`)}</div></div>`;
   modal({
     title: d ? 'Edit unit · ' + u.name : 'New unit', wide: true,
     body: `<form data-f class="stack" style="gap:14px">
@@ -946,16 +959,16 @@ function unitModal(d) {
       <div><h4 style="margin-bottom:8px">Opening hours</h4><div class="qs">${[1, 2, 3, 4, 5, 6, 0].map(dn => { const h = u.hours[dn]; return `<div class="q"><label class="check" style="min-width:90px"><input type="checkbox" name="open_${dn}" ${h ? 'checked' : ''}> ${DAYN[dn]}</label><span style="display:flex;gap:8px"><input class="in" type="time" name="from_${dn}" value="${h ? h[0] : '10:00'}" style="width:130px"><input class="in" type="time" name="to_${dn}" value="${h ? h[1] : '20:00'}" style="width:130px"></span></div>`; }).join('')}</div></div>
       <div><h4 style="margin-bottom:8px">EMS devices <span class="muted" style="font-weight:500">(maximum 3)</span></h4><div class="stack" style="gap:10px" data-devs>${devices.map(devRow).join('')}</div>
         <button type="button" class="btn sm ghost" data-add-dev style="margin-top:10px" ${devices.filter(x => x.status !== 'retired').length >= 3 ? 'disabled' : ''}>${icon('plus', 15)}Add device</button></div>
-      <p class="small muted">Each trainer supervises one client at a time, so a slot is bookable only when a device and a rostered trainer are both free.</p></form>`,
+      <p class="small muted">Each trainer supervises one client at a time, so a slot is bookable only when a device and a rostered trainer certified for that machine are both free. Add machine models under Settings → Machines.</p></form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save unit</button>`,
     onMount(el, close) {
-      el.querySelector('[data-add-dev]').addEventListener('click', e => { devices.push({ name: `EMS device ${devices.length + 1}`, status: 'active' }); el.querySelector('[data-devs]').insertAdjacentHTML('beforeend', devRow(devices[devices.length - 1], devices.length - 1)); if (devices.filter(x => x.status !== 'retired').length >= 3) e.currentTarget.disabled = true; });
+      el.querySelector('[data-add-dev]').addEventListener('click', e => { devices.push({ name: `EMS device ${devices.length + 1}`, status: 'active', machine_type_id: MACHINES[0] && MACHINES[0].id }); el.querySelector('[data-devs]').insertAdjacentHTML('beforeend', devRow(devices[devices.length - 1], devices.length - 1)); if (devices.filter(x => x.status !== 'retired').length >= 3) e.currentTarget.disabled = true; });
       const save = el.querySelector('[data-save]');
       save.addEventListener('click', () => busy(save, () => {
         const f = el.querySelector('[data-f]'), b = formData(f);
         b.active = b.active === '1';
         b.hours = {}; [0, 1, 2, 3, 4, 5, 6].forEach(dn => { b.hours[dn] = { open: f['open_' + dn].checked, from: f['from_' + dn].value, to: f['to_' + dn].value }; });
-        b.devices = [...el.querySelectorAll('[data-dev]')].map(r => ({ id: devices[+r.dataset.dev].id, name: r.querySelector('[data-dn]').value, status: r.querySelector('[data-ds]').value, notes: r.querySelector('[data-dno]').value }));
+        b.devices = [...el.querySelectorAll('[data-dev]')].map(r => ({ id: devices[+r.dataset.dev].id, name: r.querySelector('[data-dn]').value, machine_type_id: r.querySelector('[data-dm]').value, serial_no: r.querySelector('[data-dsn]').value, status: r.querySelector('[data-ds]').value, notes: r.querySelector('[data-dno]').value }));
         return api('/staff/units' + (d ? '/' + u.id : ''), { method: d ? 'PUT' : 'POST', body: b });
       }).then(() => { close(); toast('Unit saved'); team(true); loadUnits().then(reload); }).catch(() => {}));
     },
@@ -971,7 +984,7 @@ async function viewRota() {
   MAIN.innerHTML = `<div class="head"><div><h1>Rota — ${esc(d.unit.name)}</h1><p>${esc(hoursText(d.unit.hours))} · ${d.devices.filter(x => x.status === 'active').length} active device${d.devices.filter(x => x.status === 'active').length === 1 ? '' : 's'}${multi() && !UNIT ? ' · choose a unit at the top to switch' : ''}</p></div>
       ${canEdit ? `<div class="acts"><button class="btn ghost" data-leave>${icon('calendar-x', 18)}Record leave</button><button class="btn gold" data-shift>${icon('plus', 18)}Add shift</button></div>` : ''}</div>
     <section class="panel flush" style="overflow-x:auto"><table class="t"><thead><tr><th>Team member</th>${[1, 2, 3, 4, 5, 6, 0].map(dn => `<th>${DAYN[dn]}${d.unit.hours[dn] ? '' : ' <span class="faint">(closed)</span>'}</th>`).join('')}</tr></thead><tbody>
-      ${byStaff.length ? byStaff.map(st => `<tr><td><b>${esc(st.name)}</b><div class="small muted">${esc(st.skills.map(k => SKILLS[k]).join(', '))}</div></td>${[1, 2, 3, 4, 5, 6, 0].map(dn => `<td>${st.shifts.filter(r => r.weekday === dn).map(r => `<div class="pill ${r.video ? 'good' : ''}" style="margin:2px 0;height:auto;padding:4px 8px;display:flex;gap:6px">${fTime(r.start_time)}–${fTime(r.end_time)}${r.video ? ' ' + icon('phone', 12) : ''}${canEdit ? `<button class="btn sm quiet icon" data-del-shift="${r.id}" style="width:18px;height:18px" aria-label="Remove shift">${icon('x', 12)}</button>` : ''}</div>`).join('') || '<span class="faint">—</span>'}</td>`).join('')}</tr>`).join('')
+      ${byStaff.length ? byStaff.map(st => `<tr><td><b>${esc(st.name)}</b><div class="small muted">${esc(st.skills.map(k => SKILLS[k]).join(', '))}</div>${st.skills.includes('trainer') ? (st.certs.length ? `<div class="small" style="color:var(--good)">${icon('shield-check', 12)} ${esc(st.certs.map(c => c.machine_name).join(', '))}</div>` : `<div class="small" style="color:var(--warn)">Not certified — won't be allocated</div>`) : ''}</td>${[1, 2, 3, 4, 5, 6, 0].map(dn => `<td>${st.shifts.filter(r => r.weekday === dn).map(r => `<div class="pill ${r.video ? 'good' : ''}" style="margin:2px 0;height:auto;padding:4px 8px;display:flex;gap:6px">${fTime(r.start_time)}–${fTime(r.end_time)}${r.video ? ' ' + icon('phone', 12) : ''}${canEdit ? `<button class="btn sm quiet icon" data-del-shift="${r.id}" style="width:18px;height:18px" aria-label="Remove shift">${icon('x', 12)}</button>` : ''}</div>`).join('') || '<span class="faint">—</span>'}</td>`).join('')}</tr>`).join('')
         : `<tr><td colspan="8">${emptyState('users', 'No team members at this unit yet. Add them under Settings → Team accounts.')}</td></tr>`}</tbody></table></section>
     <p class="small muted" style="margin-top:8px">${icon('phone', 12)} marks shifts that also take video consultations. Bookings are only offered when a device and a rostered trainer are free; each trainer supervises one client at a time.</p>
     <section class="panel flush" style="margin-top:18px"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('calendar-x', 20)}<h3>Upcoming leave</h3></div></div>
@@ -993,4 +1006,46 @@ async function viewRota() {
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save leave</button>`,
     onMount(el, close) { const b = el.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api('/staff/leave', { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(r => { close(); if (r.affected && r.affected.length) modal({ title: 'Bookings to reassign', body: `<p>This person has ${r.affected.length} booking${r.affected.length > 1 ? 's' : ''} that day. Open each one in the Schedule and reschedule it so a free trainer is assigned:</p><ul class="dots">${r.affected.map(a => `<li>${esc(fTime(a.start_at))} — ${esc(a.name)}</li>`).join('')}</ul>`, actions: '<a class="btn" href="#/schedule" data-close>Open schedule</a>' }); else toast('Leave recorded'); reload(); }).catch(() => {})); },
   }));
+}
+
+/* ================= Machines & trainer certification ================= */
+
+function machineModal(m) {
+  m = m || { name: '', brand: '', category: CATEGORIES[0], features: [], notes: '', active: 1 };
+  modal({
+    title: m.id ? 'Edit machine' : 'New machine', wide: true,
+    body: `<form data-f class="stack" style="gap:14px"><div class="grid3">${field('Machine name / model', inp('name', m.name, 'placeholder="e.g. Miha Bodytec II"'))}${field('Brand', inp('brand', m.brand || ''))}${field('Type', sel('category', CATEGORIES, m.category))}</div>
+      ${field('Features', `<textarea class="in" name="features" placeholder="One per line, e.g.&#10;Wireless suit&#10;20 muscle groups&#10;Pre-set programmes: strength, cardio, lymph drainage">${esc((m.features || []).join('\n'))}</textarea>`, 'one per line')}
+      ${field('Notes', inp('notes', m.notes || '', 'maxlength="400" placeholder="Supplier, service contract, safety notes"'))}
+      <label class="check"><input type="checkbox" name="active" ${m.active ? 'checked' : ''}> Available for new devices and packages</label></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save machine</button>`,
+    onMount(el, close) { const b = el.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api('/staff/machines' + (m.id ? '/' + m.id : ''), { method: m.id ? 'PUT' : 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Machine saved'); loadUnits().then(reload); }).catch(() => {})); },
+  });
+}
+
+async function renderCerts(el, tm) {
+  const { certifications } = await api('/staff/certifications');
+  const me = tm.find(t => t.id === ME.id);
+  const canCertify = me && (me.skills || []).some(k => k === 'coach' || k === 'doctor');
+  const trainers = tm.filter(t => (t.skills || []).includes('trainer'));
+  const active = MACHINES.filter(x => x.active);
+  const cert = (sid, mid) => certifications.find(c => c.staff_id === sid && c.machine_type_id === mid && c.status === 'active');
+  const soon = addDays(today(), 30);
+  el.innerHTML = `<div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('shield-check', 20)}<div><h3>Trainer certification</h3><p class="small muted">A trainer is only allocated to a machine they're certified for. Certificates are issued by a Hasta wellness coach or doctor.</p></div></div>
+      ${canCertify ? `<button class="btn sm gold" data-certify>${icon('shield-check', 16)}Certify a trainer</button>` : ''}</div>
+    ${trainers.length && active.length ? `<div style="overflow-x:auto"><table class="t"><thead><tr><th>Trainer</th>${active.map(x => `<th>${esc(x.name)}</th>`).join('')}</tr></thead><tbody>
+      ${trainers.map(t => `<tr><td><b>${esc(t.name)}</b></td>${active.map(x => { const c = cert(t.id, x.id); if (!c) return '<td><span class="pill alert">Not certified</span></td>'; const exp = c.valid_until < today();
+        return `<td>${exp ? pill('alert', 'Expired ' + fDay(c.valid_until)) : c.valid_until <= soon ? pill('warn', 'Renew by ' + fDay(c.valid_until)) : pill('good', 'Until ' + fDate(c.valid_until))}<div class="small muted" style="margin-top:4px">by ${esc(c.certifier_name)}, ${esc(c.certifier_role)}</div>${canCertify || ME.role === 'admin' ? `<button class="btn sm quiet" data-revoke="${c.id}" style="height:24px;padding:0 6px;margin-top:2px">Revoke</button>` : ''}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`
+      : emptyState('shield-check', trainers.length ? 'Add a machine first.' : 'No team members have the EMS trainer skill yet.')}
+    ${canCertify ? '' : '<p class="small muted" style="padding:0 20px 16px">To certify, sign in with your own account that has the Wellness coach or Doctor skill.</p>'}`;
+  el.querySelector('[data-certify]')?.addEventListener('click', () => modal({
+    title: 'Certify a trainer',
+    body: `<form data-f class="stack" style="gap:14px"><div class="grid2">${field('Trainer', sel('staff_id', trainers.filter(t => t.id !== ME.id).map(t => [t.id, t.name])))}${field('Machine', sel('machine_type_id', active.map(x => [x.id, x.name])))}</div>
+      ${field('Valid for', sel('months', [['6', '6 months'], ['12', '12 months'], ['24', '24 months']], '12'))}
+      ${field('What you assessed', `<textarea class="in" name="notes" maxlength="500" placeholder="e.g. Suit fitting and pad placement, intensity control per muscle group, contraindication checks before each session, hydration advice, emergency stop and first aid"></textarea>`)}
+      <label class="check"><input type="checkbox" name="confirm"> <span>I have personally assessed this trainer on this machine and confirm they can run sessions safely. Certified by ${esc(ME.name)} for Hasta Wellness.</span></label></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>${icon('shield-check', 18)}Issue certificate</button>`,
+    onMount(m, close) { const b = m.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api('/staff/certifications', { method: 'POST', body: formData(m.querySelector('[data-f]')) })).then(() => { close(); toast('Certificate issued'); renderCerts(el, tm); }).catch(() => {})); },
+  }));
+  el.querySelectorAll('[data-revoke]').forEach(b => b.addEventListener('click', () => { const reason = prompt('Reason for revoking this certificate?'); if (reason === null) return; busy(b, () => api(`/staff/certifications/${b.dataset.revoke}/revoke`, { method: 'POST', body: { reason } })).then(() => { toast('Certificate revoked'); renderCerts(el, tm); }).catch(() => {}); }));
 }

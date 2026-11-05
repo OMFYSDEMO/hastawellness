@@ -52,3 +52,9 @@ Bookings get a device and staff member assigned automatically. Clients can
 book at any unit. Units are company-owned or franchise; sessions delivered for
 another unit's package appear in the cross-unit settlement on Payments.
 Roles: admin (all units), unit manager (rota and leave), team.
+
+### Machines and trainer certification
+Settings → Machines holds machine models (type and features). Each unit device
+is one of these machines, and packages can be limited to specific machines.
+A trainer is allocated only to a device whose machine they hold a valid
+certificate for, issued by a Hasta wellness coach or doctor (never themselves).
