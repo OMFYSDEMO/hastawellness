@@ -58,3 +58,13 @@ Settings → Machines holds machine models (type and features). Each unit device
 is one of these machines, and packages can be limited to specific machines.
 A trainer is allocated only to a device whose machine they hold a valid
 certificate for, issued by a Hasta wellness coach or doctor (never themselves).
+
+### Package builder (`src/packages.js`)
+Settings → Price list sets the list price and cost of each item (EMS session,
+progress review, weight-management consultation, diet plan, measurements).
+The package builder defines exactly what a package includes and shows list
+value, cost, margin and the price after the maximum staff discount. Staff can
+only sell catalogue packages at the set price within that discount; custom
+packages and session changes are admin-only. Reviews, weight-management
+consultations, diet plans, check-ins and measurements are blocked unless the
+client's active package includes them.

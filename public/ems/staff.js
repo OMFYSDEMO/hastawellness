@@ -2,7 +2,7 @@ import {
   api, esc, icon, toast, modal, formData, busy, field, inp, sel, emptyState, slotPicker, lineChart, barChart, insightList, deltaTag,
   measureSeries, dietView, DIETS, SCREENING, today, nowLocal, addDays, dayDiff, fDay, fDate, fWeekday, fLong, fTime, fWhen, inr, kg, initials, first,
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
-  PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
+  includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
 } from './core.js';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
@@ -159,7 +159,8 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
   const startUnit = (client && client.home_unit_id) || (lead && lead.unit_id) || UNIT || (UNITS[0] && UNITS[0].id);
   const m = modal({
     title: lead ? `Book consultation · ${lead.name}` : 'New booking', wide: true,
-    body: `${lead ? '' : `<div class="seg" data-kind>${['session', 'consultation', 'review'].map(k => `<button type="button" data-k="${k}" class="${k === kind ? 'on' : ''}">${KIND_LABEL[k]}</button>`).join('')}</div>`}
+    body: `${lead ? '' : `<div class="seg" data-kind style="flex-wrap:wrap">${[['session', 'EMS session'], ['review', 'Progress review'], ['wm_consult', 'Weight-mgmt consultation'], ['consultation', 'Initial consultation']].map(([k, l]) => `<button type="button" data-k="${k}" class="${k === kind ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <p class="small muted" style="margin-top:-6px">Reviews and weight-management consultations are only bookable when the client's package includes them. Initial consultations are for new or returning clients before admission.</p>`}
       ${lead ? `<p class="muted">${esc(prettyPhone(lead.phone))}${lead.concern ? ' — ' + esc(lead.concern) : ''}</p>` : `<div data-who></div>`}
       <div class="grid2">${field('Unit', sel('unit_id', unitOpts(), startUnit), 'clients can book at any unit')}<div data-mode ${kind === 'session' ? 'hidden' : ''}>${field('How', `<div class="seg" style="width:100%"><button type="button" data-m="in_person" class="on" style="flex:1">${icon('home', 15)} In person</button><button type="button" data-m="video" style="flex:1">${icon('phone', 15)} Video call</button></div>`)}</div></div>
       <div><h4 style="margin-bottom:10px">Date and time</h4><div data-slots></div><p class="small muted" style="margin-top:8px">Times shown have a free device and a rostered trainer (one client per trainer), or a free coach/doctor for consultations. A device and staff member are assigned automatically.</p></div>
@@ -169,7 +170,7 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save disabled>${icon('calendar-plus', 18)}Book</button>`,
     onMount(el, close) {
       const save = el.querySelector('[data-save]');
-      const ready = () => { save.disabled = !pick || (!lead && kind === 'session' && !chosen) || (!lead && !chosen && !guestOk()); };
+      const ready = () => { save.disabled = !pick || (!lead && kind !== 'consultation' && !chosen) || (!lead && !chosen && !guestOk()); };
       const guestOk = () => { const n = el.querySelector('[name=guest_name]'), p = el.querySelector('[name=guest_phone]'); return n && p && n.value.trim().length > 1 && p.value.replace(/\D/g, '').length >= 10; };
       const who = el.querySelector('[data-who]');
       const drawWho = () => {
@@ -177,7 +178,7 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
  if (chosen && sp) setTimeout(() => sp.reload(), 0);
         if (chosen) { who.innerHTML = `<div class="row" style="border:1px solid var(--line);border-radius:12px"><span class="avatar">${esc(initials(chosen.name))}</span><div class="grow"><b>${esc(chosen.name)}</b><span>${esc(prettyPhone(chosen.phone))}</span></div>${client ? '' : `<button type="button" class="btn sm quiet" data-change>Change</button>`}</div>`; ready(); return; }
         who.innerHTML = `${field('Client', `<div class="search" style="max-width:none">${icon('search', 18)}<input class="in" data-q placeholder="Search by name or mobile" autocomplete="off"></div>`)}<div class="rows" data-res style="margin-top:6px"></div>
-          ${kind !== 'session' ? `<details style="margin-top:6px"><summary class="small" style="cursor:pointer;color:var(--teal)">Someone new? Enter their details</summary><div class="grid2" style="margin-top:10px">${field('Name', inp('guest_name'))}${field('Mobile', inp('guest_phone', '', 'type="tel"'))}</div></details>` : ''}`;
+          ${kind === 'consultation' ? `<details style="margin-top:6px"><summary class="small" style="cursor:pointer;color:var(--teal)">Someone new? Enter their details</summary><div class="grid2" style="margin-top:10px">${field('Name', inp('guest_name'))}${field('Mobile', inp('guest_phone', '', 'type="tel"'))}</div></details>` : ''}`;
         const qi = who.querySelector('[data-q]'), res = who.querySelector('[data-res]');
         let tmr;
         qi.addEventListener('input', () => { clearTimeout(tmr); tmr = setTimeout(async () => {
@@ -408,7 +409,7 @@ async function viewClient(id, tab) {
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
     onMount(el, close) { const b = el.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api('/staff/clients/' + c.id, { method: 'PUT', body: { coach_id: el.querySelector('[name=coach_id]').value } })).then(() => { close(); toast('Coach allocated'); team(true); after(); }).catch(() => {})); },
   }));
-  MAIN.querySelector('[data-measure]').addEventListener('click', () => measureModal(c, after));
+  MAIN.querySelector('[data-measure]').addEventListener('click', () => d.access.measurements ? measureModal(c, after) : toast('Progress measurements are not included in this client\'s package.', true));
   MAIN.querySelector('[data-pay]').addEventListener('click', () => payModal(c, d.packages, after));
   const body = MAIN.querySelector('[data-body]');
   ({ overview: tabOverview, admission: tabAdmission, sessions: tabSessions, progress: tabProgress, payments: tabPayments, plan: tabPlan, profile: tabProfile }[tab] || tabOverview)(body, d, after);
@@ -445,7 +446,7 @@ function pkgRow(p, staff = true) {
   return `<div class="pkg"><span class="hic" style="width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:var(--teal-mist);color:var(--teal)">${icon('package', 20)}</span>
     <div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(p.name)}</b>${pill(p.state)}</div>
       <div class="bar" style="margin:8px 0 6px"><i style="width:${u}%"></i><i class="b" style="width:${b}%"></i></div>
-      <span class="small muted">${p.used} used, ${p.booked} booked, ${p.remaining} left of ${p.sessions_total} · ${fDay(p.start_date)} to ${p.expiry_date ? fDate(p.expiry_date) : 'no expiry'}${staff ? ` · ${inr(p.due)}${p.balance > 0 ? `, <b style="color:var(--warn)">${inr(p.balance)} due</b>` : ', paid'}` : ''}</span></div>
+      <span class="small muted">${p.sessions_total ? `${p.used} used, ${p.booked} booked, ${p.remaining} left of ${p.sessions_total} EMS sessions · ` : ''}${p.ent && !p.ent.legacy && p.ent.reviews ? `reviews ${p.reviews_used}/${p.ent.reviews} · ` : ''}${p.ent && !p.ent.legacy && p.ent.wm_consults ? `WM consultations ${p.wm_used}/${p.ent.wm_consults} · ` : ''}${p.ent && p.ent.diet_plan ? 'diet plan · ' : ''}${p.ent && p.ent.measurements ? 'measurements · ' : ''}${fDay(p.start_date)} to ${p.expiry_date ? fDate(p.expiry_date) : 'no expiry'}${staff ? ` · ${inr(p.due)}${p.balance > 0 ? `, <b style="color:var(--warn)">${inr(p.balance)} due</b>` : ', paid'}` : ''}</span></div>
     ${staff ? `<div><button class="btn sm ghost" data-pkg="${p.id}">${icon('pencil', 15)}Manage</button></div>` : ''}</div>`;
 }
 
@@ -465,19 +466,35 @@ function tabSessions(el, d, after) {
 async function packageModal(c, after) {
   if (!c.cleared) { toast('Complete the admission first — both the clinician and the client must sign before enrolment.', true); return go(`#/clients/${c.id}?tab=admission`); }
   const { packages } = await api('/staff/packages');
-  const defs = packages.filter(p => p.active);
+  const defs = packages.filter(p => p.active && p.price != null);
+  const admin = ME.role === 'admin';
+  if (!defs.length && !admin) return toast('No priced packages in the catalogue yet. Ask an admin to build one.', true);
   modal({
-    title: 'Add package · ' + c.name,
+    title: 'Add package · ' + c.name, wide: true,
     body: `<form class="stack" style="gap:14px" data-f>
-      ${field('Package', sel('package_id', defs.map(p => [p.id, `${p.name} (${PROGRAMME_LABEL[p.programme] || 'EMS'}${machineList(p.machine_types).length ? ', ' + machineList(p.machine_types).map(machineName).join('/') : ''}) — ${p.sessions} sessions${p.price ? ', ' + inr(p.price) : ''}`]).concat([['', 'Custom package']]), defs[0] && defs[0].id))}
-      <div class="grid3">${field('Sessions', inp('sessions_total', defs[0] && defs[0].sessions, 'type="number" min="1"'))}${field('Price (₹)', inp('price', defs[0] && defs[0].price, 'type="number" min="0" inputmode="numeric"'))}${field('Discount (₹)', inp('discount', 0, 'type="number" min="0" inputmode="numeric"'))}</div>
-      <div class="grid2">${field('Start date', inp('start_date', today(), 'type="date"'))}${field('Name', inp('name', defs[0] && defs[0].name, 'maxlength="80"'), 'shown to client')}</div>
-      ${multi() ? field('Sold by unit', sel('unit_id', unitOpts(), c.home_unit_id), 'payments go to this unit; sessions can be used at any unit') : ''}
-      <p class="small muted" data-exp></p></form>`,
+      ${field('Package', sel('package_id', defs.map(p => [p.id, `${p.name} — ${inr(p.price)}`]).concat(admin ? [['', 'Custom package (admin only)']] : []), defs[0] && defs[0].id))}
+      <div class="note" data-inc></div>
+      <div data-custom hidden class="stack" style="gap:12px">
+        <div class="grid2">${field('Name', inp('name', '', 'maxlength="80"'))}${field('Programme', sel('programme', [['ems', 'EMS programme'], ['weight', 'Weight management'], ['combined', 'EMS + weight management']], 'ems'))}</div>
+        <div class="grid3">${field('EMS sessions', inp('sessions', 10, 'type="number" min="0"'))}${field('Progress reviews', inp('reviews', 0, 'type="number" min="0"'))}${field('WM consultations', inp('wm_consults', 0, 'type="number" min="0"'))}</div>
+        <div class="chips"><label class="chip"><input type="checkbox" name="diet_plan">Diet and lifestyle plan</label><label class="chip"><input type="checkbox" name="measurements">Measurements and charts</label></div>
+        <div class="grid2">${field('Price (₹)', inp('price', '', 'type="number" min="0"'))}${field('Valid for (days)', inp('validity_days', 90, 'type="number" min="7"'))}</div></div>
+      <div class="grid3">${field('Discount (₹)', inp('discount', 0, 'type="number" min="0" inputmode="numeric"'), '')}${field('Start date', inp('start_date', today(), 'type="date"'))}${multi() ? field('Sold by unit', sel('unit_id', unitOpts(), c.home_unit_id)) : '<div></div>'}</div>
+      <p class="small muted" data-disc></p></form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Add package</button>`,
     onMount(el, close) {
       const f = el.querySelector('[data-f]');
-      const sync = () => { const p = defs.find(x => x.id === +f.package_id.value); if (p) { f.sessions_total.value = p.sessions; f.price.value = p.price ?? ''; f.name.value = p.name; } el.querySelector('[data-exp]').textContent = p ? `Valid for ${p.validity_days} days from the start date.` : 'Custom packages are valid for 90 days.'; };
+      const sync = () => {
+        const p = defs.find(x => x.id === +f.package_id.value);
+        el.querySelector('[data-custom]').hidden = !!p;
+        el.querySelector('[data-inc]').hidden = !p;
+        if (p) {
+          el.querySelector('[data-inc]').innerHTML = `<b>Includes:</b> ${esc(includesText(p.ent, p.sessions))}. ${machineList(p.machine_types).length ? 'Machines: ' + esc(machineList(p.machine_types).map(machineName).join(', ')) + '. ' : ''}Valid ${p.validity_days} days. Price ${inr(p.price)}.`;
+          const lim = Math.floor(p.price * (p.max_discount || 0) / 100);
+          el.querySelector('[data-disc]').textContent = admin ? `Staff can discount up to ${p.max_discount || 0}% (${inr(lim)}). As an admin you can give more.` : p.max_discount ? `You can discount up to ${p.max_discount}% (${inr(lim)}).` : 'No discount is allowed on this package.';
+          f.discount.max = admin ? p.price : lim; if (!admin && !p.max_discount) { f.discount.value = 0; f.discount.disabled = true; } else f.discount.disabled = false;
+        } else el.querySelector('[data-disc]').textContent = 'Custom packages are for exceptions. Prefer building a catalogue package in Settings.';
+      };
       f.package_id.addEventListener('change', sync); sync();
       const save = el.querySelector('[data-save]');
       save.addEventListener('click', () => busy(save, () => api(`/staff/clients/${c.id}/packages`, { method: 'POST', body: formData(f) })).then(() => { close(); toast('Package added'); after(); }).catch(() => {}));
@@ -489,7 +506,7 @@ function managePackage(p, after) {
   modal({
     title: p.name,
     body: `<p class="muted">${p.used} used, ${p.booked} booked, ${p.remaining} left of ${p.sessions_total}.</p>
-      <form class="stack" style="gap:14px" data-f><div class="grid2">${field('Total sessions', inp('sessions_total', p.sessions_total, 'type="number" min="1"'), 'add bonus sessions here')}${field('Expiry date', inp('expiry_date', p.expiry_date, 'type="date"'))}</div>
+      <form class="stack" style="gap:14px" data-f><div class="grid2">${ME.role === 'admin' ? field('Total EMS sessions', inp('sessions_total', p.sessions_total, 'type="number" min="1"'), 'admins only') : `<div><p class="small muted">Includes: ${esc(includesText(p.ent, p.sessions_total))}</p></div>`}${field('Expiry date', inp('expiry_date', p.expiry_date, 'type="date"'))}</div>
       ${field('Status', sel('status', [['active', 'Active'], ['paused', 'Paused (no new bookings)'], ['closed', 'Closed']], p.status))}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
     onMount(el, close) {
@@ -562,7 +579,7 @@ function tabProgress(el, d, after) {
   lineChart(el.querySelector('[data-wh]'), { series: [{ name: 'Waist', color: '#34595e', points: measureSeries(d.measurements, 'waist') }, { name: 'Hips', color: '#c4a45b', points: measureSeries(d.measurements, 'hips') }], unit: ' cm', height: 200 });
   lineChart(el.querySelector('[data-bf]'), { series: [{ name: 'Body fat', color: '#a8642c', points: measureSeries(d.measurements, 'body_fat') }], unit: '%', height: 200 });
   lineChart(el.querySelector('[data-mm]'), { series: [{ name: 'Muscle', color: '#2f7d58', points: measureSeries(d.measurements, 'muscle_mass') }], unit: ' kg', height: 200 });
-  el.querySelector('[data-add]').addEventListener('click', () => measureModal(d.client, after));
+  el.querySelector('[data-add]').addEventListener('click', () => d.access.measurements ? measureModal(d.client, after) : toast('Progress measurements are not included in this client\'s package.', true));
   el.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { if (confirm('Delete this measurement?')) busy(b, () => api('/staff/measurements/' + b.dataset.del, { method: 'DELETE', body: {} })).then(() => { toast('Deleted'); after(); }).catch(() => {}); }));
 }
 
@@ -582,6 +599,10 @@ function tabPayments(el, d, after) {
 }
 
 function tabPlan(el, d, after) {
+  if (!d.access.diet_plan) {
+    el.innerHTML = `<section class="panel">${emptyState('lock', 'The diet and lifestyle plan is not included in this client\'s package, so it can\'t be set up. Add a package that includes it.', `<a class="btn sm ghost" href="#/clients/${d.client.id}?tab=sessions">Packages</a>`)}</section>`;
+    return;
+  }
   const p = d.plan;
   const ck = d.checkins.slice(0, 14);
   el.innerHTML = `<div class="cols"><div class="stack">
@@ -752,8 +773,9 @@ async function viewSettings() {
         ${MACHINES.map(m => `<tr class="${admin ? 'click' : ''}" data-machine="${m.id}"><td><b>${esc(m.name)}</b><div class="small muted">${esc(m.brand || '')}${m.active ? '' : ' (hidden)'}</div></td><td>${esc(m.category)}</td><td class="small">${esc((m.features || []).join(' · '))}</td><td class="n">${m.devices}</td><td class="n">${m.trainers ? m.trainers : '<span style="color:var(--warn)">0</span>'}</td></tr>`).join('') || `<tr><td colspan="5">${emptyState('zap', 'No machines yet.')}</td></tr>`}</tbody></table></section>
       <section class="panel flush" data-certs></section>
       <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('package', 20)}<h3>Package catalogue</h3></div>${admin ? `<button class="btn sm gold" data-new-pkg>${icon('plus', 16)}New package</button>` : ''}</div>
-        <table class="t"><thead><tr><th>Package</th><th class="n">Sessions</th><th class="n">Price</th><th class="n">Valid for</th><th>Status</th></tr></thead><tbody>
-        ${packages.map(p => `<tr class="${admin ? 'click' : ''}" data-pkg="${p.id}"><td><b>${esc(p.name)}</b><div class="small muted">${esc(PROGRAMME_LABEL[p.programme] || 'EMS programme')} — ${machineList(p.machine_types).length ? esc(machineList(p.machine_types).map(machineName).join(', ')) : 'any machine'}${p.description ? ' — ' + esc(p.description) : ''}</div></td><td class="n">${p.sessions}</td><td class="n">${p.price != null ? inr(p.price) : '<span style="color:var(--warn)">Set price</span>'}</td><td class="n">${p.validity_days} days</td><td>${p.active ? pill('active') : pill('closed', 'Hidden')}</td></tr>`).join('')}</tbody></table></section>
+        <table class="t"><thead><tr><th>Package</th><th>Includes</th><th class="n">Price</th><th class="n">Cost</th><th class="n">Margin</th><th class="n">Max discount</th><th>Status</th></tr></thead><tbody>
+        ${packages.map(p => { const cost = p.valuation.cost, m = p.price ? Math.round((p.price - cost) / p.price * 100) : null; return `<tr class="${admin ? 'click' : ''}" data-pkg="${p.id}"><td><b>${esc(p.name)}</b><div class="small muted">${esc(PROGRAMME_LABEL[p.programme] || 'EMS programme')} — ${machineList(p.machine_types).length ? esc(machineList(p.machine_types).map(machineName).join(', ')) : 'any machine'} — ${p.validity_days} days</div></td><td class="small">${esc(includesText(p.ent, p.sessions))}</td><td class="n">${p.price != null ? inr(p.price) : '<span style="color:var(--warn)">Set price</span>'}</td><td class="n">${inr(cost)}</td><td class="n">${m == null ? '—' : `<b style="color:${m < 20 ? 'var(--alert)' : m < 40 ? 'var(--warn)' : 'var(--good)'}">${m}%</b>`}</td><td class="n">${p.max_discount || 0}%</td><td>${p.active ? pill('active') : pill('closed', 'Hidden')}</td></tr>`; }).join('')}</tbody></table></section>
+      <section class="panel flush" data-prices></section>
       ${admin ? `<section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('users', 20)}<h3>Team accounts</h3></div><button class="btn sm gold" data-new-user>${icon('user-plus', 16)}Add team member</button></div>
         <div class="rows">${users.some(u => u.username === 'hasta') ? '' : `<div class="row"><span class="avatar">CA</span><div class="grow"><b>Clinic admin</b><span>Username "hasta" — password is the website admin password</span></div>${pill('active', 'Admin')}</div>`}
         ${users.map(u => `<div class="row click" data-user="${u.id}"><span class="avatar">${esc(initials(u.name))}</span><div class="grow"><b>${esc(u.name)}</b><span>${esc(u.username)} — ${esc((u.skills || []).map(k => SKILLS[k]).join(', ') || 'no skills set')}${ALL_UNITS.length > 1 ? ' — ' + esc(u.role === 'admin' ? 'all units' : (u.units || []).map(unitName).join(', ')) : ''}</span></div><a class="btn sm quiet" href="#/clients?coach=${u.id}" onclick="event.stopPropagation()">${clientsOf(u.id)} active client${clientsOf(u.id) === 1 ? '' : 's'}</a>${pill(u.active ? 'active' : 'closed', u.active ? ({ admin: 'Admin', manager: 'Unit manager' }[u.role] || 'Team') : 'Disabled')}</div>`).join('')}</div></section>` : ''}
@@ -764,6 +786,8 @@ async function viewSettings() {
         <p class="muted">Clients sign in at <b>${esc(APP_URL)}</b> with their mobile number and PIN, and can book at any unit with a free device and trainer. Each trainer supervises one client at a time.</p></section>
     </div>`;
   renderCerts(MAIN.querySelector('[data-certs]'), tm);
+  renderPrices(MAIN.querySelector('[data-prices]'), admin);
+  PRICE_CACHE = null;
   if (admin) {
     MAIN.querySelector('[data-new-machine]').addEventListener('click', () => machineModal(null));
     MAIN.querySelectorAll('[data-machine]').forEach(r => r.addEventListener('click', () => machineModal(MACHINES.find(m => m.id === +r.dataset.machine))));
@@ -778,21 +802,60 @@ async function viewSettings() {
   pw && pw.addEventListener('submit', e => { e.preventDefault(); busy(pw.querySelector('button'), () => api('/me/secret', { method: 'POST', body: formData(pw) })).then(() => { toast('Password changed'); pw.reset(); }).catch(() => {}); });
 }
 
-function pkgDefModal(p) {
-  p = p || { name: '', sessions: 10, price: '', validity_days: 90, description: '', active: 1 };
+let PRICE_CACHE = null;
+async function prices() { if (!PRICE_CACHE) PRICE_CACHE = (await api('/staff/price-list')).items; return PRICE_CACHE; }
+
+async function renderPrices(el, admin) {
+  const items = await prices();
+  el.innerHTML = `<div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('badge-indian-rupee', 20)}<div><h3>Price list</h3><p class="small muted">List price and internal cost of each item. The package builder uses these to show value, cost and margin.</p></div></div>${admin ? '<button class="btn sm" data-save-prices>Save prices</button>' : ''}</div>
+    <table class="t"><thead><tr><th>Item</th><th>Unit</th><th class="n">List price (₹)</th><th class="n">Cost to deliver (₹)</th></tr></thead><tbody>
+    ${items.map(i => `<tr><td><b>${esc(i.label)}</b></td><td class="small muted">${esc(i.unit)}</td><td class="n">${admin ? `<input class="in" style="width:120px;text-align:right" type="number" min="0" data-pp="${i.item}" value="${i.price}">` : inr(i.price)}</td><td class="n">${admin ? `<input class="in" style="width:120px;text-align:right" type="number" min="0" data-pc="${i.item}" value="${i.cost}">` : inr(i.cost)}</td></tr>`).join('')}</tbody></table>
+    ${items.every(i => !i.price) ? '<p class="small" style="padding:0 20px 16px;color:var(--warn)">Prices are not set yet. Enter them so the builder can calculate package value and margin.</p>' : ''}`;
+  el.querySelector('[data-save-prices]')?.addEventListener('click', e => busy(e.currentTarget, () => api('/staff/price-list', { method: 'PUT', body: { items: items.map(i => ({ item: i.item, price: el.querySelector(`[data-pp="${i.item}"]`).value, cost: el.querySelector(`[data-pc="${i.item}"]`).value })) } })).then(() => { PRICE_CACHE = null; toast('Prices saved'); reload(); }).catch(() => {}));
+}
+
+async function pkgDefModal(p) {
+  const items = await prices();
+  const P = Object.fromEntries(items.map(i => [i.item, i]));
+  p = p || { name: '', programme: 'ems', sessions: 10, price: '', validity_days: 60, description: '', active: 1, max_discount: 0, ent: { reviews: 0, wm_consults: 0, diet_plan: false, measurements: false } };
+  const e = p.ent || {};
   modal({
-    title: p.id ? 'Edit package' : 'New package',
-    body: `<form class="stack" style="gap:14px" data-f>${field('Name', inp('name', p.name, 'maxlength="80"'))}
-      <div class="grid3">${field('Sessions', inp('sessions', p.sessions, 'type="number" min="1"'))}${field('Price (₹)', inp('price', p.price, 'type="number" min="0"'))}${field('Valid for (days)', inp('validity_days', p.validity_days, 'type="number" min="7"'))}</div>
-      ${field('Programme', sel('programme', [['ems', 'EMS programme'], ['weight', 'Weight management'], ['combined', 'EMS + weight management']], p.programme || 'ems'), 'the client\'s admission must cover this')}
-      <div><h4 style="margin-bottom:8px">Machines this package uses</h4><div class="chips">${MACHINES.filter(m => m.active).map(m => `<label class="chip"><input type="checkbox" name="mt_${m.id}" ${machineList(p.machine_types).includes(m.id) ? 'checked' : ''}>${esc(m.name)}</label>`).join('') || '<span class="muted small">Add machines first.</span>'}</div><p class="small muted" style="margin-top:6px">Sessions are only booked on these machines, with a trainer certified for them. Leave all unticked to allow any machine.</p></div>
-      ${field('Description', inp('description', p.description, 'maxlength="200"'))}
-      <label class="check"><input type="checkbox" name="active" ${p.active ? 'checked' : ''}> Available to assign</label></form>
-      <p class="small muted">Changing a package here doesn't change packages already given to clients.</p>`,
+    title: p.id ? 'Package builder · ' + p.name : 'Package builder', wide: true,
+    body: `<form class="stack" style="gap:14px" data-f>
+      <div class="grid3">${field('Package name', inp('name', p.name, 'maxlength="80" placeholder="e.g. EMS Starter"'))}${field('Programme', sel('programme', [['ems', 'EMS programme'], ['weight', 'Weight management only'], ['combined', 'EMS + weight management']], p.programme || 'ems'), 'admission must cover this')}${field('Valid for (days)', inp('validity_days', p.validity_days, 'type="number" min="7"'))}</div>
+      <div><h4 style="margin-bottom:8px">What's included</h4><div class="qs">
+        <div class="q"><p><b>EMS sessions</b><br><span class="small muted">${inr(P.ems_session.price)} each · cost ${inr(P.ems_session.cost)}</span></p><input class="in" name="sessions" type="number" min="0" max="200" value="${p.sessions ?? 0}" style="width:100px;text-align:right"></div>
+        <div class="q"><p><b>Progress reviews</b> <span class="small muted">(monthly review with measurements)</span><br><span class="small muted">${inr(P.review.price)} each · cost ${inr(P.review.cost)}</span></p><input class="in" name="reviews" type="number" min="0" max="52" value="${e.reviews || 0}" style="width:100px;text-align:right"></div>
+        <div class="q"><p><b>Weight-management consultations</b><br><span class="small muted">${inr(P.wm_consult.price)} each · cost ${inr(P.wm_consult.cost)}</span></p><input class="in" name="wm_consults" type="number" min="0" max="52" value="${e.wm_consults || 0}" style="width:100px;text-align:right"></div>
+        <div class="q"><p><b>Diet and lifestyle plan</b> <span class="small muted">with daily check-ins</span><br><span class="small muted">${inr(P.diet_plan.price)} · cost ${inr(P.diet_plan.cost)}</span></p><label class="check"><input type="checkbox" name="diet_plan" ${e.diet_plan ? 'checked' : ''}> Included</label></div>
+        <div class="q"><p><b>Progress measurements and charts</b><br><span class="small muted">${inr(P.measurements.price)} · cost ${inr(P.measurements.cost)}</span></p><label class="check"><input type="checkbox" name="measurements" ${e.measurements ? 'checked' : ''}> Included</label></div>
+      </div></div>
+      <div><h4 style="margin-bottom:8px">Machines this package uses</h4><div class="chips">${MACHINES.filter(m => m.active).map(m => `<label class="chip"><input type="checkbox" name="mt_${m.id}" ${machineList(p.machine_types).includes(m.id) ? 'checked' : ''}>${esc(m.name)}</label>`).join('') || '<span class="muted small">Add machines first.</span>'}</div><p class="small muted" style="margin-top:6px">Leave all unticked to allow any machine.</p></div>
+      <div class="metrics" data-calc></div>
+      <div class="grid3">${field('Selling price (₹)', inp('price', p.price ?? '', 'type="number" min="0"'))}${field('Max staff discount', sel('max_discount', [0, 5, 10, 15, 20, 25].map(x => [x, x ? x + '%' : 'No discount']), p.max_discount || 0), 'at the point of sale')}${field('Status', sel('active', [['1', 'Available to sell'], ['0', 'Hidden']], p.active ? '1' : '0'))}</div>
+      ${field('Description', inp('description', p.description || '', 'maxlength="200"'))}
+      <label class="check" data-bc hidden><input type="checkbox" name="below_cost"> Allow a selling price below cost</label></form>
+      <p class="small muted">Staff can only sell what's included here. Bookings, plans and measurements outside the package are blocked. Changing a package doesn't change packages already sold.</p>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save package</button>`,
     onMount(el, close) {
+      const f = el.querySelector('[data-f]');
+      const calc = () => {
+        const n = k => Math.max(0, parseInt(f[k].value, 10) || 0);
+        const list = n('sessions') * P.ems_session.price + n('reviews') * P.review.price + n('wm_consults') * P.wm_consult.price + (f.diet_plan.checked ? P.diet_plan.price : 0) + (f.measurements.checked ? P.measurements.price : 0);
+        const cost = n('sessions') * P.ems_session.cost + n('reviews') * P.review.cost + n('wm_consults') * P.wm_consult.cost + (f.diet_plan.checked ? P.diet_plan.cost : 0) + (f.measurements.checked ? P.measurements.cost : 0);
+        const price = parseInt(f.price.value, 10);
+        const has = Number.isFinite(price);
+        const margin = has && price ? Math.round((price - cost) / price * 100) : null;
+        const worst = has ? price - Math.floor(price * (+f.max_discount.value) / 100) : null;
+        el.querySelector('[data-calc]').innerHTML = `<div class="metric"><div class="l">List value</div><div class="v">${inr(list)}</div></div><div class="metric"><div class="l">Cost to deliver</div><div class="v">${inr(cost)}</div></div>
+          <div class="metric"><div class="l">Margin at selling price</div><div class="v" style="color:${margin == null ? 'inherit' : margin < 20 ? 'var(--alert)' : margin < 40 ? 'var(--warn)' : 'var(--good)'}">${margin == null ? '—' : margin + '%'}</div>${has && list ? `<span class="small faint">${price <= list ? Math.round((1 - price / list) * 100) + '% off list' : 'above list'}</span>` : ''}</div>
+          <div class="metric"><div class="l">After max discount</div><div class="v">${worst == null ? '—' : inr(worst)}</div>${worst != null && worst < cost ? '<span class="small" style="color:var(--alert)">below cost</span>' : ''}</div>`;
+        el.querySelector('[data-bc]').hidden = !(has && price < cost);
+        if (!f.price.value && list) f.price.placeholder = String(list);
+      };
+      f.addEventListener('input', calc); f.addEventListener('change', calc); calc();
       const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => { const b = formData(el.querySelector('[data-f]')); b.machine_types = MACHINES.filter(m => b['mt_' + m.id]).map(m => m.id); return api('/staff/packages' + (p.id ? '/' + p.id : ''), { method: p.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Package saved'); reload(); }).catch(() => {}));
+      save.addEventListener('click', () => busy(save, () => { const b = formData(f); b.active = b.active === '1'; b.machine_types = MACHINES.filter(m => b['mt_' + m.id]).map(m => m.id); return api('/staff/packages' + (p.id ? '/' + p.id : ''), { method: p.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Package saved'); reload(); }).catch(() => {}));
     },
   });
 }

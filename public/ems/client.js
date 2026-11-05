@@ -1,7 +1,7 @@
 import {
   api, esc, icon, toast, modal, formData, busy, field, inp, emptyState, slotPicker, lineChart, ring, insightList, deltaTag, measureSeries,
   dietView, today, nowLocal, dayDiff, fDay, fDate, fLong, fTime, fWhen, inr, kg, first, prettyPhone, pill, KIND_LABEL, CLINIC_PHONE, CLINIC_TEL,
-  BASE, PROGRAMME_LABEL, admState, admSteps, letterBox, screeningForm, readScreening, sigPad,
+  BASE, includesText, PROGRAMME_LABEL, admState, admSteps, letterBox, screeningForm, readScreening, sigPad,
 } from './core.js';
 
 let ME, APP, BODY, DATA;
@@ -56,7 +56,7 @@ function home() {
         : `<div><b>No session booked</b><span>${p && p.available ? `${p.available} session${p.available > 1 ? 's' : ''} ready to book` : 'Ask the clinic about your next package'}</span></div>${p && p.available ? '<a class="btn sm gold" href="#/book">Book now</a>' : `<a class="btn sm gold" href="tel:${CLINIC_TEL}">Call</a>`}`}</div>
     </section>
     ${admCard()}
-    ${!checkedToday ? `<a href="#/plan" class="panel" style="display:flex;gap:14px;align-items:center;text-decoration:none;background:var(--gold-soft);border-color:transparent">${icon('clipboard-check', 24)}<div style="flex:1"><b>Log today's check-in</b><p class="small muted">Water, steps, sleep and meals — 20 seconds.</p></div>${icon('chevron-right', 20)}</a>` : ''}
+    ${!checkedToday && DATA.access.diet_plan ? `<a href="#/plan" class="panel" style="display:flex;gap:14px;align-items:center;text-decoration:none;background:var(--gold-soft);border-color:transparent">${icon('clipboard-check', 24)}<div style="flex:1"><b>Log today's check-in</b><p class="small muted">Water, steps, sleep and meals — 20 seconds.</p></div>${icon('chevron-right', 20)}</a>` : ''}
     <section class="panel"><div class="panel-h"><div class="t">${icon('flame', 20)}<h3>Your momentum</h3></div></div>
       <div class="score"><b>${M.score}</b><div class="meter"><i style="width:${M.score}%"></i></div></div>
       <p class="small muted" style="margin-top:8px">Based on your sessions, daily habits and progress over the last few weeks.${M.target && M.target.eta ? ` At this pace you could reach ${M.target.value} kg around ${fDate(M.target.eta)}.` : ''}</p></section>
@@ -101,6 +101,10 @@ function book() {
 
 /* ---------- Progress ---------- */
 function progress() {
+  if (!DATA.access.measurements && !DATA.measurements.length) {
+    BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>Your progress</h1></div></div><section class="panel">${emptyState('lock', 'Progress measurements and charts aren\'t part of your current package. Ask the clinic about a package that includes them.')}</section>`;
+    return;
+  }
   const M = DATA.insights.metrics, ch = M.change;
   const last = k => { for (let i = DATA.measurements.length - 1; i >= 0; i--) if (DATA.measurements[i][k] != null) return DATA.measurements[i][k]; return null; };
   const tile = (l, k, u) => `<div class="metric"><div class="l">${l}</div><div class="v">${last(k) != null ? kg(last(k)) : '—'}<small>${last(k) != null ? u : ''}</small></div>${ch[k] ? deltaTag(ch[k].diff, u === '%' ? '%' : ' ' + u, k !== 'muscle_mass') : '<span class="small faint">—</span>'}</div>`;
@@ -121,6 +125,11 @@ function progress() {
 
 /* ---------- Plan & check-in ---------- */
 function plan() {
+  if (!DATA.access.diet_plan) {
+    BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>My plan</h1><p>Daily habits and food guidance from your coach</p></div></div>
+      <section class="panel">${emptyState('lock', 'The diet and lifestyle plan with daily check-ins isn\'t part of your current package. Ask the clinic about a package that includes it.', '<a class="btn wa" href="https://wa.me/919778458883?text=' + encodeURIComponent('Hi, I would like to know about packages with the diet and lifestyle plan.') + '" target="_blank" rel="noopener">Ask on WhatsApp</a>')}</section>`;
+    return;
+  }
   const P = DATA.plan;
   const c = DATA.checkins.find(x => x.day === today()) || {};
   const v = { water: c.water ?? 0, sleep: c.sleep ?? 7, meals: c.meals ?? 0, energy: c.energy ?? 0 };
@@ -160,6 +169,7 @@ function account() {
       ${DATA.packages.length ? DATA.packages.slice().reverse().map(p => `<div class="pkg" style="grid-template-columns:1fr"><div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(p.name)}</b>${pill(p.state)}</div>
         <div class="bar" style="margin:8px 0 6px"><i style="width:${p.used / p.sessions_total * 100}%"></i><i class="b" style="width:${p.booked / p.sessions_total * 100}%"></i></div>
         <span class="small muted">${p.used} done, ${p.booked} booked, ${p.remaining} left of ${p.sessions_total}${p.expiry_date ? ` · use by ${fDate(p.expiry_date)}` : ''}</span>
+        <p class="small" style="margin-top:4px">Includes ${esc(includesText(p.ent, p.sessions_total))}</p>
         <p class="small" style="margin-top:4px">${inr(p.due)} · paid ${inr(p.paid)}${p.balance > 0 ? ` · <b style="color:var(--warn)">${inr(p.balance)} due</b>` : ''}</p></div></div>`).join('') : emptyState('package', 'No package yet.')}</section>
     ${DATA.payments.length ? `<section class="panel flush"><div class="panel-h" style="padding:16px 16px 0"><div class="t">${icon('receipt', 20)}<h3>Payments</h3></div></div><div class="rows" style="margin-top:6px">${DATA.payments.map(p => `<div class="row"><div class="grow"><b>${inr(p.amount)}</b><span>${esc(fDate(p.paid_on))} · ${esc(p.method)}</span></div><span class="small muted">${esc(p.package_name || '')}</span></div>`).join('')}</div></section>` : ''}
     <a href="#/admission" class="panel" style="display:flex;gap:14px;align-items:center;text-decoration:none">${icon('shield-check', 22)}<div style="flex:1"><b>Admission and consent</b><p class="small muted">${DATA.admission ? esc(DATA.admission.step[0].toUpperCase() + DATA.admission.step.slice(1)) : 'Not started'}${DATA.admission && DATA.admission.valid_until ? ' · valid until ' + fDate(DATA.admission.valid_until) : ''}</p></div>${icon('chevron-right', 20)}</a>

@@ -46,7 +46,18 @@ export const prettyPhone = p => { const d = String(p || '').replace(/\D/g, '').s
 export const wa = (phone, text) => { let d = String(phone || '').replace(/\D/g, ''); if (d.length === 10) d = '91' + d; return `https://wa.me/${d}?text=${encodeURIComponent(text)}`; };
 export const STATUS_LABEL = { booked: 'Booked', attended: 'Attended', no_show: 'No-show', cancelled: 'Cancelled', active: 'Active', paused: 'Paused', completed: 'Completed', expired: 'Expired', closed: 'Closed', new: 'New', contacted: 'Contacted', 'not interested': 'Not interested' };
 export const pill = (s, label) => `<span class="pill ${esc(String(s).replace(/\s/g, '-'))}">${esc(label || STATUS_LABEL[s] || s)}</span>`;
-export const KIND_LABEL = { session: 'EMS session', consultation: 'Consultation', review: 'Progress review' };
+export const KIND_LABEL = { session: 'EMS session', consultation: 'Initial consultation', review: 'Progress review', wm_consult: 'Weight-management consultation' };
+export function includesText(e, sessions) {
+  if (!e) return '';
+  const parts = [];
+  const n = sessions ?? e.sessions;
+  if (n) parts.push(`${n} EMS session${n > 1 ? 's' : ''}`);
+  if (e.reviews) parts.push(e.legacy ? 'reviews' : `${e.reviews} progress review${e.reviews > 1 ? 's' : ''}`);
+  if (e.wm_consults) parts.push(e.legacy ? 'weight-management consultations' : `${e.wm_consults} weight-management consultation${e.wm_consults > 1 ? 's' : ''}`);
+  if (e.diet_plan) parts.push('diet and lifestyle plan');
+  if (e.measurements) parts.push('progress measurements and charts');
+  return parts.join(', ');
+}
 
 /* ---------- UI primitives ---------- */
 export function toast(msg, err = false) {

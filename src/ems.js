@@ -13,6 +13,7 @@
 
 import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify } from './util.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
+import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED } from './packages.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
 
 const STAFF_TTL_H = 12;
@@ -20,7 +21,7 @@ const CLIENT_TTL_D = 30;
 const SLOT_MIN = 30;
 const HOURS = { 0: ['10:00', '14:00'], 1: ['10:00', '20:00'], 2: ['10:00', '20:00'], 3: ['10:00', '20:00'], 4: ['10:00', '20:00'], 5: ['10:00', '20:00'], 6: ['10:00', '20:00'] };
 const APPT_STATUSES = ['booked', 'attended', 'no_show', 'cancelled'];
-const APPT_KINDS = ['session', 'consultation', 'review'];
+const APPT_KINDS = ['session', 'consultation', 'review', 'wm_consult'];
 const PAY_METHODS = ['UPI', 'Cash', 'Card', 'Bank transfer'];
 const LEAD_STATUSES = ['new', 'contacted', 'booked', 'not interested'];
 const DIETS = ['kerala-balanced', 'vegetarian', 'high-protein', 'low-gi'];
@@ -177,9 +178,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=5">
+<link rel="stylesheet" href="/ems/app.css?v=6">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=5"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=6"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -266,6 +267,8 @@ async function route(request, env, url, ctx, base, p) {
     if (m === 'GET') { const d = await unitDetail(env, +r[1]); return d ? api({ ok: true, ...d }) : api({ ok: false, error: 'Not found' }, 404); }
     if (m === 'PUT') return admin ? done(await saveUnit(env, +r[1], body)) : api({ ok: false, error: 'Only head-office admins can change unit settings.' }, 403);
   }
+  if (p === '/staff/price-list' && m === 'GET') return api({ ok: true, items: await priceList(env) });
+  if (p === '/staff/price-list' && m === 'PUT') return admin ? done(await savePriceList(env, body.items)) : api({ ok: false, error: 'Only admins can change prices.' }, 403);
   if (p === '/staff/machines' && m === 'GET') return api({ ok: true, machines: await listMachines(env), categories: MACHINE_CATEGORIES });
   if (p === '/staff/machines' && m === 'POST') return admin ? done(await saveMachine(env, null, body)) : api({ ok: false, error: 'Only admins can add machines.' }, 403);
   if ((r = p.match(/^\/staff\/machines\/(\d+)$/)) && m === 'PUT') return admin ? done(await saveMachine(env, +r[1], body)) : api({ ok: false, error: 'Only admins can change machines.' }, 403);
@@ -315,8 +318,8 @@ async function route(request, env, url, ctx, base, p) {
     if (r[2] === 'withdraw' && m === 'POST') return done(await withdraw(env, a, body, me.name));
   }
   if ((r = p.match(/^\/staff\/clients\/(\d+)\/plan$/)) && m === 'PUT') return savePlan(env, me, +r[1], body);
-  if ((r = p.match(/^\/staff\/clients\/(\d+)\/packages$/)) && m === 'POST') return assignPackage(env, +r[1], body);
-  if ((r = p.match(/^\/staff\/client-packages\/(\d+)$/)) && m === 'PUT') return updateClientPackage(env, +r[1], body);
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/packages$/)) && m === 'POST') return assignPackage(env, +r[1], body, me);
+  if ((r = p.match(/^\/staff\/client-packages\/(\d+)$/)) && m === 'PUT') { if (body.sessions_total !== undefined && !admin) return api({ ok: false, error: 'Only admins can change the sessions on a sold package.' }, 403); return updateClientPackage(env, +r[1], { ...body, _admin: admin }); }
   if (p === '/staff/measurements' && m === 'POST') return addMeasurement(env, me, body);
   if ((r = p.match(/^\/staff\/measurements\/(\d+)$/)) && m === 'DELETE') { await env.DB.prepare('DELETE FROM ems_measurements WHERE id=?').bind(+r[1]).run(); return api({ ok: true }); }
   if (p === '/staff/payments' && m === 'POST') return addPayment(env, me, body);
@@ -335,7 +338,8 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/staff/reminders/log' && m === 'POST') return logReminder(env, me, body);
   if (p === '/staff/packages' && m === 'GET') {
     const { results } = await env.DB.prepare('SELECT * FROM ems_packages ORDER BY active DESC, sessions, id').all();
-    return api({ ok: true, packages: results });
+    const list = await priceList(env);
+    return api({ ok: true, packages: (results || []).map(p => { const ent = entOf(p, false); ent.sessions = p.sessions; return { ...p, ent, valuation: valuation(ent, list) }; }), price_list: list });
   }
   if (p === '/staff/packages' && m === 'POST') return admin ? savePackageDef(env, null, body) : api({ ok: false, error: 'Admins only.' }, 403);
   if ((r = p.match(/^\/staff\/packages\/(\d+)$/)) && m === 'PUT') return admin ? savePackageDef(env, +r[1], body) : api({ ok: false, error: 'Admins only.' }, 403);
@@ -446,20 +450,29 @@ async function unitFor(env, b, fallback) {
 
 async function packagesFor(env, clientId) {
   const { results } = await env.DB.prepare(`SELECT cp.*,
-    (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.status='attended') used,
-    (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.status='booked') booked,
+    (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='attended') used,
+    (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='booked') booked,
     (SELECT IFNULL(SUM(amount),0) FROM ems_payments p WHERE p.client_package_id=cp.id) paid
     FROM ems_client_packages cp WHERE cp.client_id=? ORDER BY cp.start_date, cp.id`).bind(clientId).all();
   const t = today();
+  const use = await usage(env, (results || []).map(p => p.id));
   return (results || []).map(p => {
-    const remaining = Math.max(0, p.sessions_total - p.used);
+    const u = use[p.id] || {};
+    const ent = entOf(p);
+    const sessUsed = p.used - 0, sessBooked = p.booked;
+    // used/booked above count every linked appointment; sessions only count kind='session'
+    const reviews = u.review || 0, wm = u.wm_consult || 0;
+    const usedS = Math.max(0, sessUsed), bookedS = Math.max(0, sessBooked);
+    const remaining = Math.max(0, p.sessions_total - usedS);
     const due = Math.max(0, p.price - p.discount);
+    const reviews_left = Math.max(0, ent.reviews - reviews), wm_left = Math.max(0, ent.wm_consults - wm);
     let state = p.status;
     if (state === 'active') {
-      if (p.used >= p.sessions_total) state = 'completed';
-      else if (p.expiry_date && p.expiry_date < t) state = 'expired';
+      if (p.expiry_date && p.expiry_date < t) state = 'expired';
+      else if (p.sessions_total > 0 && usedS >= p.sessions_total && !reviews_left && !wm_left) state = 'completed';
+      else if (p.sessions_total === 0 && !reviews_left && !wm_left && !ent.diet_plan) state = 'completed';
     }
-    return { ...p, remaining, available: Math.max(0, remaining - p.booked), due, balance: due - p.paid, state };
+    return { ...p, ent, used: usedS, booked: bookedS, remaining, available: Math.max(0, remaining - bookedS), due, balance: due - p.paid, state, reviews_used: reviews, wm_used: wm, reviews_left, wm_left };
   });
 }
 async function bookablePackage(env, clientId) {
@@ -523,6 +536,16 @@ async function staffBook(env, me, b, sc) {
     if (!el.ok) return bad(el.reason);
     pkgId = pkg.id; types = typesOf(pkg);
     if (await recoveryClash(env, clientId, start)) warnings.push('Less than 48 hours from another session.');
+  }
+  if (clientId && (kind === 'review' || kind === 'wm_consult')) {
+    const pk = (await packagesFor(env, clientId)).find(p => p.state === 'active' && (kind === 'review' ? p.reviews_left : p.wm_left) > 0);
+    if (!pk) return bad(NOT_INCLUDED[kind]);
+    pkgId = pk.id;
+  }
+  if (clientId && kind === 'consultation') {
+    const pkgs = await packagesFor(env, clientId);
+    const el = await eligible(env, clientId, ['ems']);
+    if (el.ok && pkgs.some(p => p.state === 'active')) return bad('This client is already admitted and on a package. Book a progress review or weight-management consultation included in their package instead.');
   }
   const cl = clientId ? await env.DB.prepare('SELECT home_unit_id, coach_id FROM ems_clients WHERE id=?').bind(clientId).first() : null;
   const unit = await unitFor(env, b, (cl && cl.home_unit_id) || sc.one || sc.ids[0]);
@@ -683,6 +706,7 @@ async function resetPin(env, id) {
 }
 
 async function savePlan(env, me, id, b) {
+  if (!access(await packagesFor(env, id)).diet_plan) return bad(NOT_INCLUDED.diet_plan);
   const diet = DIETS.includes(b.diet) ? b.diet : 'kerala-balanced';
   const water = int(b.water_target, 4, 20), steps = int(b.steps_target, 1000, 25000), sleep = num(b.sleep_target, 5, 10);
   if ([water, steps, sleep].some(v => v === undefined || v === null)) return bad('Check the daily targets.');
@@ -694,26 +718,35 @@ async function savePlan(env, me, id, b) {
   return api({ ok: true });
 }
 
-async function assignPackage(env, clientId, b) {
-  const def = parseInt(b.package_id, 10) ? await env.DB.prepare('SELECT * FROM ems_packages WHERE id=?').bind(parseInt(b.package_id, 10)).first() : null;
-  const name = clean(b.name, 80) || (def && def.name);
-  const sessions = int(b.sessions_total != null && b.sessions_total !== '' ? b.sessions_total : def && def.sessions, 1, 200);
-  const price = int(b.price != null && b.price !== '' ? b.price : def && def.price, 0, 10000000);
+async function assignPackage(env, clientId, b, me) {
+  const admin = me && me.role === 'admin';
+  const def = parseInt(b.package_id, 10) ? await env.DB.prepare('SELECT * FROM ems_packages WHERE id=? AND active=1').bind(parseInt(b.package_id, 10)).first() : null;
+  if (!def && !admin) return bad('Choose a package from the catalogue. Only admins can create custom packages.');
+  let ent, name, price, programme, validity, mts, maxDisc;
+  if (def) {
+    ent = entOf(def, false); ent.sessions = def.sessions;
+    name = def.name; price = def.price; programme = def.programme; validity = def.validity_days; mts = def.machine_types || '[]'; maxDisc = def.max_discount || 0;
+    if (price == null) return bad('This package has no price yet. An admin must set it in the package builder.');
+  } else {
+    ent = readEntitlements(b);
+    if (!ent) return bad('Check what the custom package includes.');
+    name = clean(b.name, 80); price = int(b.price, 0, 10000000); programme = ['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems';
+    validity = int(b.validity_days, 7, 730) || 90; mts = JSON.stringify((Array.isArray(b.machine_types) ? b.machine_types : []).map(Number).filter(Boolean)); maxDisc = 100;
+    if (!name || price == null || price === undefined) return bad('Enter the custom package name and price.');
+  }
+  if (programme !== 'weight' && ent.sessions < 1) return bad('An EMS package needs at least one session.');
   const discount = int(b.discount || 0, 0, 10000000);
-  const start = isDate(b.start_date) ? b.start_date : today();
-  if (!name || !sessions) return bad('Choose a package and the number of sessions.');
-  const programme = def ? def.programme : (['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems');
+  if (discount === undefined || discount > price) return bad('Check the discount.');
+  const limit = Math.floor(price * maxDisc / 100);
+  if (!admin && discount > limit) return bad(maxDisc ? `The most you can discount this package is ${maxDisc}% (₹${limit.toLocaleString('en-IN')}). Ask an admin for more.` : 'Discounts are not allowed on this package. Ask an admin.');
   const el = await eligible(env, clientId, needsProgrammes(programme));
   if (!el.ok) return bad(el.reason);
-  if (price == null || price === undefined) return bad('Enter the package price.');
-  if (discount > price) return bad('The discount is more than the price.');
-  const validity = def ? def.validity_days : int(b.validity_days, 7, 730) || 90;
-  const expiry = isDate(b.expiry_date) ? b.expiry_date : addDays(start, validity);
+  const start = isDate(b.start_date) ? b.start_date : today();
+  const expiry = addDays(start, validity);
   const cl = await env.DB.prepare('SELECT home_unit_id FROM ems_clients WHERE id=?').bind(clientId).first();
   const unitId = parseInt(b.unit_id, 10) || (cl && cl.home_unit_id) || 1;
-  const mts = def ? (def.machine_types || '[]') : JSON.stringify((Array.isArray(b.machine_types) ? b.machine_types : []).map(Number).filter(Boolean));
-  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme, unit_id, machine_types) VALUES (?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(clientId, def ? def.id : null, name, sessions, price, discount, start, expiry, programme, unitId, mts).run();
+  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme, unit_id, machine_types, entitlements) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
+    .bind(clientId, def ? def.id : null, name, ent.sessions, price, discount, start, expiry, programme, unitId, mts, JSON.stringify(ent)).run();
   return api({ ok: true, id: r.meta.last_row_id });
 }
 
@@ -721,7 +754,7 @@ async function updateClientPackage(env, id, b) {
   const sets = [], binds = [];
   if (['active', 'paused', 'closed'].includes(b.status)) { sets.push('status=?'); binds.push(b.status); }
   if (isDate(b.expiry_date)) { sets.push('expiry_date=?'); binds.push(b.expiry_date); }
-  const s = int(b.sessions_total, 1, 200); if (s) { sets.push('sessions_total=?'); binds.push(s); }
+  const s = int(b.sessions_total, 1, 200); if (s && b._admin) { sets.push('sessions_total=?'); binds.push(s); }
   if (!sets.length) return bad('Nothing to change.');
   await env.DB.prepare(`UPDATE ems_client_packages SET ${sets.join(',')} WHERE id=?`).bind(...binds, id).run();
   return api({ ok: true });
@@ -729,6 +762,7 @@ async function updateClientPackage(env, id, b) {
 
 async function addMeasurement(env, me, b) {
   const clientId = parseInt(b.client_id, 10);
+  if (!access(await packagesFor(env, clientId)).measurements) return bad(NOT_INCLUDED.measurements);
   const day = isDate(b.measured_on) && b.measured_on <= today() ? b.measured_on : today();
   const v = { weight: num(b.weight, 25, 300), waist: num(b.waist, 40, 250), hips: num(b.hips, 50, 250), body_fat: num(b.body_fat, 3, 70), muscle_mass: num(b.muscle_mass, 5, 150) };
   if (Object.values(v).some(x => x === undefined)) return bad('One of the measurements looks out of range. Use kg, cm and %.');
@@ -762,6 +796,7 @@ async function listPayments(env, url, sc) {
 }
 
 async function saveCheckin(env, clientId, b) {
+  if (!access(await packagesFor(env, clientId)).diet_plan) return bad('Daily check-ins come with the diet and lifestyle plan, which isn\'t part of your package. Ask the clinic about upgrading.');
   const day = isDate(b.day) && b.day <= today() && b.day >= addDays(today(), -7) ? b.day : today();
   const v = { water: int(b.water, 0, 30), steps: int(b.steps, 0, 60000), sleep: num(b.sleep, 0, 16), meals: int(b.meals, 0, 4), energy: int(b.energy, 1, 5) };
   if (Object.values(v).some(x => x === undefined)) return bad('Please check your entries.');
@@ -796,6 +831,7 @@ async function clientView(env, id, staff) {
   data.admissions = (adms || []).map(a => publicAdmission(a, c, staff));
   data.admission = data.admissions[0] || null;
   data.screen_questions = SCREEN_QS;
+  data.access = access(pkgs);
   data.insights = insights(data, staff);
   if (!staff) {
     delete client.staff_notes; delete client.screening; delete client.lead_id;
@@ -1003,7 +1039,7 @@ async function reminders(env, sc) {
   const push = r => { if (!done.has(`${r.kind}:${r.ref}`)) out.push(r); };
 
   for (const a of tmr) push({ kind: 'tomorrow', ref: String(a.id), priority: 1, client_id: a.client_id, name: a.name || a.guest_name, phone: a.phone || a.guest_phone,
-    title: `${a.kind === 'session' ? 'Session' : a.kind === 'consultation' ? 'Consultation' : 'Review'} tomorrow at ${fmtTime(a.start_at)}`, start_at: a.start_at });
+    title: `${({ session: 'EMS session', consultation: 'Initial consultation', review: 'Progress review', wm_consult: 'Weight-management consultation' })[a.kind] || 'Appointment'} tomorrow at ${fmtTime(a.start_at)}`, start_at: a.start_at });
 
   for (const c of clients) {
     const pk = await packagesFor(env, c.id);
@@ -1092,14 +1128,22 @@ async function convertLead(env, me, id, b, sc) {
 /* ---------------- Admin: packages & staff ---------------- */
 
 async function savePackageDef(env, id, b) {
-  const name = clean(b.name, 80), sessions = int(b.sessions, 1, 200), price = int(b.price, 0, 10000000), validity = int(b.validity_days, 7, 730);
-  if (!name || !sessions || price === undefined || !validity) return bad('Enter a name, sessions, price and validity.');
-  const desc = nz(clean(b.description, 200)), active = b.active === false ? 0 : 1;
+  const name = clean(b.name, 80), validity = int(b.validity_days, 7, 730), price = int(b.price, 0, 10000000);
+  const ent = readEntitlements(b);
+  if (!name || !validity || !ent) return bad('Enter a name, validity and what the package includes.');
   const prog = ['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems';
+  if (prog !== 'weight' && ent.sessions < 1) return bad('An EMS package needs at least one EMS session.');
+  if (prog === 'ems' && (ent.wm_consults || ent.diet_plan)) return bad('Weight-management consultations and the diet plan need the "EMS + weight management" or "Weight management" programme.');
+  if (prog === 'weight' && ent.sessions) return bad('A weight-management-only package cannot include EMS sessions.');
+  if (price === undefined || price === null) return bad('Enter the selling price.');
+  const v = valuation(ent, await priceList(env));
+  if (price < v.cost && b.below_cost !== true) return api({ ok: false, error: `The price is below cost (₹${v.cost.toLocaleString('en-IN')}). Tick "allow below cost" to save anyway.`, below_cost: true }, 400);
+  const maxDisc = Math.min(50, Math.max(0, parseInt(b.max_discount, 10) || 0));
+  const desc = nz(clean(b.description, 200)), active = b.active === false ? 0 : 1;
   const mts = JSON.stringify((Array.isArray(b.machine_types) ? b.machine_types : []).map(Number).filter(Boolean));
-  if (prog !== 'weight' && mts === '[]' && b.require_machine) return bad('Link at least one machine to this package.');
-  if (id) await env.DB.prepare('UPDATE ems_packages SET name=?, sessions=?, price=?, validity_days=?, description=?, active=?, programme=?, machine_types=? WHERE id=?').bind(name, sessions, price, validity, desc, active, prog, mts, id).run();
-  else await env.DB.prepare('INSERT INTO ems_packages (name, sessions, price, validity_days, description, active, programme, machine_types) VALUES (?,?,?,?,?,?,?,?)').bind(name, sessions, price, validity, desc, active, prog, mts).run();
+  const vals = [name, ent.sessions, price, validity, desc, active, prog, mts, JSON.stringify(ent), v.cost, maxDisc];
+  if (id) await env.DB.prepare('UPDATE ems_packages SET name=?, sessions=?, price=?, validity_days=?, description=?, active=?, programme=?, machine_types=?, entitlements=?, cost=?, max_discount=? WHERE id=?').bind(...vals, id).run();
+  else await env.DB.prepare('INSERT INTO ems_packages (name, sessions, price, validity_days, description, active, programme, machine_types, entitlements, cost, max_discount) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(...vals).run();
   return api({ ok: true });
 }
 
