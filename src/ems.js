@@ -12,6 +12,7 @@
 // consultation enquiries from the website appear here automatically.
 
 import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify } from './util.js';
+import * as AC from './academy.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED } from './packages.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
@@ -178,9 +179,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=6">
+<link rel="stylesheet" href="/ems/app.css?v=7">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=6"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=7"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -188,6 +189,7 @@ function shell(base) {
 async function route(request, env, url, ctx, base, p) {
   const m = request.method;
   let body = {};
+  if (p === '/staff/academy/upload' && m === 'POST') return academyUpload(request, env);
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
     if (!(request.headers.get('content-type') || '').includes('application/json')) return api({ ok: false, error: 'Unsupported' }, 415);
@@ -273,7 +275,8 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/staff/machines' && m === 'POST') return admin ? done(await saveMachine(env, null, body)) : api({ ok: false, error: 'Only admins can add machines.' }, 403);
   if ((r = p.match(/^\/staff\/machines\/(\d+)$/)) && m === 'PUT') return admin ? done(await saveMachine(env, +r[1], body)) : api({ ok: false, error: 'Only admins can change machines.' }, 403);
   if (p === '/staff/certifications' && m === 'GET') return api({ ok: true, certifications: await listCertifications(env) });
-  if (p === '/staff/certifications' && m === 'POST') return done(await certify(env, me, body));
+  if (p === '/staff/certifications' && m === 'POST') return api({ ok: false, error: 'Trainers are now certified through the Hasta EMS Academy (Academy → Trainees).' }, 410);
+  if (p.startsWith('/staff/academy')) { const res = await academyRoute(request, env, url, me, p, m, body, admin); if (res) return res; }
   if ((r = p.match(/^\/staff\/certifications\/(\d+)\/revoke$/)) && m === 'POST') return done(await revokeCert(env, me, +r[1], body));
   if (p === '/staff/rota' && m === 'POST') {
     if (!manager || !scope.units.includes(parseInt(body.unit_id, 10))) return api({ ok: false, error: 'Only a unit manager or admin can change the rota.' }, 403);
@@ -592,7 +595,8 @@ async function updateAppointment(env, id, b) {
 }
 
 const APPT_SELECT = `SELECT a.*, c.name client_name, c.phone client_phone, cp.name package_name, c.coach_id, s.name coach_name,
-    t.name trainer_name, dv.name device_name, un.name unit_name, un.code unit_code
+    t.name trainer_name, dv.name device_name, un.name unit_name, un.code unit_code,
+    (SELECT ce.code FROM ems_certifications ce WHERE ce.staff_id=a.trainer_id AND ce.machine_type_id=dv.machine_type_id AND ce.status='active' AND ce.code IS NOT NULL ORDER BY ce.valid_until DESC LIMIT 1) trainer_cert
     FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id LEFT JOIN ems_client_packages cp ON cp.id=a.client_package_id
     LEFT JOIN ems_staff s ON s.id=c.coach_id LEFT JOIN ems_staff t ON t.id=a.trainer_id LEFT JOIN ems_devices dv ON dv.id=a.device_id LEFT JOIN ems_units un ON un.id=a.unit_id`;
 async function listAppointments(env, url, sc) {
@@ -1192,4 +1196,63 @@ export async function emsDaily(env) {
   for (const a of (results || []).slice(0, 15)) rows.push([fmtTime(a.start_at), `${a.name} · ${a.kind}`]);
   rows.push(['Follow-ups waiting', String(rem.length)]);
   await notify(env, `EMS today: ${(results || []).length} appointments, ${rem.length} follow-ups`, rows, '/', env.EMS_ORIGIN || 'https://ems.hastawellnessclinic.com');
+}
+
+/* ---------------- Hasta EMS Academy ---------------- */
+
+const UPLOAD_TYPES = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp' };
+async function academyUpload(request, env) {
+  if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
+  const me = await getSession(request, env);
+  if (!me || me.kind !== 'staff') return api({ ok: false, error: 'Please sign in.' }, 401);
+  const type = (request.headers.get('content-type') || '').split(';')[0].trim();
+  if (!UPLOAD_TYPES[type]) return bad('Upload a PDF, JPG, PNG or WebP file.');
+  const len = parseInt(request.headers.get('content-length') || '0', 10);
+  if (!len || len > 8 * 1024 * 1024) return api({ ok: false, error: 'Files must be under 8 MB.' }, 413);
+  const buf = await request.arrayBuffer();
+  if (buf.byteLength > 8 * 1024 * 1024) return api({ ok: false, error: 'Files must be under 8 MB.' }, 413);
+  const key = `academy/${crypto.randomUUID()}.${UPLOAD_TYPES[type]}`;
+  await env.CVS.put(key, buf, { httpMetadata: { contentType: type }, customMetadata: { by: String(me.id) } });
+  return api({ ok: true, key });
+}
+
+async function academyRoute(request, env, url, me, p, m, body, admin) {
+  let r;
+  const ok = x => api({ ok: true, ...x });
+  if (p === '/staff/academy' && m === 'GET') return ok(await AC.overview(env, me));
+  if (p === '/staff/academy/file' && m === 'GET') {
+    const key = url.searchParams.get('key') || '';
+    if (!/^academy\/[0-9a-f-]{36}\.(pdf|jpg|png|webp)$/.test(key)) return bad('Invalid file.');
+    const obj = await env.CVS.get(key);
+    if (!obj) return api({ ok: false, error: 'Not found' }, 404);
+    return new Response(obj.body, { headers: { ...HEADERS, 'content-type': obj.httpMetadata?.contentType || 'application/octet-stream', 'content-disposition': 'inline', 'cache-control': 'private, no-store' } });
+  }
+  if ((r = p.match(/^\/staff\/academy\/curriculum\/(\d+)\/approve$/)) && m === 'POST') return done(await AC.approveCurriculum(env, me, +r[1]));
+  if (p === '/staff/academy/curriculum' && m === 'POST') return done(await AC.newVersion(env, me, body));
+  if (p === '/staff/academy/materials' && m === 'GET') return ok({ materials: await AC.listMaterials(env) });
+  if (p === '/staff/academy/materials' && m === 'POST') return done(await AC.addMaterial(env, me, body));
+  if (p === '/staff/academy/questions' && m === 'GET') return ok({ questions: await AC.listQuestions(env) });
+  if (p === '/staff/academy/questions' && m === 'POST') return done(await AC.saveQuestion(env, me, null, body));
+  if ((r = p.match(/^\/staff\/academy\/questions\/(\d+)$/)) && m === 'PUT') return done(await AC.saveQuestion(env, me, +r[1], body));
+  if (p === '/staff/academy/questions/approve' && m === 'POST') return done(await AC.approveQuestions(env, me, body.ids, body.status));
+  if (p === '/staff/academy/quals' && m === 'GET') return ok({ quals: await AC.listQuals(env) });
+  if (p === '/staff/academy/quals' && m === 'POST') return done(await AC.submitQual(env, me, body));
+  if ((r = p.match(/^\/staff\/academy\/quals\/(\d+)\/(verify|reject)$/)) && m === 'POST') return done(await AC.verifyQual(env, me, +r[1], body, r[2]));
+  if ((r = p.match(/^\/staff\/academy\/master-course\/(\d+)$/)) && m === 'POST') return done(await AC.recordMasterCourse(env, me, +r[1], body));
+  if (p === '/staff/academy/records' && m === 'GET') return ok({ records: await AC.listRecords(env, me, url.searchParams.get('mine') !== '1') });
+  if (p === '/staff/academy/records' && m === 'POST') return done(await AC.openRecord(env, me, body));
+  if ((r = p.match(/^\/staff\/academy\/records\/(\d+)\/test$/)) && m === 'POST') return done(await AC.startTest(env, me, +r[1]));
+  if ((r = p.match(/^\/staff\/academy\/attempts\/(\d+)$/)) && m === 'POST') return done(await AC.submitTest(env, me, +r[1], body));
+  if ((r = p.match(/^\/staff\/academy\/records\/(\d+)\/retrain$/)) && m === 'POST') return done(await AC.resetRetraining(env, me, +r[1], body));
+  if ((r = p.match(/^\/staff\/academy\/records\/(\d+)\/logs$/)) && m === 'POST') return done(await AC.addLog(env, me, +r[1], body));
+  if ((r = p.match(/^\/staff\/academy\/records\/(\d+)\/practical$/)) && m === 'POST') return done(await AC.addPractical(env, me, +r[1], body));
+  if ((r = p.match(/^\/staff\/academy\/records\/(\d+)\/certify$/)) && m === 'POST') return done(await AC.certifyRecord(env, me, +r[1]));
+  if ((r = p.match(/^\/staff\/academy\/certificates\/(\d+)\/countersign$/)) && m === 'POST') return done(await AC.countersign(env, me, +r[1]));
+  if ((r = p.match(/^\/staff\/academy\/certificates\/(\d+)\/pdf$/)) && m === 'GET') {
+    const c = await AC.certDetail(env, 'c.id=?', +r[1]);
+    if (!c || !c.code) return api({ ok: false, error: 'This certificate was issued before the Academy and has no PDF.' }, 404);
+    const bytes = await AC.certificatePdf(env, request, c);
+    return new Response(bytes, { headers: { ...HEADERS, 'content-type': 'application/pdf', 'content-disposition': `attachment; filename="Hasta-EMS-certificate-${c.code}.pdf"` } });
+  }
+  return null;
 }

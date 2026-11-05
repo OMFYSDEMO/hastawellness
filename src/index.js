@@ -1,6 +1,7 @@
 import { PAGES } from './pages.js';
 import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify } from './util.js';
 import { handleEms, emsDaily } from './ems.js';
+import { verifyPage } from './academy.js';
 import { handleCareers, handleApply, handleAdminJobs, handleAdminApplications, handleAdminCv, careerSitemapPaths, purgeOldApplications } from './careers.js';
 // Hasta Wellness — Cloudflare Worker
 // Serves the static site (./public) and a small lead-capture API.
@@ -24,6 +25,10 @@ export default {
     if (url.hostname.startsWith('www.')) {
       url.hostname = url.hostname.slice(4);
       return Response.redirect(url.toString(), 301);
+    }
+    // Public check of a Hasta EMS Academy trainer certificate (QR codes point here).
+    if ((path === '/verify' || path.startsWith('/verify/')) && request.method === 'GET') {
+      try { return await verifyPage(env, url); } catch (err) { console.error('verify', err && err.stack || err); return new Response('Verification is unavailable. Please call +91 97784 58883.', { status: 500 }); }
     }
     // EMS progress platform: ems.* subdomain, or /ems on any other host.
     if (url.hostname.startsWith('ems.')) return handleEms(request, env, url, ctx, '', serveAsset);

@@ -57,7 +57,31 @@ Roles: admin (all units), unit manager (rota and leave), team.
 Settings → Machines holds machine models (type and features). Each unit device
 is one of these machines, and packages can be limited to specific machines.
 A trainer is allocated only to a device whose machine they hold a valid
-certificate for, issued by a Hasta wellness coach or doctor (never themselves).
+Hasta EMS Academy certificate for (see below). Certificates are no longer issued
+directly from Settings.
+
+### Hasta EMS Academy (`src/academy.js`, `public/ems/academy.js`)
+Enforces the Academy framework v1.0 agreed with the equipment supplier and
+medical lead. Staff menu → Academy.
+- **Curriculum and question bank** — v1.0 (9 modules) and 44 starter questions
+  are seeded as drafts on first use. Only a team member with the *Medical lead*
+  skill can approve the curriculum and questions; any edit returns a question
+  to draft. Materials (links or uploads to R2 under `academy/`) are added by an
+  admin or the medical lead.
+- **Master Trainers** — a coach or doctor with an external qualification on the
+  machine, checked with the issuer by a head-office admin or the medical lead
+  (never the holder or submitter; method, contact and reference are recorded),
+  plus the Master Trainer course recorded by someone else within 24 months.
+- **Training records** (per trainee and machine): theory test of 40 questions
+  drawn by area and shuffled, pass mark 80%, 3 attempts then retraining;
+  10 supervised sessions including 3 first sessions, signed by a Master Trainer;
+  the 16-point practical checklist, all items passed. Renewal with 20+ attended
+  sessions on that machine in 12 months needs the test, practical and 1 session.
+- **Certificates** — 12 months, per machine, ID `HEA-YYYY-XXXXXXXX`, PDF with QR
+  code. A unit manager certifying someone at their own unit needs a second
+  Master Trainer to countersign; until then the certificate does not allow
+  bookings. Public check: `https://hastawellnessclinic.com/verify/<ID>`.
+- Clients see "Hasta certified trainer ✓" with a verify link on upcoming sessions.
 
 ### Package builder (`src/packages.js`)
 Settings → Price list sets the list price and cost of each item (EMS session,

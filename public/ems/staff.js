@@ -4,6 +4,7 @@ import {
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
   includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
 } from './core.js';
+import { viewAcademy } from './academy.js?v=7';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
 const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';
@@ -16,7 +17,7 @@ async function team(fresh = false) { if (!TEAM || fresh) TEAM = (await api('/sta
 const coachOptions = (list, value) => [['', 'Not allocated']].concat(list.map(t => [t.id, t.name + (t.role === 'admin' ? ' (admin)' : '')]));
 const NAV = [
   ['', 'layout-dashboard', 'Dashboard'], ['schedule', 'calendar-days', 'Schedule'], ['clients', 'users', 'Clients'],
-  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['payments', 'wallet', 'Payments'],
+  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['payments', 'wallet', 'Payments'], ['academy', 'graduation-cap', 'Academy'],
 ];
 
 export function mount(app, me) {
@@ -73,6 +74,7 @@ async function route() {
     else if (top === 'payments') await viewPayments(q);
     else if (top === 'rota') await viewRota();
     else if (top === 'settings') await viewSettings();
+    else if (top === 'academy') await viewAcademy(MAIN, ME, MACHINES, q.get('tab') || 'overview', go);
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
   } catch (e) { MAIN.innerHTML = `<div class="panel"><p class="err">${esc(e.message)}</p></div>`; }
 }
@@ -1089,18 +1091,18 @@ function machineModal(m) {
 async function renderCerts(el, tm) {
   const { certifications } = await api('/staff/certifications');
   const me = tm.find(t => t.id === ME.id);
-  const canCertify = me && (me.skills || []).some(k => k === 'coach' || k === 'doctor');
+  const canCertify = false; // Certificates are issued through the Hasta EMS Academy.
   const trainers = tm.filter(t => (t.skills || []).includes('trainer'));
   const active = MACHINES.filter(x => x.active);
-  const cert = (sid, mid) => certifications.find(c => c.staff_id === sid && c.machine_type_id === mid && c.status === 'active');
+  const cert = (sid, mid) => certifications.find(c => c.staff_id === sid && c.machine_type_id === mid && (c.status === 'active' || c.status === 'pending'));
   const soon = addDays(today(), 30);
-  el.innerHTML = `<div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('shield-check', 20)}<div><h3>Trainer certification</h3><p class="small muted">A trainer is only allocated to a machine they're certified for. Certificates are issued by a Hasta wellness coach or doctor.</p></div></div>
-      ${canCertify ? `<button class="btn sm gold" data-certify>${icon('shield-check', 16)}Certify a trainer</button>` : ''}</div>
+  el.innerHTML = `<div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('shield-check', 20)}<div><h3>Trainer certification</h3><p class="small muted">A trainer is only allocated to a machine they hold a valid Hasta EMS Academy certificate for.</p></div></div>
+      <a class="btn sm gold" href="#/academy?tab=trainees">${icon('graduation-cap', 16)}Open the Academy</a></div>
     ${trainers.length && active.length ? `<div style="overflow-x:auto"><table class="t"><thead><tr><th>Trainer</th>${active.map(x => `<th>${esc(x.name)}</th>`).join('')}</tr></thead><tbody>
       ${trainers.map(t => `<tr><td><b>${esc(t.name)}</b></td>${active.map(x => { const c = cert(t.id, x.id); if (!c) return '<td><span class="pill alert">Not certified</span></td>'; const exp = c.valid_until < today();
-        return `<td>${exp ? pill('alert', 'Expired ' + fDay(c.valid_until)) : c.valid_until <= soon ? pill('warn', 'Renew by ' + fDay(c.valid_until)) : pill('good', 'Until ' + fDate(c.valid_until))}<div class="small muted" style="margin-top:4px">by ${esc(c.certifier_name)}, ${esc(c.certifier_role)}</div>${canCertify || ME.role === 'admin' ? `<button class="btn sm quiet" data-revoke="${c.id}" style="height:24px;padding:0 6px;margin-top:2px">Revoke</button>` : ''}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`
+        return `<td>${c.status === 'pending' ? pill('warn', 'Awaiting countersignature') : exp ? pill('alert', 'Expired ' + fDay(c.valid_until)) : c.valid_until <= soon ? pill('warn', 'Renew by ' + fDay(c.valid_until)) : pill('good', 'Until ' + fDate(c.valid_until))}<div class="small muted" style="margin-top:4px">by ${esc(c.certifier_name)}, ${esc(c.certifier_role)}</div>${canCertify || ME.role === 'admin' ? `<button class="btn sm quiet" data-revoke="${c.id}" style="height:24px;padding:0 6px;margin-top:2px">Revoke</button>` : ''}</td>`; }).join('')}</tr>`).join('')}</tbody></table></div>`
       : emptyState('shield-check', trainers.length ? 'Add a machine first.' : 'No team members have the EMS trainer skill yet.')}
-    ${canCertify ? '' : '<p class="small muted" style="padding:0 20px 16px">To certify, sign in with your own account that has the Wellness coach or Doctor skill.</p>'}`;
+`;
   el.querySelector('[data-certify]')?.addEventListener('click', () => modal({
     title: 'Certify a trainer',
     body: `<form data-f class="stack" style="gap:14px"><div class="grid2">${field('Trainer', sel('staff_id', trainers.filter(t => t.id !== ME.id).map(t => [t.id, t.name])))}${field('Machine', sel('machine_type_id', active.map(x => [x.id, x.name])))}</div>

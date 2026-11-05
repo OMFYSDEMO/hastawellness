@@ -11,7 +11,7 @@
 
 import { clean, nz } from './util.js';
 
-export const SKILLS = { trainer: 'EMS trainer', coach: 'Wellness coach', doctor: 'Doctor', front: 'Front desk' };
+export const SKILLS = { trainer: 'EMS trainer', coach: 'Wellness coach', doctor: 'Doctor', medical_lead: 'Medical lead', front: 'Front desk' };
 export const MAX_DEVICES = 3;
 const DAYS = [0, 1, 2, 3, 4, 5, 6];
 const toMin = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
