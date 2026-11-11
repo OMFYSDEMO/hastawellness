@@ -864,21 +864,21 @@ async function dashboard(env, me) {
   const [appts, open, pays, book, out, lds] = await Promise.all([
     listAppointments(env, d, d),
     unclosed(env),
-    env.DB.prepare('SELECT mode, COALESCE(SUM(amount),0) s, COUNT(*) n FROM cl_payments WHERE paid_on=? AND voided=0 GROUP BY mode').bind(d).all().then(x => x.results || []),
+    env.DB.prepare('SELECT mode, COALESCE(SUM(amount),0) s, COUNT(*) n FROM cl_payments WHERE paid_on=? AND voided=0 AND legacy=0 GROUP BY mode').bind(d).all().then(x => x.results || []),
     cashBook(env),
     env.DB.prepare(`SELECT COUNT(*) n, COALESCE(SUM(i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0)),0) s FROM cl_invoices i WHERE i.status='final' AND i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0) > 0.004`).first(),
     env.DB.prepare("SELECT COUNT(*) n FROM leads WHERE status='new'").first(),
   ]);
-  const billed = await env.DB.prepare("SELECT COALESCE(SUM(total - passthrough),0) s FROM cl_invoices WHERE status='final' AND invoice_date=?").bind(d).first();
+  const billed = await env.DB.prepare("SELECT COALESCE(SUM(total - passthrough),0) s FROM cl_invoices WHERE status='final' AND legacy=0 AND invoice_date=?").bind(d).first();
   return { today: d, appointments: appts, unclosed: open, collections: pays, cash: book, outstanding: { count: out.n, amount: r2(out.s) }, new_leads: lds.n, billed_today: r2(billed.s) };
 }
 async function dayBook(env, d) {
   const [invs, pays] = await Promise.all([
-    env.DB.prepare(INV_SELECT + " WHERE i.invoice_date=? AND i.status IN ('final','cancelled') ORDER BY i.invoice_no").bind(d).all().then(x => (x.results || []).map(withBalance)),
+    env.DB.prepare(INV_SELECT + " WHERE i.invoice_date=? AND i.legacy=0 AND i.status IN ('final','cancelled') ORDER BY i.invoice_no").bind(d).all().then(x => (x.results || []).map(withBalance)),
     listPayments(env, d, d),
   ]);
   const byMode = {};
-  for (const p of pays.filter(x => !x.voided)) byMode[p.mode] = r2((byMode[p.mode] || 0) + p.amount);
+  for (const p of pays.filter(x => !x.voided && !x.legacy)) byMode[p.mode] = r2((byMode[p.mode] || 0) + p.amount);
   const fin = invs.filter(i => i.status === 'final');
   const sum = k => r2(fin.reduce((s, i) => s + i[k], 0));
   return { date: d, invoices: invs, payments: pays, by_mode: byMode, totals: { invoiced: sum('total'), taxable: sum('taxable'), exempt: sum('exempt'), cgst: sum('cgst'), sgst: sum('sgst'), passthrough: sum('passthrough'), collected: r2(Object.values(byMode).reduce((a, b) => a + b, 0)) } };
@@ -887,7 +887,7 @@ async function summary(env, month) {
   const m = /^\d{4}-\d{2}$/.test(month || '') ? month : today().slice(0, 7);
   const from = m + '-01', to = m + '-31';
   const { results: gst } = await env.DB.prepare(`SELECT l.gst_rate rate, l.kind, l.tax_parts, l.taxable, l.exempt, l.cgst, l.sgst, l.total FROM cl_invoice_lines l JOIN cl_invoices i ON i.id=l.invoice_id
-    WHERE i.status='final' AND i.invoice_date BETWEEN ? AND ?`).bind(from, to).all();
+    WHERE i.status='final' AND i.legacy=0 AND i.invoice_date BETWEEN ? AND ?`).bind(from, to).all();
   const byRate = {};
   const add = (rate, value) => { const k = String(rate); byRate[k] = byRate[k] || { rate, value: 0, cgst: 0, sgst: 0 }; byRate[k].value = r2(byRate[k].value + value); if (rate > 0) { const t = r2(value * rate / 200); byRate[k].cgst = r2(byRate[k].cgst + t); byRate[k].sgst = r2(byRate[k].sgst + t); } };
   let passthrough = 0;
@@ -898,8 +898,8 @@ async function summary(env, month) {
   }
   const { results: dept } = await env.DB.prepare(`SELECT COALESCE(d.name, CASE WHEN l.kind='package' THEN 'Packages' ELSE 'Other' END) dept, SUM(l.taxable + l.exempt) net, COUNT(*) n
     FROM cl_invoice_lines l JOIN cl_invoices i ON i.id=l.invoice_id LEFT JOIN cl_items it ON it.id=l.item_id LEFT JOIN cl_package_defs pd ON pd.id=l.package_def_id
-    LEFT JOIN cl_departments d ON d.id=COALESCE(it.dept_id, pd.dept_id) WHERE i.status='final' AND l.kind != 'passthrough' AND i.invoice_date BETWEEN ? AND ? GROUP BY 1 ORDER BY 2 DESC`).bind(from, to).all();
-  const { results: modes } = await env.DB.prepare('SELECT mode, SUM(amount) s, COUNT(*) n FROM cl_payments WHERE voided=0 AND paid_on BETWEEN ? AND ? GROUP BY mode').bind(from, to).all();
+    LEFT JOIN cl_departments d ON d.id=COALESCE(it.dept_id, pd.dept_id) WHERE i.status='final' AND i.legacy=0 AND l.kind != 'passthrough' AND i.invoice_date BETWEEN ? AND ? GROUP BY 1 ORDER BY 2 DESC`).bind(from, to).all();
+  const { results: modes } = await env.DB.prepare('SELECT mode, SUM(amount) s, COUNT(*) n FROM cl_payments WHERE voided=0 AND legacy=0 AND paid_on BETWEEN ? AND ? GROUP BY mode').bind(from, to).all();
   const { results: disc } = await env.DB.prepare(`SELECT COALESCE(l.discount_by_name, 'Within limit') who, SUM(l.discount) s, COUNT(*) n FROM cl_invoice_lines l JOIN cl_invoices i ON i.id=l.invoice_id
     WHERE i.status='final' AND l.discount > 0 AND i.invoice_date BETWEEN ? AND ? GROUP BY 1 ORDER BY 2 DESC`).bind(from, to).all();
   return { month: m, gst: Object.values(byRate).sort((a, b) => a.rate - b.rate), passthrough, departments: (dept || []).map(x => ({ ...x, net: r2(x.net) })), modes: modes || [], discounts: disc || [] };
@@ -926,6 +926,7 @@ function words(n) {
 async function invoicePdfResponse(env, request, id) {
   const d = await invoiceDetail(env, id);
   if (!d) return api({ ok: false, error: 'Not found' }, 404);
+  if (d.invoice.legacy) return api({ ok: false, error: 'This is a balance carried over from the previous system. The original invoice is in the old app.' }, 400);
   const p = await env.DB.prepare('SELECT * FROM cl_patients WHERE id=?').bind(d.invoice.patient_id).first();
   const s = await settings(env);
   const bytes = await invoicePdf(env, request, d, p, s);
