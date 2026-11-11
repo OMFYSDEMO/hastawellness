@@ -100,7 +100,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=2">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=5"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=6"></script></body></html>`;
 }
 
 /* ---------------- router ---------------- */
@@ -984,7 +984,7 @@ function words(n) {
 async function invoicePdfResponse(env, request, id) {
   const d = await invoiceDetail(env, id);
   if (!d) return api({ ok: false, error: 'Not found' }, 404);
-  if (d.invoice.legacy) return api({ ok: false, error: 'This is a balance carried over from the previous system. The original invoice is in the old app.' }, 400);
+  if (d.invoice.legacy && d.lines.some(l => l.kind === 'opening')) return api({ ok: false, error: 'This is a balance carried over from the previous system. The original invoice is in the old app.' }, 400);
   const p = await env.DB.prepare('SELECT * FROM cl_patients WHERE id=?').bind(d.invoice.patient_id).first();
   const s = await settings(env);
   const bytes = await invoicePdf(env, request, d, p, s);
@@ -1051,6 +1051,7 @@ async function invoicePdf(env, request, d, p, s) {
     for (const x of d.payments) { text(`${x.paid_on.split('-').reverse().join('-')} · ${MODES[x.mode]}${x.reference ? ' · ref ' + x.reference : ''}${x.lender ? ' · ' + x.lender : ''}`, L, y, 8, reg, muted); right(money(x.amount), 300, y, 8, reg, muted); y -= 11; }
   }
   if (inv.status === 'cancelled') { y -= 8; text(`Cancelled: ${inv.cancel_reason}`, L, y, 9, bold, rgb(0.64, 0.23, 0.17)); y -= 12; }
+  if (inv.legacy) { y -= 8; text('Reprint of an invoice issued in the previous billing system.', L, y, 8, reg, muted); y -= 11; if (inv.notes) { text(inv.notes.slice(0, 120), L, y, 8, reg, muted); y -= 11; } }
   y = Math.min(y, 110);
   page.drawLine({ start: { x: L, y: 92 }, end: { x: Rx, y: 92 }, thickness: 0.6, color: line });
   text(s.invoice_footer || '', L, 78, 8.5, reg, muted);
