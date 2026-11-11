@@ -2,6 +2,7 @@ import { PAGES } from './pages.js';
 import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify } from './util.js';
 import { handleEms, emsDaily } from './ems.js';
 import { verifyPage } from './academy.js';
+import { handleClinic } from './clinic.js';
 import { handleCareers, handleApply, handleAdminJobs, handleAdminApplications, handleAdminCv, careerSitemapPaths, purgeOldApplications } from './careers.js';
 // Hasta Wellness — Cloudflare Worker
 // Serves the static site (./public) and a small lead-capture API.
@@ -30,6 +31,9 @@ export default {
     if ((path === '/verify' || path.startsWith('/verify/')) && request.method === 'GET') {
       try { return await verifyPage(env, url); } catch (err) { console.error('verify', err && err.stack || err); return new Response('Verification is unavailable. Please call +91 97784 58883.', { status: 500 }); }
     }
+    // Clinic app: clinicapp.* subdomain, or /clinicapp on any other host (local testing).
+    if (url.hostname.startsWith('clinicapp.')) return handleClinic(request, env, url, ctx, '', serveAsset);
+    if (path === '/clinicapp' || path.startsWith('/clinicapp/')) return handleClinic(request, env, url, ctx, '/clinicapp', serveAsset);
     // EMS progress platform: ems.* subdomain, or /ems on any other host.
     if (url.hostname.startsWith('ems.')) return handleEms(request, env, url, ctx, '', serveAsset);
     if (path === '/ems' || path.startsWith('/ems/')) {
@@ -73,7 +77,7 @@ const isPreviewHost = host => host.endsWith('.workers.dev') || host.startsWith('
 function robots(url) {
   const body = isPreviewHost(url.hostname)
     ? 'User-agent: *\nDisallow: /\n'
-    : `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /ems\n\nSitemap: ${url.origin}/sitemap.xml\n`;
+    : `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /ems\nDisallow: /clinicapp\n\nSitemap: ${url.origin}/sitemap.xml\n`;
   return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
 }
 

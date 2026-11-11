@@ -89,7 +89,7 @@ export async function hashSecret(secret) {
   const salt = crypto.getRandomValues(new Uint8Array(16));
   return `pbkdf2$100000$${b64(salt)}$${b64(await pbkdf2(secret, salt))}`;
 }
-async function verifySecret(secret, stored) {
+export async function verifySecret(secret, stored) {
   if (!stored) return false;
   const [kind, iter, salt, hash] = stored.split('$');
   if (kind !== 'pbkdf2') return false;
@@ -110,7 +110,7 @@ function readCookie(request) {
   return m ? m[1] : null;
 }
 
-async function getSession(request, env) {
+export async function getSession(request, env) {
   const token = readCookie(request);
   if (!token) return null;
   const s = await env.DB.prepare("SELECT * FROM ems_sessions WHERE token_hash=? AND expires_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')")
@@ -231,6 +231,11 @@ async function route(request, env, url, ctx, base, p) {
     return api({ ok: true, slots: list });
   }
   if (p === '/me/secret' && m === 'POST') return changeSecret(env, me, body);
+  if (me.kind === 'staff' && me.id !== 0 && me.role !== 'admin') {
+    const row = await env.DB.prepare('SELECT apps FROM ems_staff WHERE id=?').bind(me.id).first();
+    let apps = ['ems']; try { apps = JSON.parse(row && row.apps || '["ems"]'); } catch { /* default */ }
+    if (!apps.includes('ems')) return api({ ok: false, error: 'Your account is for the clinic app only. Use clinicapp.hastawellnessclinic.com.' }, 403);
+  }
 
   if (me.kind === 'client') {
     if (p === '/client/overview' && m === 'GET') return api({ ok: true, ...(await clientView(env, me.id, false)) });

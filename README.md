@@ -92,3 +92,20 @@ only sell catalogue packages at the set price within that discount; custom
 packages and session changes are admin-only. Reviews, weight-management
 consultations, diet plans, check-ins and measurements are blocked unless the
 client's active package includes them.
+
+## Hasta Clinic app (clinicapp.hastawellnessclinic.com) — phase 1
+`src/clinic.js`, `public/clinic/`. Same Worker, database and staff accounts as the EMS app
+(`ems_staff.apps` decides who can use which app; admins can use both). Served on the
+`clinicapp.*` host, or at `/clinicapp` on any host for local testing.
+- Patients (linked to website leads and EMS clients by mobile number), appointments by
+  clinician / room with clash checks and a department capability matrix.
+- Catalogue: services, products and partner (pass-through) charges; prices exclude GST.
+  Items marked not-for-sale (internal consumables, equipment) are never billable.
+  Settings → Catalogue → Import reads .xlsx/.csv with column matching.
+- Billing: draft → final invoices (HW/YY-YY/0001 per financial year), CGST/SGST per line,
+  dental exempt, pass-through excluded from revenue, package GST split by contents,
+  discounts over the limit authorised by a doctor/admin password, PDF invoice.
+- Payments with mode and reference (UPI/card/bank/finance), advances auto-applied,
+  voids by managers, cash in hand and bank deposits.
+- Every completed visit must be billed, taken from a package or marked no-charge.
+- Reports: day book, monthly GST by rate, department revenue, collections, discounts.
