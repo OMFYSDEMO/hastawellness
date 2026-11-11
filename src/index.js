@@ -1,5 +1,5 @@
 import { PAGES } from './pages.js';
-import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify } from './util.js';
+import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify, channelFromVisit, channelCookie, leadChannel } from './util.js';
 import { handleEms, emsDaily } from './ems.js';
 import { verifyPage } from './academy.js';
 import { handleClinic } from './clinic.js';
@@ -53,9 +53,20 @@ export default {
       console.error('Worker error', path, err && err.stack || err);
       return json({ ok: false, error: 'Something went wrong. Please call the clinic.' }, 500);
     }
+    // Short links for social bios and posts: /ig → home page with the booking form open, tagged Instagram.
+    const SHORT = { '/ig': 'instagram', '/fb': 'facebook', '/wa': 'whatsapp', '/gmb': 'google' };
+    if (SHORT[path]) return new Response(null, { status: 302, headers: { location: `/?src=${SHORT[path]}#book`, 'cache-control': 'no-store', 'set-cookie': channelCookie(url, SHORT[path]) } });
     if (path === '/robots.txt') return robots(url);
     if (path === '/sitemap.xml') return sitemap(url, await careerSitemapPaths(env).catch(() => []));
-    return serveAsset(request, env, url);
+    const res = await serveAsset(request, env, url);
+    // Remember where the visitor came from (Instagram, Facebook, Google…) so a later enquiry is tagged with it.
+    const ch = request.method === 'GET' ? channelFromVisit(request, url) : null;
+    if (ch && (res.headers.get('content-type') || '').includes('text/html')) {
+      const out = new Response(res.body, res);
+      out.headers.append('set-cookie', channelCookie(url, ch));
+      return out;
+    }
+    return res;
   },
 
   async scheduled(event, env, ctx) {
@@ -154,6 +165,7 @@ async function handleLead(request, env, ctx) {
   if (!phone) return json({ ok: false, error: 'Please enter a valid mobile number.' }, 400);
 
   const source = ['assistant', 'service page'].includes(body.source) ? body.source : 'booking form';
+  const channel = leadChannel(request);
   const date = /^\d{4}-\d{2}-\d{2}$/.test(body.preferred_date || '') ? body.preferred_date : null;
 
   const ip = request.headers.get('cf-connecting-ip') || '';
@@ -180,7 +192,7 @@ async function handleLead(request, env, ctx) {
   }
 
   await env.DB.prepare(
-    'INSERT INTO leads (source, request_type, name, phone, interest, concern, timing, preferred_date, page, ip_hash) VALUES (?,?,?,?,?,?,?,?,?,?)'
+    'INSERT INTO leads (source, request_type, name, phone, interest, concern, timing, preferred_date, page, ip_hash, channel) VALUES (?,?,?,?,?,?,?,?,?,?,?)'
   ).bind(
     source,
     nz(clean(body.request_type, MAX.request_type)),
@@ -191,13 +203,14 @@ async function handleLead(request, env, ctx) {
     nz(clean(body.timing, MAX.timing)),
     date,
     nz(clean(body.page, MAX.page)),
-    ipHash
+    ipHash,
+    channel
   ).run();
 
   const origin = new URL(request.url).origin;
   const alert = notify(env, `New consultation lead: ${clean(body.interest, MAX.interest) || 'Not specified'}`, [
     ['Name', name], ['Mobile', phone], ['Interested in', clean(body.interest, MAX.interest)], ['Concern', clean(body.concern, MAX.concern)],
-    ['Timing', clean(body.timing, MAX.timing)], ['Preferred date', date], ['Request', clean(body.request_type, MAX.request_type)], ['Source', source],
+    ['Timing', clean(body.timing, MAX.timing)], ['Preferred date', date], ['Request', clean(body.request_type, MAX.request_type)], ['Source', `${source} · ${channel}`],
   ], '/admin', origin);
   if (ctx && ctx.waitUntil) ctx.waitUntil(alert); else await alert;
 
@@ -243,7 +256,7 @@ async function handleCsv(request, env) {
   const auth = await authorised(request, env);
   if (auth !== true) return authResponse(auth);
   const { results } = await env.DB.prepare('SELECT * FROM leads ORDER BY id DESC').all();
-  const cols = ['id', 'created_at', 'source', 'request_type', 'name', 'phone', 'interest', 'concern', 'timing', 'preferred_date', 'status', 'notes'];
+  const cols = ['id', 'created_at', 'source', 'channel', 'request_type', 'name', 'phone', 'interest', 'concern', 'timing', 'preferred_date', 'status', 'notes'];
   const esc = v => {
     let s = v == null ? '' : String(v);
     if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // spreadsheet formula guard
@@ -265,7 +278,7 @@ function adminPage(rows, filter, counts) {
   const items = rows.map(r => `
     <article class="lead ${h(r.status.replace(' ', '-'))}">
       <header>
-        <div><strong>${h(r.name)}</strong> <span class="muted">· ${h(ist(r.created_at))} IST · ${h(r.source)}</span></div>
+        <div><strong>${h(r.name)}</strong> <span class="muted">· ${h(ist(r.created_at))} IST · ${h(r.source)}${r.channel ? ' · ' + h(r.channel) : ''}</span></div>
         <span class="pill">${h(r.status)}</span>
       </header>
       <p class="interest">${h(r.interest || 'Not specified')}${r.concern ? ` — <span class="muted">${h(r.concern)}</span>` : ''}</p>

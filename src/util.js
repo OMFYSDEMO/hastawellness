@@ -154,3 +154,32 @@ export async function notify(env, subject, rows, linkPath, origin) {
     }
   }
 }
+
+/* ---------------- Lead channel (where an enquiry came from) ---------------- */
+const CHANNELS = { instagram: 'instagram', ig: 'instagram', facebook: 'facebook', fb: 'facebook', meta: 'facebook', google: 'google', gmb: 'google', whatsapp: 'whatsapp', wa: 'whatsapp', youtube: 'youtube', yt: 'youtube' };
+export function channelFromVisit(request, url) {
+  const p = (url.searchParams.get('src') || url.searchParams.get('utm_source') || '').toLowerCase().replace(/[^a-z]/g, '');
+  if (p) return CHANNELS[p] || null;
+  let ref = '';
+  try { ref = new URL(request.headers.get('referer') || '').hostname; } catch {}
+  if (!ref || ref.endsWith(url.hostname.replace(/^www\./, ''))) return null;
+  if (/(^|\.)instagram\.com$/.test(ref)) return 'instagram';
+  if (/(^|\.)(facebook\.com|fb\.com|fb\.me)$/.test(ref)) return 'facebook';
+  if (/(^|\.)google\./.test(ref)) return 'google';
+  if (/(^|\.)youtube\.com$/.test(ref)) return 'youtube';
+  return null;
+}
+export function channelCookie(url, ch) {
+  const dom = url.hostname.endsWith('hastawellnessclinic.com') ? '; Domain=hastawellnessclinic.com' : '';
+  return `hw_src=${ch}; Max-Age=2592000; Path=/; SameSite=Lax; Secure${dom}`;
+}
+// Channel for a lead: the remembered visit source, else the in-app browser it was sent from, else the website.
+export function leadChannel(request) {
+  const m = /(?:^|;\s*)hw_src=([a-z]+)/.exec(request.headers.get('cookie') || '');
+  if (m && Object.values(CHANNELS).includes(m[1])) return m[1];
+  const ua = request.headers.get('user-agent') || '';
+  if (/Instagram/i.test(ua)) return 'instagram';
+  if (/FBAN|FBAV|FB_IAB/i.test(ua)) return 'facebook';
+  return 'website';
+}
+

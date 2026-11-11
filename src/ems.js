@@ -11,7 +11,7 @@
 // Everything lives in the website's D1 database (tables prefixed ems_), so
 // consultation enquiries from the website appear here automatically.
 
-import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify } from './util.js';
+import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify, leadChannel } from './util.js';
 import * as AC from './academy.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED } from './packages.js';
@@ -438,8 +438,8 @@ async function consultRequest(request, env, ctx, url, b) {
   const pin = /^\d{6}$/.test(String(b.pincode || '')) ? String(b.pincode) : null;
   const unitId = parseInt(b.unit_id, 10) || await routeUnit(env, { pincode: pin });
   const mode = b.mode === 'video' ? 'Video call' : 'At the centre';
-  await env.DB.prepare("INSERT INTO leads (source, request_type, name, phone, interest, concern, timing, preferred_date, page, unit_id) VALUES ('ems portal',?,?,?,'EMS & Weight Management',?,?,?,'ems portal',?)")
-    .bind('Consultation · ' + mode, name, phone, nz([goal, pin ? 'PIN ' + pin : ''].filter(Boolean).join(' · ')), nz(clean(b.timing, 60)), date, unitId || null).run();
+  await env.DB.prepare("INSERT INTO leads (source, request_type, name, phone, interest, concern, timing, preferred_date, page, unit_id, channel) VALUES ('ems portal',?,?,?,'EMS & Weight Management',?,?,?,'ems portal',?,?)")
+    .bind('Consultation · ' + mode, name, phone, nz([goal, pin ? 'PIN ' + pin : ''].filter(Boolean).join(' · ')), nz(clean(b.timing, 60)), date, unitId || null, leadChannel(request)).run();
   const alert = notify(env, 'New EMS consultation request', [['Name', name], ['Mobile', phone], ['Goal', goal], ['Preferred date', date], ['Timing', clean(b.timing, 60)]], '/#/leads', emsOrigin(env, url));
   if (ctx && ctx.waitUntil) ctx.waitUntil(alert);
   return api({ ok: true });

@@ -14,7 +14,7 @@
 //    any excess stays as the patient's advance, which can later be applied to another invoice.
 
 import { PDFDocument, StandardFonts, rgb } from './vendor/pdf-lib.esm.min.js';
-import { json, sameOrigin, clean, nz, h } from './util.js';
+import { json, sameOrigin, clean, nz, h, normalisePhone } from './util.js';
 import { getSession, verifySecret, hashSecret, handleEms } from './ems.js';
 
 /* ---------------- helpers ---------------- */
@@ -98,7 +98,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=1">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=1"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=3"></script></body></html>`;
 }
 
 /* ---------------- router ---------------- */
@@ -151,6 +151,7 @@ async function route(request, env, url, p) {
   if ((r = p.match(/^\/patients\/(\d+)$/)) && m === 'PUT') return done(await savePatient(env, me, +r[1], b));
   if (p === '/leads' && m === 'GET') return api({ ok: true, leads: await leads(env, q('status') || 'open') });
   if ((r = p.match(/^\/leads\/(\d+)$/)) && m === 'PUT') return done(await updateLead(env, me, +r[1], b));
+  if (p === '/leads' && m === 'POST') return done(await addLead(env, me, b));
 
   // Appointments
   if (p === '/appointments' && m === 'GET') return api({ ok: true, appointments: await listAppointments(env, q('from'), q('to'), q('patient')) });
@@ -486,6 +487,21 @@ async function leads(env, status) {
   const { results } = await env.DB.prepare(`SELECT l.*, (SELECT id FROM cl_patients p WHERE p.lead_id=l.id OR (p.phone=substr(replace(replace(l.phone,' ',''),'+',''),-10) AND p.status='active') LIMIT 1) patient_id
     FROM leads l ${where} ORDER BY l.created_at DESC LIMIT 200`).bind(...(status === 'all' || status === 'open' ? [] : [status])).all();
   return results || [];
+}
+// Enquiries that arrive outside the website (Instagram DMs, WhatsApp, calls, walk-ins), entered by staff.
+const LEAD_CHANNELS = ['instagram', 'facebook', 'whatsapp', 'phone', 'walk-in', 'referral', 'google', 'other'];
+async function addLead(env, me, b) {
+  const name = clean(b.name, 80), phone = normalisePhone(b.phone);
+  const channel = LEAD_CHANNELS.includes(b.channel) ? b.channel : null;
+  if (name.length < 2) return R(400, 'Enter the name.');
+  if (!phone) return R(400, 'Enter a valid mobile number.');
+  if (!channel) return R(400, 'Choose where the enquiry came from.');
+  const date = isDate(b.preferred_date) ? b.preferred_date : null;
+  const notes = [clean(b.notes, 400), `Added by ${me.name}`].filter(Boolean).join('\n');
+  const res = await env.DB.prepare("INSERT INTO leads (source, request_type, name, phone, interest, concern, preferred_date, page, channel, notes) VALUES ('staff','Enquiry',?,?,?,?,?,'clinic app',?,?)")
+    .bind(name, phone, nz(clean(b.interest, 120)), nz(clean(b.concern, 200)), date, channel, notes).run();
+  await audit(env, me, 'lead.add', 'lead', res.meta.last_row_id, `${name} (${channel})`);
+  return OK({ id: res.meta.last_row_id });
 }
 async function updateLead(env, me, id, b) {
   const st = ['new', 'contacted', 'booked', 'not interested'].includes(b.status) ? b.status : null;

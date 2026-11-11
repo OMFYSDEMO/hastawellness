@@ -79,7 +79,7 @@ async function route() {
     else if (top === 'invoice') await viewInvoice(+parts[1]);
     else if (top === 'billing') await viewBilling(q.get('f') || 'today');
     else if (top === 'payments') await viewPayments(q.get('from') || today(), q.get('to') || today());
-    else if (top === 'leads') await viewLeads(q.get('s') || 'open');
+    else if (top === 'leads') await viewLeads(q.get('s') || 'open', q.get('ch') || '');
     else if (top === 'reports') await viewReports(q.get('tab') || 'day', q.get('d'), q.get('m'));
     else if (top === 'settings') await viewSettings(q.get('tab') || (isAdmin() ? 'clinic' : 'account'));
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
@@ -568,17 +568,35 @@ async function viewPayments(from, to) {
 }
 
 /* ---------------- Leads ---------------- */
-async function viewLeads(s) {
-  const { leads } = await api('/clinic/leads?status=' + encodeURIComponent(s));
+const CHANNEL = { instagram: 'Instagram', facebook: 'Facebook', whatsapp: 'WhatsApp', google: 'Google', youtube: 'YouTube', website: 'Website', phone: 'Phone call', 'walk-in': 'Walk-in', referral: 'Referral', other: 'Other' };
+const chTag = c => c ? `<span class="pill" style="margin-left:6px">${esc(CHANNEL[c] || c)}</span>` : '';
+function leadModal(after) {
+  const ints = ['Dental', 'Skin', 'Laser hair reduction', 'Hair', 'EMS & weight management', 'Wellness / IV therapy', 'Body contouring', 'Not sure yet'];
+  modal({ title: 'Add lead', body: `<form data-f class="stack" style="gap:12px">
+      ${field('Where did the enquiry come from?', sel('channel', [['', 'Choose…'], ['instagram', 'Instagram (DM or comment)'], ['whatsapp', 'WhatsApp'], ['phone', 'Phone call'], ['walk-in', 'Walk-in'], ['referral', 'Referral'], ['facebook', 'Facebook'], ['google', 'Google'], ['other', 'Other']], ''))}
+      <div class="grid2">${field('Name', inp('name', '', 'maxlength="80"'))}${field('Mobile number', inp('phone', '', 'type="tel" maxlength="20"'))}</div>
+      <div class="grid2">${field('Interested in', sel('interest', ints.map(x => [x, x]), 'Not sure yet'))}${field('Preferred date', inp('preferred_date', '', 'type="date"'))}</div>
+      ${field('What they asked about', inp('concern', '', 'maxlength="200" placeholder="e.g. Price for underarm laser, asked on Instagram"'))}
+      ${field('Notes', inp('notes', '', 'maxlength="400" placeholder="e.g. Instagram @username, best time to call"'))}</form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>${icon('plus', 18)}Add lead</button>`,
+    onMount(el, close) { const b = el.querySelector('[data-save]'); b.onclick = () => busy(b, () => api('/clinic/leads', { method: 'POST', body: formData(el.querySelector('[data-f]')) }), true).then(() => { close(); toast('Lead added'); after && after(); }).catch(e => toast(e.message, true)); } });
+}
+async function viewLeads(s, ch) {
+  const { leads: all } = await api('/clinic/leads?status=' + encodeURIComponent(s));
+  const leads = ch ? all.filter(l => (l.channel || 'website') === ch) : all;
+  const chans = [...new Set(all.map(l => l.channel || 'website'))];
   const F = [['open', 'To follow up'], ['booked', 'Booked'], ['not interested', 'Not interested'], ['all', 'All']];
-  MAIN.innerHTML = `<div class="head"><div><h1>Leads</h1><p>Enquiries from hastawellnessclinic.com for every service. EMS enquiries are also in the EMS app.</p></div></div>
-    <div class="seg" style="margin-bottom:14px">${F.map(([k, l]) => `<button data-s="${esc(k)}" class="${k === s ? 'on' : ''}">${l}</button>`).join('')}</div>
-    <section class="panel flush"><div class="rows">${leads.length ? leads.map(l => `<div class="row" style="flex-wrap:wrap"><span class="avatar">${esc(initials(l.name))}</span><div class="grow" style="min-width:220px"><b>${esc(l.name)} ${l.status === 'new' ? pill('new', 'New') : ''}</b>
+  MAIN.innerHTML = `<div class="head"><div><h1>Leads</h1><p>Enquiries from the website, Instagram and other channels. EMS enquiries are also in the EMS app.</p></div><div class="acts"><button class="btn gold" data-add>${icon('plus', 18)}Add lead</button></div></div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:14px"><div class="seg">${F.map(([k, l]) => `<button data-s="${esc(k)}" class="${k === s ? 'on' : ''}">${l}</button>`).join('')}</div>
+      ${chans.length > 1 || ch ? sel('ch', [['', 'All channels'], ...chans.map(c => [c, CHANNEL[c] || c])], ch || '', 'data-ch style="width:auto;height:36px"') : ''}</div>
+    <section class="panel flush"><div class="rows">${leads.length ? leads.map(l => `<div class="row" style="flex-wrap:wrap"><span class="avatar">${esc(initials(l.name))}</span><div class="grow" style="min-width:220px"><b>${esc(l.name)} ${l.status === 'new' ? pill('new', 'New') : ''}${chTag(l.channel)}</b>
         <span>${esc(l.interest || 'Not specified')}${l.concern ? ' — ' + esc(l.concern) : ''}</span><span class="small muted">${esc(l.created_at ? fWhen(new Date(new Date(l.created_at).getTime() + 330 * 60000).toISOString().slice(0, 16)) : '')} · ${esc(l.source || '')}${l.preferred_date ? ' · prefers ' + esc(l.preferred_date) : ''}${l.timing ? ' · ' + esc(l.timing) : ''}</span></div>
       <a class="btn sm ghost icon" href="tel:${esc(l.phone)}" aria-label="Call">${icon('phone', 16)}</a><a class="btn sm ghost icon" href="${wa(l.phone, `Hello ${first(l.name)}, this is Hasta Wellness about your enquiry.`)}" target="_blank" rel="noopener" aria-label="WhatsApp">${icon('message-circle', 16)}</a>
       ${l.patient_id ? `<a class="btn sm ghost" href="#/patient/${l.patient_id}">Open patient</a>` : `<button class="btn sm gold" data-conv="${l.id}">${icon('user-plus', 15)}Add as patient</button>`}
       <select class="in" data-st="${l.id}" style="width:auto;height:32px">${['new', 'contacted', 'booked', 'not interested'].map(x => `<option${x === l.status ? ' selected' : ''}>${x}</option>`).join('')}</select></div>`).join('') : emptyState('inbox', 'No leads here.')}</div></section>`;
-  MAIN.querySelectorAll('[data-s]').forEach(b => b.onclick = () => go('#/leads?s=' + encodeURIComponent(b.dataset.s)));
+  MAIN.querySelectorAll('[data-s]').forEach(b => b.onclick = () => go('#/leads?s=' + encodeURIComponent(b.dataset.s) + (ch ? '&ch=' + encodeURIComponent(ch) : '')));
+  const chs = MAIN.querySelector('[data-ch]'); if (chs) chs.onchange = () => go('#/leads?s=' + encodeURIComponent(s) + (chs.value ? '&ch=' + encodeURIComponent(chs.value) : ''));
+  MAIN.querySelector('[data-add]').onclick = () => leadModal(() => go('#/leads?s=open&t=' + Date.now()));
   MAIN.querySelectorAll('[data-st]').forEach(x => x.onchange = () => api('/clinic/leads/' + x.dataset.st, { method: 'PUT', body: { status: x.value } }).then(() => toast('Updated')).catch(e => toast(e.message, true)));
   MAIN.querySelectorAll('[data-conv]').forEach(b => b.onclick = () => { const l = leads.find(x => x.id === +b.dataset.conv); patientModal({ name: l.name, phone: String(l.phone || '').replace(/\D/g, '').slice(-10), lead_id: l.id }, p => go('#/patient/' + p.id)); });
 }
