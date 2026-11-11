@@ -1,5 +1,5 @@
 // Hasta EMS Academy — staff screens (framework v1.0).
-import { api, esc, icon, toast, modal, formData, busy, field, inp, sel, emptyState, today, fDate, fDay, pill, BASE } from './core.js';
+import { api, esc, icon, toast, modal, formData, busy, field, inp, sel, emptyState, today, fDate, fDay, pill, BASE } from './core.js?v=8';
 
 const TABS = [['overview', 'graduation-cap', 'Overview'], ['curriculum', 'book-open', 'Curriculum'], ['questions', 'list-checks', 'Question bank'],
   ['masters', 'stethoscope', 'Master Trainers'], ['trainees', 'users', 'Trainees'], ['certificates', 'award', 'Certificates']];

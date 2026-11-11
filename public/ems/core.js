@@ -214,11 +214,45 @@ export function insightList(items, limit = 99) {
   return `<div class="insights">${items.slice(0, limit).map(i => `<div class="ins ${i.level}">${icon(i.icon, 20)}<div><b>${esc(i.title)}</b><p>${esc(i.text)}</p></div></div>`).join('')}</div>`;
 }
 
+// Lengths are stored in cm; shown in both cm and inches.
+export const toIn = cm => Math.round((cm / 2.54) * 10) / 10;
+export const toCm = inch => Math.round(inch * 2.54 * 10) / 10;
+export const cmIn = cm => cm == null ? '—' : `${+cm} cm <span class="faint">(${toIn(cm)} in)</span>`;
+export const ftIn = cm => { const t = Math.round(cm / 2.54); return `${Math.floor(t / 12)} ft ${t % 12} in`; };
+export const signed = (v, u) => `${v > 0 ? '+' : ''}${v}${u}`;
+// A length field with a cm / in switch; the value is converted to cm before saving.
+export function lenField(label, name, value, hint) {
+  return `<div class="f"><span style="display:flex;justify-content:space-between;align-items:center;gap:8px">${label}<span class="unitsw" data-unit-for="${name}"><button type="button" class="on" data-u="cm">cm</button><button type="button" data-u="in">in</button></span></span>
+    <input class="in" name="${name}" value="${value ?? ''}" type="number" step="0.1" inputmode="decimal" data-len>${hint ? `<small class="faint">${hint}</small>` : ''}<small class="faint" data-conv="${name}"></small></div>`;
+}
+export function wireLen(root) {
+  root.querySelectorAll('[data-unit-for]').forEach(sw => {
+    const name = sw.dataset.unitFor, input = root.querySelector(`[name="${name}"]`), conv = root.querySelector(`[data-conv="${name}"]`);
+    const unit = () => sw.querySelector('.on').dataset.u;
+    const show = () => { const v = parseFloat(input.value); conv.textContent = isNaN(v) ? '' : unit() === 'cm' ? `= ${toIn(v)} in` : `= ${toCm(v)} cm`; };
+    sw.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      if (b.classList.contains('on')) return;
+      const v = parseFloat(input.value);
+      if (!isNaN(v)) input.value = b.dataset.u === 'in' ? toIn(v) : toCm(v);
+      sw.querySelectorAll('button').forEach(x => x.classList.toggle('on', x === b)); show();
+    }));
+    input.addEventListener('input', show); show();
+  });
+}
+// Converts any inch entries back to cm (call on the formData object before saving).
+export function lenToCm(root, data) {
+  root.querySelectorAll('[data-unit-for]').forEach(sw => {
+    const n = sw.dataset.unitFor;
+    if (sw.querySelector('.on').dataset.u === 'in' && data[n] !== '' && data[n] != null && !isNaN(parseFloat(data[n]))) data[n] = toCm(parseFloat(data[n]));
+  });
+  return data;
+}
+
 export function deltaTag(diff, unit, goodWhenDown = true) {
   if (diff == null) return '';
   if (Math.abs(diff) < 0.05) return `<span class="delta flat">no change</span>`;
   const down = diff < 0, good = down === goodWhenDown;
-  return `<span class="delta ${good ? 'down' : 'up'}">${icon(down ? 'trending-down' : 'trending-up', 14)}${diff > 0 ? '+' : ''}${diff}${unit}</span>`;
+  return `<span class="delta ${good ? 'down' : 'up'}">${icon(down ? 'trending-down' : 'trending-up', 14)}${diff > 0 ? '+' : ''}${diff}${unit}${unit === ' cm' ? ` (${diff > 0 ? '+' : ''}${toIn(diff)} in)` : ''}</span>`;
 }
 
 export function measureSeries(meas, key) {

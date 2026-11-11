@@ -179,9 +179,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=7">
+<link rel="stylesheet" href="/ems/app.css?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=7"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=8"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -769,7 +769,7 @@ async function addMeasurement(env, me, b) {
   if (!access(await packagesFor(env, clientId)).measurements) return bad(NOT_INCLUDED.measurements);
   const day = isDate(b.measured_on) && b.measured_on <= today() ? b.measured_on : today();
   const v = { weight: num(b.weight, 25, 300), waist: num(b.waist, 40, 250), hips: num(b.hips, 50, 250), body_fat: num(b.body_fat, 3, 70), muscle_mass: num(b.muscle_mass, 5, 150) };
-  if (Object.values(v).some(x => x === undefined)) return bad('One of the measurements looks out of range. Use kg, cm and %.');
+  if (Object.values(v).some(x => x === undefined)) return bad('One of the measurements looks out of range. Check kg, cm/in and %.');
   if (Object.values(v).every(x => x === null)) return bad('Enter at least one measurement.');
   await env.DB.prepare('INSERT INTO ems_measurements (client_id, measured_on, weight, waist, hips, body_fat, muscle_mass, notes, staff_id) VALUES (?,?,?,?,?,?,?,?,?)')
     .bind(clientId, day, v.weight, v.waist, v.hips, v.body_fat, v.muscle_mass, nz(clean(b.notes, 300)), me.id).run();
@@ -901,7 +901,7 @@ export function insights({ client: c, packages, appointments, measurements: meas
 
   const ch = metrics.change;
   if (ch.weight && ch.weight.diff <= -1) add('good', 'trending-down', `${Math.abs(ch.weight.diff)} kg down`, `Since ${fmtDay(ch.weight.since)} — steady progress you can build on.`);
-  if (ch.waist && ch.waist.diff <= -1) add('good', 'ruler', `${Math.abs(ch.waist.diff)} cm off your waist`, 'Waist size is one of the best signs of healthy change.');
+  if (ch.waist && ch.waist.diff <= -1) add('good', 'ruler', `${Math.abs(ch.waist.diff)} cm (${Math.round(Math.abs(ch.waist.diff) / 2.54 * 10) / 10} in) off your waist`, 'Waist size is one of the best signs of healthy change.');
   if (ch.waist && ch.waist.diff <= -1.5 && ch.weight && Math.abs(ch.weight.diff) < 1) add('tip', 'sparkles', 'Inches before kilos', 'Your waist is shrinking while weight holds steady — common when muscle tone improves. Keep going.');
   if (ch.muscle_mass && ch.muscle_mass.diff >= 0.5) add('good', 'dumbbell', `+${ch.muscle_mass.diff} kg muscle`, 'More muscle helps your body use energy better, even at rest.');
 

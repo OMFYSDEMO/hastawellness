@@ -3,8 +3,8 @@ import {
   measureSeries, dietView, DIETS, SCREENING, today, nowLocal, addDays, dayDiff, fDay, fDate, fWeekday, fLong, fTime, fWhen, inr, kg, initials, first,
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
   includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
-} from './core.js';
-import { viewAcademy } from './academy.js?v=7';
+  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=8';
+import { viewAcademy } from './academy.js?v=8';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
 const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';
@@ -336,7 +336,7 @@ async function viewClients(q) {
 function clientForm(c = {}, isNew = true, tm = []) {
   return `<div class="grid2">${field('Home unit', sel('home_unit_id', unitOpts(), c.home_unit_id ?? UNIT ?? (UNITS[0] && UNITS[0].id)))}${field('Coach', sel('coach_id', coachOptions(tm), c.coach_id ?? (isNew && tm.some(t => t.id === ME.id) ? ME.id : '')), 'team member responsible')}</div>
     <div class="grid2">${field('Full name', inp('name', c.name, 'required autocomplete="off"'))}${field('Mobile number', inp('phone', c.phone, 'type="tel" required'), 'used to sign in')}</div>
-    <div class="grid3">${field('Gender', sel('gender', [['', 'Select'], ['female', 'Female'], ['male', 'Male'], ['other', 'Other']], c.gender))}${field('Year of birth', inp('birth_year', c.birth_year, 'type="number" inputmode="numeric" placeholder="1990"'))}${field('Height (cm)', inp('height_cm', c.height_cm, 'type="number" step="0.5" inputmode="decimal"'))}</div>
+    <div class="grid3">${field('Gender', sel('gender', [['', 'Select'], ['female', 'Female'], ['male', 'Male'], ['other', 'Other']], c.gender))}${field('Year of birth', inp('birth_year', c.birth_year, 'type="number" inputmode="numeric" placeholder="1990"'))}${lenField('Height', 'height_cm', c.height_cm)}</div>
     <div class="grid2">${field('Target weight (kg)', inp('target_weight', c.target_weight, 'type="number" step="0.1" inputmode="decimal"'), 'optional')}${field('Email', inp('email', c.email, 'type="email"'), 'optional')}</div>
     ${field('Goal', inp('goal', c.goal, 'maxlength="200" placeholder="e.g. Lose 6 kg before wedding, tone core after pregnancy"'))}
     ${isNew ? `<label class="check"><input type="checkbox" name="consent"> <span>The client has agreed to Hasta Wellness keeping their details, measurements and progress records for their programme.</span></label>` : ''}`;
@@ -350,8 +350,9 @@ async function clientModal(prefill = {}, after) {
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>${icon('user-plus', 18)}Add client</button>`,
     onMount(el, close) {
       const f = el.querySelector('[data-f]'), save = el.querySelector('[data-save]');
+      wireLen(f);
       save.addEventListener('click', () => busy(save, async () => {
-        const body = { ...formData(f), lead_id: prefill.lead_id };
+        const body = { ...lenToCm(f, formData(f)), lead_id: prefill.lead_id };
         const r = await api('/staff/clients', { method: 'POST', body });
         close();
         showPin({ id: r.id, name: body.name, phone: body.phone, pin: r.pin, isNew: true });
@@ -389,7 +390,7 @@ async function viewClient(id, tab) {
       <div class="who"><h1>${esc(c.name)}</h1><div class="meta">
         <span>${icon('phone', 15)}<a href="tel:${esc(c.phone)}">${esc(prettyPhone(c.phone))}</a></span>
         ${age ? `<span>${icon('user', 15)}${age} yrs${c.gender ? ', ' + esc(c.gender) : ''}</span>` : ''}
-        ${c.height_cm ? `<span>${icon('ruler', 15)}${c.height_cm} cm</span>` : ''}
+        ${c.height_cm ? `<span>${icon('ruler', 15)}${c.height_cm} cm (${ftIn(c.height_cm)})</span>` : ''}
         ${c.unit_name ? `<span>${icon('home', 15)}${esc(c.unit_name)}</span>` : ''}
         <span>${icon('package', 15)}${left} session${left === 1 ? '' : 's'} available</span>
         <button type="button" class="btn sm ghost" data-coach style="height:28px">${icon('users', 15)}${c.coach_name ? 'Coach: ' + esc(c.coach_name) : '<span style="color:var(--warn)">Allocate a coach</span>'}</button></div></div>
@@ -419,7 +420,7 @@ async function viewClient(id, tab) {
 
 function metricStrip(d) {
   const ch = d.insights.metrics.change, last = k => { for (let i = d.measurements.length - 1; i >= 0; i--) if (d.measurements[i][k] != null) return d.measurements[i][k]; return null; };
-  const m = (l, k, u) => `<div class="metric"><div class="l">${l}</div><div class="v">${last(k) != null ? kg(last(k)) : '—'}<small>${last(k) != null ? u : ''}</small></div>${ch[k] ? deltaTag(ch[k].diff, u === '%' ? '%' : ' ' + u, k !== 'muscle_mass') + `<span class="small faint"> since ${fDay(ch[k].since)}</span>` : '<span class="small faint">No data</span>'}</div>`;
+  const m = (l, k, u) => `<div class="metric"><div class="l">${l}</div><div class="v">${last(k) != null ? kg(last(k)) : '—'}<small>${last(k) != null ? u : ''}</small>${u === 'cm' && last(k) != null ? `<span class="alt">${toIn(last(k))} in</span>` : ''}</div>${ch[k] ? deltaTag(ch[k].diff, u === '%' ? '%' : ' ' + u, k !== 'muscle_mass') + `<span class="small faint"> since ${fDay(ch[k].since)}</span>` : '<span class="small faint">No data</span>'}</div>`;
   return `<div class="metrics">${m('Weight', 'weight', 'kg')}${m('Waist', 'waist', 'cm')}${m('Hips', 'hips', 'cm')}${m('Body fat', 'body_fat', '%')}</div>`;
 }
 
@@ -523,13 +524,14 @@ function measureModal(c, after) {
     title: 'Add measurements · ' + c.name,
     body: `<form class="stack" style="gap:14px" data-f>${field('Date', inp('measured_on', today(), `type="date" max="${today()}"`))}
       <div class="grid2">${field('Weight (kg)', inp('weight', '', 'type="number" step="0.1" inputmode="decimal"'))}${field('Body fat (%)', inp('body_fat', '', 'type="number" step="0.1" inputmode="decimal"'))}</div>
-      <div class="grid3">${field('Waist (cm)', inp('waist', '', 'type="number" step="0.5" inputmode="decimal"'))}${field('Hips (cm)', inp('hips', '', 'type="number" step="0.5" inputmode="decimal"'))}${field('Muscle mass (kg)', inp('muscle_mass', '', 'type="number" step="0.1" inputmode="decimal"'), 'optional')}</div>
+      <div class="grid3">${lenField('Waist', 'waist', '')}${lenField('Hips', 'hips', '')}${field('Muscle mass (kg)', inp('muscle_mass', '', 'type="number" step="0.1" inputmode="decimal"'), 'optional')}</div>
       ${field('Note', inp('notes', '', 'maxlength="300" placeholder="e.g. measured before session, same scale"'))}</form>
       <p class="small muted">Measure at the same time of day, on the same scale, for comparable results.</p>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save measurements</button>`,
     onMount(el, close) {
       const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => api('/staff/measurements', { method: 'POST', body: { ...formData(el.querySelector('[data-f]')), client_id: c.id } })).then(() => { close(); toast('Measurements saved'); after(); }).catch(() => {}));
+      wireLen(el);
+      save.addEventListener('click', () => busy(save, () => api('/staff/measurements', { method: 'POST', body: { ...lenToCm(el, formData(el.querySelector('[data-f]'))), client_id: c.id } })).then(() => { close(); toast('Measurements saved'); after(); }).catch(() => {}));
     },
   });
 }
@@ -575,7 +577,7 @@ function tabProgress(el, d, after) {
     </div>
     <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('clipboard-check', 20)}<h3>All measurements</h3></div><button class="btn sm gold" data-add>${icon('plus', 16)}Add</button></div>
       ${ms.length ? `<table class="t"><thead><tr><th>Date</th><th class="n">Weight</th><th class="n">Waist</th><th class="n">Hips</th><th class="n">Body fat</th><th class="n">Muscle</th><th></th></tr></thead><tbody>
-      ${ms.map(m => `<tr><td>${esc(fDate(m.measured_on))}${m.notes ? `<div class="small muted">${esc(m.notes)}</div>` : ''}</td><td class="n">${m.weight != null ? kg(m.weight) + ' kg' : '—'}</td><td class="n">${m.waist ?? '—'}</td><td class="n">${m.hips ?? '—'}</td><td class="n">${m.body_fat != null ? m.body_fat + '%' : '—'}</td><td class="n">${m.muscle_mass ?? '—'}</td>
+      ${ms.map(m => `<tr><td>${esc(fDate(m.measured_on))}${m.notes ? `<div class="small muted">${esc(m.notes)}</div>` : ''}</td><td class="n">${m.weight != null ? kg(m.weight) + ' kg' : '—'}</td><td class="n">${cmIn(m.waist)}</td><td class="n">${cmIn(m.hips)}</td><td class="n">${m.body_fat != null ? m.body_fat + '%' : '—'}</td><td class="n">${m.muscle_mass ?? '—'}</td>
         <td class="n"><button class="btn sm quiet icon" data-del="${m.id}" aria-label="Delete">${icon('trash-2', 16)}</button></td></tr>`).join('')}</tbody></table>` : emptyState('ruler', 'No measurements yet. Record a baseline before the first session.')}</section></div>`;
   lineChart(el.querySelector('[data-w]'), { series: [{ name: 'Weight', color: '#34595e', points: measureSeries(d.measurements, 'weight') }], unit: ' kg', target: d.client.target_weight, height: 200 });
   lineChart(el.querySelector('[data-wh]'), { series: [{ name: 'Waist', color: '#34595e', points: measureSeries(d.measurements, 'waist') }, { name: 'Hips', color: '#c4a45b', points: measureSeries(d.measurements, 'hips') }], unit: ' cm', height: 200 });
@@ -640,8 +642,9 @@ function tabProfile(el, d, after) {
       ${ME.role === 'admin' ? `<div style="border-top:1px solid var(--line-soft);padding-top:12px"><button class="btn danger" data-del>${icon('trash-2', 18)}Delete client and all records</button><p class="small muted" style="margin-top:6px">Use when a client asks for their data to be erased.</p></div>` : ''}</section></div></div>`;
   const f = el.querySelector('[data-f]');
   f.addEventListener('submit', e => e.preventDefault());
+  wireLen(f);
   const saveF = el.querySelector('[data-save]');
-  saveF.addEventListener('click', () => busy(saveF, () => api('/staff/clients/' + c.id, { method: 'PUT', body: formData(f) })).then(() => { toast('Details saved'); after(); }).catch(() => {}));
+  saveF.addEventListener('click', () => busy(saveF, () => api('/staff/clients/' + c.id, { method: 'PUT', body: lenToCm(f, formData(f)) })).then(() => { toast('Details saved'); after(); }).catch(() => {}));
   const pinB = el.querySelector('[data-pin]');
   pinB.addEventListener('click', () => { if (confirm('Create a new PIN? The current one will stop working.')) busy(pinB, () => api(`/staff/clients/${c.id}/pin`, { method: 'POST', body: {} })).then(r => showPin({ ...c, pin: r.pin, isNew: false })).catch(() => {}); });
   el.querySelector('[data-del]')?.addEventListener('click', e => { if (prompt(`Type DELETE to erase ${c.name} and every record for them. This cannot be undone.`) === 'DELETE') busy(e.currentTarget, () => api('/staff/clients/' + c.id, { method: 'DELETE', body: {} })).then(() => { toast('Client deleted'); go('#/clients'); }).catch(() => {}); });

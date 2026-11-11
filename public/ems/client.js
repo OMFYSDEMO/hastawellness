@@ -2,7 +2,7 @@ import {
   api, esc, icon, toast, modal, formData, busy, field, inp, emptyState, slotPicker, lineChart, ring, insightList, deltaTag, measureSeries,
   dietView, today, nowLocal, dayDiff, fDay, fDate, fLong, fTime, fWhen, inr, kg, first, prettyPhone, pill, KIND_LABEL, CLINIC_PHONE, CLINIC_TEL,
   BASE, includesText, PROGRAMME_LABEL, admState, admSteps, letterBox, screeningForm, readScreening, sigPad,
-} from './core.js';
+  toIn, cmIn } from './core.js?v=8';
 
 let ME, APP, BODY, DATA;
 const TABS = [['', 'home', 'Home'], ['progress', 'line-chart', 'Progress'], ['book', 'calendar-plus', 'Book', true], ['plan', 'salad', 'My plan'], ['account', 'user', 'Account']];
@@ -50,7 +50,7 @@ function home() {
         <div class="hero-stats">
           <div>${icon('zap', 20)}<p><b>${attendedCount()}</b><span>sessions completed</span></p></div>
           <div>${icon('trending-down', 20)}<p><b>${w ? (w.diff > 0 ? '+' : '') + w.diff + ' kg' : '—'}</b><span>${w ? 'weight since ' + fDay(w.since) : 'weight change'}</span></p></div>
-          <div>${icon('ruler', 20)}<p><b>${wa ? (wa.diff > 0 ? '+' : '') + wa.diff + ' cm' : '—'}</b><span>waist change</span></p></div>
+          <div>${icon('ruler', 20)}<p><b>${wa ? (wa.diff > 0 ? '+' : '') + wa.diff + ' cm' : '—'}</b>${wa ? `<small style="display:block;font-weight:600;opacity:.8">${wa.diff > 0 ? '+' : ''}${toIn(wa.diff)} in</small>` : ''}<span>waist change</span></p></div>
         </div></div>
       <div class="next">${!DATA.client.cleared ? `<div><b>Admission needed</b><span>Complete your admission before your first session</span></div><a class="btn sm gold" href="#/admission">Open</a>` : next ? `<div><b>${esc(fWhen(next.start_at))}</b><span>Your next ${next.kind === 'session' ? 'EMS session' : esc(KIND_LABEL[next.kind].toLowerCase())}${next.mode === 'video' ? ' (video call)' : next.unit_name ? ' at ' + esc(next.unit_name) : ''}</span></div><a class="btn sm gold" href="#/book">Manage</a>`
         : `<div><b>No session booked</b><span>${p && p.available ? `${p.available} session${p.available > 1 ? 's' : ''} ready to book` : 'Ask the clinic about your next package'}</span></div>${p && p.available ? '<a class="btn sm gold" href="#/book">Book now</a>' : `<a class="btn sm gold" href="tel:${CLINIC_TEL}">Call</a>`}`}</div>
@@ -107,7 +107,7 @@ function progress() {
   }
   const M = DATA.insights.metrics, ch = M.change;
   const last = k => { for (let i = DATA.measurements.length - 1; i >= 0; i--) if (DATA.measurements[i][k] != null) return DATA.measurements[i][k]; return null; };
-  const tile = (l, k, u) => `<div class="metric"><div class="l">${l}</div><div class="v">${last(k) != null ? kg(last(k)) : '—'}<small>${last(k) != null ? u : ''}</small></div>${ch[k] ? deltaTag(ch[k].diff, u === '%' ? '%' : ' ' + u, k !== 'muscle_mass') : '<span class="small faint">—</span>'}</div>`;
+  const tile = (l, k, u) => `<div class="metric"><div class="l">${l}</div><div class="v">${last(k) != null ? kg(last(k)) : '—'}<small>${last(k) != null ? u : ''}</small>${u === 'cm' && last(k) != null ? `<span class="alt">${toIn(last(k))} in</span>` : ''}</div>${ch[k] ? deltaTag(ch[k].diff, u === '%' ? '%' : ' ' + u, k !== 'muscle_mass') : '<span class="small faint">—</span>'}</div>`;
   BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>Your progress</h1><p>${DATA.measurements.length ? `Last measured ${fDate(DATA.measurements[DATA.measurements.length - 1].measured_on)}` : 'Measurements are taken at the clinic'}</p></div></div>
     <section class="panel" style="padding:0;overflow:hidden"><div class="metrics" style="border:0;border-radius:0">${tile('Weight', 'weight', 'kg')}${tile('Waist', 'waist', 'cm')}${tile('Hips', 'hips', 'cm')}${tile('Body fat', 'body_fat', '%')}</div></section>
     ${M.bmi || M.whr ? `<section class="panel"><div class="grid2" style="grid-template-columns:1fr 1fr">${M.bmi ? `<div><p class="small muted">BMI</p><p class="num" style="font-size:22px;font-weight:700">${M.bmi.value}</p><p class="small">${esc(M.bmi.band)}</p></div>` : ''}${M.whr ? `<div><p class="small muted">Waist-to-hip ratio</p><p class="num" style="font-size:22px;font-weight:700">${M.whr.value}</p><p class="small">${M.whr.ok ? 'In the healthy range' : `Aim for ${M.whr.limit} or less`}</p></div>` : ''}</div>
@@ -116,7 +116,7 @@ function progress() {
     <section class="panel"><div class="panel-h"><div class="t">${icon('ruler', 20)}<h3>Waist and hips</h3></div></div><div data-wh></div></section>
     <section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>Body fat</h3></div></div><div data-bf></div></section>
     <section class="panel flush"><div class="panel-h" style="padding:16px 16px 0"><div class="t">${icon('clipboard-check', 20)}<h3>History</h3></div></div>
-      ${DATA.measurements.length ? `<table class="t" style="margin-top:6px"><thead><tr><th>Date</th><th class="n">Weight</th><th class="n">Waist</th><th class="n">Hips</th></tr></thead><tbody>${DATA.measurements.slice().reverse().map(m => `<tr><td>${esc(fDay(m.measured_on))}</td><td class="n">${m.weight != null ? kg(m.weight) : '—'}</td><td class="n">${m.waist ?? '—'}</td><td class="n">${m.hips ?? '—'}</td></tr>`).join('')}</tbody></table>`
+      ${DATA.measurements.length ? `<table class="t" style="margin-top:6px"><thead><tr><th>Date</th><th class="n">Weight</th><th class="n">Waist</th><th class="n">Hips</th></tr></thead><tbody>${DATA.measurements.slice().reverse().map(m => `<tr><td>${esc(fDay(m.measured_on))}</td><td class="n">${m.weight != null ? kg(m.weight) : '—'}</td><td class="n">${cmIn(m.waist)}</td><td class="n">${cmIn(m.hips)}</td></tr>`).join('')}</tbody></table>`
         : emptyState('ruler', 'Your first measurements will appear here after your assessment.')}</section>`;
   lineChart(BODY.querySelector('[data-w]'), { series: [{ name: 'Weight', color: '#34595e', points: measureSeries(DATA.measurements, 'weight') }], unit: ' kg', target: DATA.client.target_weight, targetLabel: 'Goal', height: 210 });
   lineChart(BODY.querySelector('[data-wh]'), { series: [{ name: 'Waist', color: '#34595e', points: measureSeries(DATA.measurements, 'waist') }, { name: 'Hips', color: '#c4a45b', points: measureSeries(DATA.measurements, 'hips') }], unit: ' cm', height: 210 });

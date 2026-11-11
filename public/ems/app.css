@@ -358,3 +358,8 @@ ul.dots{margin:0;padding-left:18px;display:grid;gap:6px;font-size:14px;color:#3f
 .slot[data-full]{border-style:dashed;color:var(--faint);background:var(--teal-mist)}
 .slot[data-full].on{color:#2b230e}
 .seg button{display:inline-flex;align-items:center;justify-content:center;gap:6px}
+
+.unitsw{display:inline-flex;border:1px solid var(--line,#d9e1df);border-radius:999px;overflow:hidden}
+.unitsw button{border:0;background:transparent;font:inherit;font-size:12px;font-weight:600;padding:2px 10px;cursor:pointer;color:var(--muted,#5e6d6c)}
+.unitsw button.on{background:var(--teal,#34595e);color:#fff}
+.metric .v .alt{display:block;font-size:13px;font-weight:600;color:var(--muted,#5e6d6c);margin-top:2px}
