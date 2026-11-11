@@ -83,7 +83,7 @@ async function route() {
   window.scrollTo(0, 0);
   try {
     if (!top) await viewToday();
-    else if (top === 'appointments') await viewAppointments(q.get('d') || today(), q.get('dept'));
+    else if (top === 'appointments') await viewAppointments(q.get('d') || today(), q.get('dept'), q.get('v'));
     else if (top === 'patients') await viewPatients(q.get('q') || '');
     else if (top === 'patient') await viewPatient(+parts[1], q.get('tab') || 'visits');
     else if (top === 'invoice') await viewInvoice(+parts[1]);
@@ -263,7 +263,37 @@ function noChargeModal(a, after) {
 }
 
 /* ---------------- Appointments ---------------- */
-async function viewAppointments(d, deptFilter) {
+// Calendar: day (by clinician), week (by day, times down the side) or month (overview). The last view used is remembered.
+const CAL_VIEWS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month']];
+const weekStart = d => addDays(d, -((new Date(d + 'T00:00:00Z').getUTCDay() + 6) % 7));
+const monthStart = d => d.slice(0, 8) + '01';
+const addMonths = (d, n) => { const x = new Date(d.slice(0, 8) + '01T00:00:00Z'); x.setUTCMonth(x.getUTCMonth() + n); return x.toISOString().slice(0, 10); };
+const D2 = (d, o) => new Date(d + 'T00:00:00Z').toLocaleDateString('en-IN', { timeZone: 'UTC', ...o });
+function calHead(view, d, deptId, title) {
+  return `<div class="head"><div><h1>Appointments</h1><p>${esc(title)}</p></div>
+      <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <div class="seg" role="tablist">${CAL_VIEWS.map(([k, l]) => `<button data-view="${k}" class="${k === view ? 'on' : ''}" role="tab" aria-selected="${k === view}">${l}</button>`).join('')}</div>
+        <select class="in" data-dept style="width:auto">${[['', 'All departments'], ...B.departments.filter(x => x.active).map(x => [x.id, x.name])].map(([v, l]) => `<option value="${v}"${String(v) === String(deptId || '') ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
+        <button class="btn ghost icon" data-prev aria-label="Previous">${icon('chevron-left', 18)}</button><input class="in" type="date" value="${d}" data-date style="width:auto"><button class="btn ghost icon" data-nextd aria-label="Next">${icon('chevron-right', 18)}</button>
+        <button class="btn ghost" data-today>Today</button><button class="btn gold" data-new>${icon('calendar-plus', 18)}New</button></div></div>`;
+}
+function wireCalHead(view, d, deptId) {
+  const nav = (dd, dp = deptId, v = view) => go(`#/appointments?v=${v}&d=${dd}${dp ? '&dept=' + dp : ''}`);
+  const step = n => view === 'month' ? addMonths(d, n) : addDays(d, view === 'week' ? 7 * n : n);
+  MAIN.querySelector('[data-prev]').onclick = () => nav(step(-1));
+  MAIN.querySelector('[data-nextd]').onclick = () => nav(step(1));
+  MAIN.querySelector('[data-today]').onclick = () => nav(today());
+  MAIN.querySelector('[data-date]').onchange = e => e.target.value && nav(e.target.value);
+  MAIN.querySelector('[data-dept]').onchange = e => nav(d, e.target.value);
+  MAIN.querySelectorAll('[data-view]').forEach(b => b.onclick = () => { try { localStorage.setItem('hw_cal_view', b.dataset.view); } catch {} nav(d, deptId, b.dataset.view); });
+  MAIN.querySelector('[data-new]').onclick = () => apptModal({ start_at: d + 'T10:00', dept_id: deptId }, () => route());
+  return nav;
+}
+async function viewAppointments(d, deptFilter, v) {
+  let view = v; if (!CAL_VIEWS.some(x => x[0] === view)) { try { view = localStorage.getItem('hw_cal_view'); } catch {} }
+  if (!CAL_VIEWS.some(x => x[0] === view)) view = 'day';
+  if (view === 'week') return viewWeek(d, deptFilter);
+  if (view === 'month') return viewMonth(d, deptFilter);
   const deptId = parseInt(deptFilter, 10) || null;
   const { appointments } = await api(`/clinic/appointments?from=${d}&to=${d}`);
   const dow = new Date(d + 'T00:00:00Z').getUTCDay(), [open, close] = B.hours[dow];
@@ -275,11 +305,7 @@ async function viewAppointments(d, deptFilter) {
   const shown = appointments.filter(a => !deptId || a.dept_id === deptId);
   const slotsPerH = 4, px = 22, rows = (endH - startH) * slotsPerH;
   const top = s => ((+s.slice(11, 13) - startH) * 60 + +s.slice(14, 16)) / 15 * px;
-  MAIN.innerHTML = `<div class="head"><div><h1>Appointments</h1><p>${esc(fLong(d))}</p></div>
-      <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
-        <select class="in" data-dept style="width:auto">${[['', 'All departments'], ...B.departments.filter(x => x.active).map(x => [x.id, x.name])].map(([v, l]) => `<option value="${v}"${String(v) === String(deptId || '') ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select>
-        <button class="btn ghost icon" data-prev aria-label="Previous day">${icon('chevron-left', 18)}</button><input class="in" type="date" value="${d}" data-date style="width:auto"><button class="btn ghost icon" data-nextd aria-label="Next day">${icon('chevron-right', 18)}</button>
-        <button class="btn ghost" data-today>Today</button><button class="btn gold" data-new>${icon('calendar-plus', 18)}New</button></div></div>
+  MAIN.innerHTML = `${calHead('day', d, deptId, fLong(d))}
     <div class="cal" style="grid-template-columns:58px repeat(${cols.length}, minmax(150px,1fr))">
       <div class="cal-h time"></div>${cols.map(c => `<div class="cal-h">${esc(c.name)}<small>${esc(c.sub)}</small></div>`).join('')}
       <div class="cal-t">${Array.from({ length: rows }, (_, i) => `<div style="height:${px}px;${i % 4 ? '' : 'transform:translateY(-6px)'}">${i % 4 ? '' : esc(fTime(`${String(startH + i / 4).padStart(2, '0')}:00`))}</div>`).join('')}</div>
@@ -287,14 +313,60 @@ async function viewAppointments(d, deptFilter) {
         ${shown.filter(a => (a.doctor_id || 0) === c.id || (c.id === 0 && a.doctor_id && !cols.some(x => x.id === a.doctor_id))).map(a => `<div class="appt st-${a.status}" data-open="${a.id}" style="--c:${esc(a.dept_colour || '#34595e')};top:${top(a.start_at)}px;height:${Math.max(px - 2, a.minutes / 15 * px - 3)}px">
           <b>${esc(fTime(a.start_at))} ${esc(a.patient_name)}</b><span>${esc(a.reason || a.dept_name || '')}${a.room_name ? ' · ' + esc(a.room_name) : ''}</span><span>${esc(ST[a.status])}${a.closure ? ' · ' + esc(ST[a.closure]) : ''}</span></div>`).join('')}</div>`).join('')}
     </div><p class="small muted" style="margin-top:10px">Click an empty slot to book with that clinician. Clinicians appear here once they are given departments in Settings → Team.</p>`;
-  const nav = (dd, dp = deptId) => go(`#/appointments?d=${dd}${dp ? '&dept=' + dp : ''}`);
-  MAIN.querySelector('[data-prev]').onclick = () => nav(addDays(d, -1));
-  MAIN.querySelector('[data-nextd]').onclick = () => nav(addDays(d, 1));
-  MAIN.querySelector('[data-today]').onclick = () => nav(today());
-  MAIN.querySelector('[data-date]').onchange = e => e.target.value && nav(e.target.value);
-  MAIN.querySelector('[data-dept]').onchange = e => nav(d, e.target.value);
-  MAIN.querySelector('[data-new]').onclick = () => apptModal({ start_at: d + 'T10:00', dept_id: deptId }, () => route());
+  wireCalHead('day', d, deptId);
   MAIN.querySelectorAll('.cal-slot:not(.closed)').forEach(s => s.onclick = () => { const col = +s.parentElement.dataset.col; const docDepts = col ? (B.team.find(t => t.id === col) || {}).depts || [] : []; apptModal({ start_at: `${d}T${s.dataset.t}`, doctor_id: col || null, dept_id: deptId || (docDepts.length === 1 ? docDepts[0] : null) }, () => route()); });
+  MAIN.querySelectorAll('[data-open]').forEach(el => el.onclick = () => apptDetail(appointments.find(a => a.id === +el.dataset.open), () => route()));
+}
+
+// Side-by-side lanes for overlapping appointments in one day column.
+function lanes(list) {
+  const end = a => { const t = Date.parse(a.start_at + ':00Z'); return t + a.minutes * 60000; };
+  const sorted = [...list].sort((a, b) => a.start_at.localeCompare(b.start_at));
+  let group = [], groupEnd = 0; const out = [];
+  const flush = () => { const laneEnds = []; for (const a of group) { const st2 = Date.parse(a.start_at + ':00Z'); let l = laneEnds.findIndex(e => e <= st2); if (l < 0) { l = laneEnds.length; laneEnds.push(0); } laneEnds[l] = end(a); a._lane = l; } for (const a of group) { a._lanes = laneEnds.length; out.push(a); } group = []; };
+  for (const a of sorted) { if (group.length && Date.parse(a.start_at + ':00Z') >= groupEnd) flush(); group.push(a); groupEnd = Math.max(groupEnd, end(a)); }
+  flush(); return out;
+}
+async function viewWeek(d, deptFilter) {
+  const deptId = parseInt(deptFilter, 10) || null, ws = weekStart(d), days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
+  const { appointments } = await api(`/clinic/appointments?from=${days[0]}&to=${days[6]}`);
+  const shown = appointments.filter(a => !deptId || a.dept_id === deptId);
+  const hrs = days.map(x => B.hours[new Date(x + 'T00:00:00Z').getUTCDay()]);
+  const startH = Math.min(...hrs.map(h => +h[0].slice(0, 2)), ...shown.map(a => +a.start_at.slice(11, 13)));
+  const endH = Math.max(...hrs.map(h => Math.ceil(+h[1].slice(0, 2) + +h[1].slice(3, 5) / 60)), ...shown.map(a => Math.ceil((+a.start_at.slice(11, 13) * 60 + +a.start_at.slice(14, 16) + a.minutes) / 60)));
+  const px = 22, rows = (endH - startH) * 4, top = s2 => ((+s2.slice(11, 13) - startH) * 60 + +s2.slice(14, 16)) / 15 * px;
+  const title = `${D2(days[0], { day: 'numeric', month: 'short' })} – ${D2(days[6], { day: 'numeric', month: 'short', year: 'numeric' })}`;
+  MAIN.innerHTML = `${calHead('week', d, deptId, title)}
+    <div class="cal week" style="grid-template-columns:58px repeat(7, minmax(120px,1fr))">
+      <div class="cal-h time"></div>${days.map(x => { const n = shown.filter(a => a.start_at.startsWith(x) && a.status !== 'cancelled').length; return `<a class="cal-h${x === today() ? ' is-today' : ''}" href="#/appointments?v=day&d=${x}${deptId ? '&dept=' + deptId : ''}">${esc(D2(x, { weekday: 'short', day: 'numeric' }))}<small>${n ? n + ' booked' : '—'}</small></a>`; }).join('')}
+      <div class="cal-t">${Array.from({ length: rows }, (_, i) => `<div style="height:${px}px;${i % 4 ? '' : 'transform:translateY(-6px)'}">${i % 4 ? '' : esc(fTime(`${String(startH + i / 4).padStart(2, '0')}:00`))}</div>`).join('')}</div>
+      ${days.map((x, di) => { const [open, close] = hrs[di]; return `<div class="cal-col" data-day="${x}">${Array.from({ length: rows }, (_, i) => { const t = `${String(startH + Math.floor(i / 4)).padStart(2, '0')}:${String(i % 4 * 15).padStart(2, '0')}`; return `<div class="cal-slot${i % 4 ? '' : ' hr'}${t < open || t >= close ? ' closed' : ''}" data-t="${t}"></div>`; }).join('')}
+        ${lanes(shown.filter(a => a.start_at.startsWith(x))).map(a => `<div class="appt st-${a.status}" data-open="${a.id}" title="${esc(`${fTime(a.start_at)} ${a.patient_name} · ${a.doctor_name || 'no clinician'} · ${ST[a.status]}`)}" style="--c:${esc(a.dept_colour || '#34595e')};top:${top(a.start_at)}px;height:${Math.max(px - 2, a.minutes / 15 * px - 3)}px;left:calc(${a._lane / a._lanes * 100}% + 3px);right:auto;width:calc(${100 / a._lanes}% - 6px)">
+          <b>${esc(fTime(a.start_at))} ${esc(a.patient_name)}</b><span>${esc(a.doctor_name || a.dept_name || '')}</span></div>`).join('')}</div>`; }).join('')}
+    </div><p class="small muted" style="margin-top:10px">Click a day's heading to see it by clinician. Click an empty slot to book at that time.</p>`;
+  wireCalHead('week', d, deptId);
+  MAIN.querySelectorAll('.cal-slot:not(.closed)').forEach(s2 => s2.onclick = () => apptModal({ start_at: `${s2.parentElement.dataset.day}T${s2.dataset.t}`, dept_id: deptId }, () => route()));
+  MAIN.querySelectorAll('[data-open]').forEach(el => el.onclick = () => apptDetail(appointments.find(a => a.id === +el.dataset.open), () => route()));
+}
+async function viewMonth(d, deptFilter) {
+  const deptId = parseInt(deptFilter, 10) || null, ms = monthStart(d), gs = weekStart(ms);
+  const weeks = Math.ceil((((new Date(ms + 'T00:00:00Z').getUTCDay() + 6) % 7) + new Date(Date.UTC(+ms.slice(0, 4), +ms.slice(5, 7), 0)).getUTCDate()) / 7);
+  const days = Array.from({ length: weeks * 7 }, (_, i) => addDays(gs, i));
+  const { appointments } = await api(`/clinic/appointments?from=${days[0]}&to=${days[days.length - 1]}`);
+  const shown = appointments.filter(a => !deptId || a.dept_id === deptId);
+  const by = {}; for (const a of shown) (by[a.start_at.slice(0, 10)] ||= []).push(a);
+  const live = list => (list || []).filter(a => a.status !== 'cancelled');
+  const total = days.filter(x => x.slice(0, 7) === ms.slice(0, 7)).reduce((n, x) => n + live(by[x]).length, 0);
+  MAIN.innerHTML = `${calHead('month', d, deptId, `${D2(ms, { month: 'long', year: 'numeric' })} · ${total} appointment${total === 1 ? '' : 's'}`)}
+    <div class="month">${['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'].map(w => `<div class="mh">${w}</div>`).join('')}
+      ${days.map(x => { const list = (by[x] || []).sort((a, b) => a.start_at.localeCompare(b.start_at)), n = live(list).length, more = list.length - 4;
+        return `<div class="md${x.slice(0, 7) !== ms.slice(0, 7) ? ' out' : ''}${x === today() ? ' is-today' : ''}" data-day="${x}">
+          <div class="mdh"><span>${+x.slice(8)}</span>${n ? `<b>${n}</b>` : ''}</div>
+          ${list.slice(0, 4).map(a => `<div class="mchip st-${a.status}" data-open="${a.id}" style="--c:${esc(a.dept_colour || '#34595e')}">${esc(fTime(a.start_at))} ${esc(a.patient_name)}</div>`).join('')}
+          ${more > 0 ? `<div class="mmore">+${more} more</div>` : ''}</div>`; }).join('')}
+    </div><p class="small muted" style="margin-top:10px">Click a day to open it. Numbers count bookings that are not cancelled.</p>`;
+  wireCalHead('month', d, deptId);
+  MAIN.querySelectorAll('.md').forEach(c => c.onclick = e => { if (e.target.closest('[data-open]')) return; go(`#/appointments?v=day&d=${c.dataset.day}${deptId ? '&dept=' + deptId : ''}`); });
   MAIN.querySelectorAll('[data-open]').forEach(el => el.onclick = () => apptDetail(appointments.find(a => a.id === +el.dataset.open), () => route()));
 }
 
