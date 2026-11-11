@@ -45,3 +45,6 @@
 @media (max-width:960px){.map-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media (max-width:640px){.map-grid{grid-template-columns:1fr}.cal{max-height:none}}
 @media print{.tabs,.noprint{display:none!important}.panel{border:0}}
+.tabs a{display:flex;align-items:center;gap:8px;padding:10px 14px;font-weight:600;font-size:14px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
+.tabs a.on{color:var(--teal-ink);border-bottom-color:var(--gold)}
+.pill.approved,.pill.received{background:#e3efe9;color:#2c6b4f}.pill.part_received{background:#fbf1dc;color:#8a6a2f}.pill.closed{background:#eef1f1;color:#5e6d6c}

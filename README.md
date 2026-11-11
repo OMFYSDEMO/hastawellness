@@ -109,3 +109,9 @@ client's active package includes them.
   voids by managers, cash in hand and bank deposits.
 - Every completed visit must be billed, taken from a package or marked no-charge.
 - Reports: day book, monthly GST by rate, department revenue, collections, discounts.
+
+### Stock & purchasing (clinic app, phase 3a)
+- `src/stock.js` — suppliers, purchase orders (draft → approved → part received / received / closed), goods received notes with batch, expiry and free quantity, stock moves, supplier payments, purchase GST summary and the PO PDF. Migration `0013_clinic_stock.sql`.
+- Stock on hand = `SUM(cl_stock_moves.qty)`; batches go out first-expiry-first. A finalised invoice takes its product lines out of stock; cancelling it puts them back.
+- Managers approve orders, pay suppliers and adjust stock; any clinic user can raise a draft order, receive goods and record use in treatment.
+- Data from the previous system (opening stock, suppliers, order and GRN headers) is loaded with `legacy=1` where lines were not available.

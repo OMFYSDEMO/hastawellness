@@ -7,7 +7,7 @@ import {
 const app = document.getElementById('app');
 let ME, B, MAIN, CAT = null;
 const NAV = [['', 'layout-dashboard', 'Today'], ['appointments', 'calendar-days', 'Appointments'], ['patients', 'users', 'Patients'], ['billing', 'receipt', 'Billing'],
-  ['payments', 'wallet', 'Payments'], ['leads', 'inbox', 'Leads'], ['reports', 'line-chart', 'Reports']];
+  ['payments', 'wallet', 'Payments'], ['stock', 'package', 'Stock'], ['leads', 'inbox', 'Leads'], ['reports', 'line-chart', 'Reports']];
 const ST = { booked: 'Booked', arrived: 'Arrived', in_treatment: 'In treatment', completed: 'Completed', no_show: 'No-show', cancelled: 'Cancelled', draft: 'Draft', final: 'Final', billed: 'Billed', package: 'Package', no_charge: 'No charge' };
 const st = (s, label) => pill(s, label || ST[s] || s);
 const money = n => '₹' + (Math.round((n || 0) * 100) / 100).toLocaleString('en-IN', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
@@ -68,7 +68,7 @@ function parseHash() { const [p, q] = location.hash.replace(/^#\/?/, '').split('
 async function refreshBoot() { B = await api('/clinic/boot'); ME = B.me; CAT = null; }
 async function route() {
   const { parts, q } = parseHash(), top = parts[0] || '';
-  app.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.k === top || (top === 'invoice' && a.dataset.k === 'billing') || (top === 'patient' && a.dataset.k === 'patients')));
+  app.querySelectorAll('.nav a').forEach(a => a.classList.toggle('on', a.dataset.k === top || (top === 'invoice' && a.dataset.k === 'billing') || (top === 'patient' && a.dataset.k === 'patients') || (['po', 'grn'].includes(top) && a.dataset.k === 'stock')));
   MAIN.innerHTML = '<div class="boot" style="min-height:50vh"><img src="/img/hasta-emblem.webp" alt="" width="44" height="44"></div>';
   window.scrollTo(0, 0);
   try {
@@ -80,6 +80,9 @@ async function route() {
     else if (top === 'billing') await viewBilling(q.get('f') || 'today');
     else if (top === 'payments') await viewPayments(q.get('from') || today(), q.get('to') || today());
     else if (top === 'leads') await viewLeads(q.get('s') || 'open', q.get('ch') || '');
+    else if (top === 'stock') await viewStock(q.get('tab') || 'stock', q);
+    else if (top === 'po') await viewPO(parts[1] === 'new' ? null : +parts[1]);
+    else if (top === 'grn') await (parts[1] === 'new' ? newGRN(+q.get('po') || null) : viewGRN(+parts[1]));
     else if (top === 'reports') await viewReports(q.get('tab') || 'day', q.get('d'), q.get('m'));
     else if (top === 'settings') await viewSettings(q.get('tab') || (isAdmin() ? 'clinic' : 'account'));
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
@@ -140,6 +143,7 @@ async function viewToday() {
       <div class="kpi"><div class="l">${icon('wallet', 16)}Collected today</div><div class="v money">${money(collected)}</div><div class="s">${d.collections.map(c => `${esc(B.modes[c.mode])} ${money(c.s)}`).join(' · ') || 'nothing yet'}</div></div>
       <div class="kpi"><div class="l">${icon('badge-indian-rupee', 16)}Cash in hand</div><div class="v money">${money(d.cash.in_hand)}</div><div class="s">${d.cash.in_hand > 0 && d.cash.oldest_undeposited ? 'since ' + esc(fDay(d.cash.oldest_undeposited)) : 'all deposited'}</div></div>
       <div class="kpi"><div class="l">${icon('alert-triangle', 16)}Outstanding</div><div class="v money">${money(d.outstanding.amount)}</div><div class="s"><a href="#/billing?f=due">${d.outstanding.count} invoice${d.outstanding.count === 1 ? '' : 's'}</a></div></div></div>
+    ${d.stock && (d.stock.low || d.stock.expiring || d.stock.draft_pos) ? `<div class="notice">${icon('package', 18)}<span>${[d.stock.low && `<a href="#/stock?f=low">${d.stock.low} product${d.stock.low === 1 ? '' : 's'} at or below reorder level</a>`, d.stock.expiring && `<a href="#/stock?f=exp">${d.stock.expiring} batch${d.stock.expiring === 1 ? '' : 'es'} expiring within 60 days</a>`, d.stock.draft_pos && `<a href="#/stock?tab=orders">${d.stock.draft_pos} purchase order${d.stock.draft_pos === 1 ? '' : 's'} waiting for approval</a>`].filter(Boolean).join(' · ')}</span></div>` : ''}
     ${d.unclosed.length ? `<section class="panel flush" style="margin-bottom:18px;border-color:#e6c3bc"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('alert-triangle', 20)}<div><h3>Visits to close</h3><p class="small muted">Completed visits must be billed, covered by a package, or marked no charge.</p></div></div></div>
       <div class="rows">${d.unclosed.map(a => closeRow(a)).join('')}</div></section>` : ''}
     <section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('calendar-days', 20)}<h3>Today's appointments</h3></div><a class="btn quiet sm" href="#/appointments">Calendar ${icon('chevron-right', 16)}</a></div>
@@ -804,3 +808,254 @@ function memberModal(t, reload) {
 }
 
 start();
+
+/* ---------------- Stock & purchasing ---------------- */
+const GSTR = [0, 5, 12, 18, 28];
+const POST = { draft: 'Draft', approved: 'Approved', part_received: 'Part received', received: 'Received', closed: 'Closed', cancelled: 'Cancelled' };
+const PAYM = { bank: 'Bank transfer', upi: 'UPI', cash: 'Cash', cheque: 'Cheque', card: 'Card' };
+const qtyf = n => (Math.round((n || 0) * 1000) / 1000).toLocaleString('en-IN');
+const canMgr = () => ME.admin || ME.role === 'manager';
+let SUP = null;
+async function suppliersList(force) { if (!SUP || force) SUP = (await api('/clinic/suppliers')).suppliers; return SUP; }
+const products = async () => (await catalogue()).filter(i => i.kind === 'product');
+async function productPicker(el, onPick) {
+  const items = await products();
+  el.innerHTML = `<div class="picker"><input class="in" placeholder="Add a product — type a name or code" autocomplete="off"><div class="list" hidden></div></div>`;
+  const input = el.querySelector('input'), list = el.querySelector('.list');
+  input.addEventListener('input', () => {
+    const ws = input.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    if (!ws.length) { list.hidden = true; return; }
+    const hits = items.filter(i => ws.every(w => (i.name + ' ' + (i.code || '') + ' ' + (i.category || '')).toLowerCase().includes(w))).slice(0, 15);
+    list.innerHTML = hits.length ? hits.map(i => `<div class="opt" data-id="${i.id}"><span>${esc(i.name)} <small>${esc(i.code || '')}${i.unit ? ' · ' + esc(i.unit) : ''}</small></span><small class="money">cost ${money(i.cost || 0)}</small></div>`).join('') : '<div class="opt"><small>No product matches.</small></div>';
+    list.hidden = false;
+    list.querySelectorAll('[data-id]').forEach(o => o.onmousedown = e => { e.preventDefault(); onPick(items.find(x => x.id === +o.dataset.id)); input.value = ''; list.hidden = true; });
+  });
+  input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+}
+function stockTabs(tab) {
+  const T = [['stock', 'Stock'], ['orders', 'Purchase orders'], ['grn', 'Goods received'], ['suppliers', 'Suppliers'], ['purchases', 'Purchase report']];
+  return `<nav class="tabs">${T.map(([k, l]) => `<a href="#/stock?tab=${k}" class="${k === tab ? 'on' : ''}" style="text-decoration:none">${l}</a>`).join('')}</nav>`;
+}
+async function viewStock(tab, q) {
+  if (tab === 'orders') return viewPOList(q.get('s') || 'open');
+  if (tab === 'grn') return viewGRNList();
+  if (tab === 'suppliers') return viewSuppliers();
+  if (tab === 'purchases') return viewPurchaseReport(q.get('m'));
+  const { items, alerts } = await api('/clinic/stock');
+  const d60 = addDays(today(), 60);
+  let f = q.get('f') || 'all', s = '';
+  MAIN.innerHTML = `<div class="head"><div><h1>Stock</h1><p>${items.filter(i => i.on_hand > 0).length} products in stock · value ${money(items.reduce((a, i) => a + i.value, 0))}</p></div>
+      <div class="acts" style="display:flex;gap:8px"><a class="btn ghost" href="#/grn/new">${icon('package', 18)}Receive goods</a><a class="btn gold" href="#/po/new">${icon('plus', 18)}New order</a></div></div>${stockTabs('stock')}
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><input class="in" data-q placeholder="Search product or code" style="max-width:300px">
+      <div class="seg">${[['all', 'All'], ['low', `Low / out (${alerts.low})`], ['exp', `Expiring ≤ 60 days (${alerts.expiring})`], ['neg', 'Below zero']].map(([k, l]) => `<button data-f="${k}" class="${k === f ? 'on' : ''}">${l}</button>`).join('')}</div></div>
+    <section class="panel flush" data-list></section>`;
+  const draw = () => {
+    const ws = s.toLowerCase().split(/\s+/).filter(Boolean);
+    const list = items.filter(i => ws.every(w => (i.name + ' ' + (i.code || '')).toLowerCase().includes(w)))
+      .filter(i => f === 'low' ? i.track_stock && (i.on_hand <= 0 || (i.reorder_level > 0 && i.on_hand <= i.reorder_level)) : f === 'exp' ? i.next_expiry && i.next_expiry <= d60 : f === 'neg' ? i.on_hand < 0 : true).slice(0, 400);
+    MAIN.querySelector('[data-list]').innerHTML = list.length ? `<table class="t"><thead><tr><th>Product</th><th class="n">On hand</th><th class="n">Reorder at</th><th>Next expiry</th><th class="n">Value</th><th>Supplier</th></tr></thead><tbody>
+      ${list.map(i => `<tr data-id="${i.id}" style="cursor:pointer"><td><b>${esc(i.name)}</b><div class="small muted">${esc(i.code || '')}${i.sellable ? '' : ' · internal use'}</div></td>
+        <td class="n" style="font-weight:700;${i.on_hand <= 0 || (i.reorder_level > 0 && i.on_hand <= i.reorder_level) ? 'color:var(--alert)' : ''}">${qtyf(i.on_hand)} <small class="muted" style="font-weight:400">${esc((i.unit || '').slice(0, 10))}</small></td>
+        <td class="n">${i.reorder_level ? qtyf(i.reorder_level) : '—'}</td><td class="small"${i.next_expiry && i.next_expiry <= d60 ? ' style="color:var(--alert);font-weight:600"' : ''}>${i.next_expiry ? esc(fDate(i.next_expiry)) : '—'}</td>
+        <td class="n money">${money(i.value)}</td><td class="small">${esc(i.supplier_name || '')}</td></tr>`).join('')}</tbody></table>`
+      : emptyState('package', items.length ? 'Nothing matches.' : 'No stock yet. Receive goods to start.');
+    MAIN.querySelectorAll('[data-id]').forEach(r => r.onclick = () => stockItemModal(+r.dataset.id, () => route()));
+  };
+  MAIN.querySelector('[data-q]').oninput = e => { s = e.target.value; draw(); };
+  MAIN.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { f = b.dataset.f; MAIN.querySelectorAll('[data-f]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
+  draw();
+}
+async function stockItemModal(id, after) {
+  const d = await api('/clinic/stock/' + id), it = d.item;
+  const sups = await suppliersList();
+  const KIND = { opening: 'Opening stock', grn: 'Received', sale: 'Sold', sale_cancel: 'Sale cancelled', use: 'Used in treatment', adjust: 'Adjustment' };
+  modal({ title: it.name, wide: true, body: `<div class="kpis" style="margin-bottom:14px"><div class="kpi"><div class="l">On hand</div><div class="v">${qtyf(it.on_hand)}</div><div class="s">${esc(it.unit || '')}</div></div><div class="kpi"><div class="l">Average cost</div><div class="v money" style="font-size:20px">${money(it.avg_cost ?? it.cost ?? 0)}</div><div class="s">last purchase ${money(it.cost || 0)}</div></div><div class="kpi"><div class="l">Selling price</div><div class="v money" style="font-size:20px">${it.sellable ? money(it.price) : '—'}</div><div class="s">${it.sellable ? `+ ${it.gst_rate}% GST` : 'internal use'}</div></div></div>
+      ${d.batches.length ? `<h4 style="margin:6px 0 8px">Batches</h4><table class="t" style="margin-bottom:14px"><thead><tr><th>Batch</th><th>Expiry</th><th class="n">Left</th></tr></thead><tbody>${d.batches.map(b => `<tr><td>${esc(b.batch_no || '—')}</td><td${b.expiry && b.expiry <= addDays(today(), 60) ? ' style="color:var(--alert);font-weight:600"' : ''}>${b.expiry ? esc(fDate(b.expiry)) : '—'}</td><td class="n">${qtyf(b.qty_left)}</td></tr>`).join('')}</tbody></table>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><button class="btn sm ghost" data-use>${icon('stethoscope', 15)}Use in treatment</button>${canMgr() ? `<button class="btn sm ghost" data-adj>${icon('pencil', 15)}Adjust stock</button><button class="btn sm quiet" data-set>${icon('settings', 15)}Stock settings</button>` : ''}</div>
+      <div data-form></div>
+      <h4 style="margin:10px 0 8px">Movements</h4>${d.moves.length ? `<table class="t"><thead><tr><th>Date</th><th>What</th><th class="n">Qty</th><th>Batch</th><th>By</th></tr></thead><tbody>${d.moves.map(m => `<tr><td class="small">${esc(fDate(m.created_at.slice(0, 10)))}</td><td class="small">${esc(KIND[m.kind] || m.kind)}${m.ref_no ? ' · ' + esc(m.ref_no) : ''}${m.reason ? `<div class="muted">${esc(m.reason)}</div>` : ''}</td><td class="n" style="font-weight:700;color:${m.qty < 0 ? 'var(--alert)' : 'var(--teal-ink)'}">${m.qty > 0 ? '+' : ''}${qtyf(m.qty)}</td><td class="small">${esc(m.batch_no || '')}</td><td class="small">${esc(m.staff_name || '')}</td></tr>`).join('')}</tbody></table>` : '<p class="small muted">No movements yet.</p>'}`,
+    actions: '<button class="btn ghost" data-close>Close</button>',
+    onMount(el, close) {
+      const form = el.querySelector('[data-form]');
+      const bsel = d.batches.length ? field('Batch', sel('batch_id', [['', 'First to expire (automatic)'], ...d.batches.map(b => [b.id, `${b.batch_no || 'no batch'}${b.expiry ? ' · exp ' + fDate(b.expiry) : ''} · ${qtyf(b.qty_left)} left`])], '')) : '';
+      const submit = (btn, body) => busy(btn, () => api('/clinic/stock/move', { method: 'POST', body: { item_id: id, ...body } }), true).then(() => { close(); toast('Stock updated'); after && after(); }).catch(e => toast(e.message, true));
+      el.querySelector('[data-use]').onclick = () => {
+        form.innerHTML = `<section class="panel" style="margin-bottom:12px"><form data-f class="stack" style="gap:10px"><div class="grid2">${field('Quantity used', inp('qty', '1', 'type="number" min="0" step="any"'))}${bsel || '<span></span>'}</div>${field('For (patient / treatment)', inp('reason', '', 'maxlength="200" placeholder="e.g. HW-000049 GFC session"'))}</form><button class="btn sm" data-go style="margin-top:10px">Record use</button></section>`;
+        form.querySelector('[data-go]').onclick = e => { const v = formData(form.querySelector('[data-f]')); submit(e.target, { kind: 'use', qty: -Math.abs(Number(v.qty)), batch_id: v.batch_id, reason: v.reason }); };
+      };
+      if (canMgr()) {
+        el.querySelector('[data-adj]').onclick = () => {
+          form.innerHTML = `<section class="panel" style="margin-bottom:12px"><form data-f class="stack" style="gap:10px"><div class="grid2">${field('Change', sel('dir', [['-', 'Remove stock'], ['+', 'Add stock']], '-'))}${field('Quantity', inp('qty', '', 'type="number" min="0" step="any"'))}</div>${bsel}
+            ${field('Reason', sel('why', [['Physical count correction', 'Physical count correction'], ['Damaged', 'Damaged'], ['Expired', 'Expired'], ['Sample / free issue', 'Sample / free issue'], ['Other', 'Other']], 'Physical count correction'))}${field('Note', inp('note', '', 'maxlength="150"'))}</form><button class="btn sm" data-go style="margin-top:10px">Save adjustment</button></section>`;
+          form.querySelector('[data-go]').onclick = e => { const v = formData(form.querySelector('[data-f]')); const qn = Math.abs(Number(v.qty)); submit(e.target, { kind: 'adjust', qty: v.dir === '-' ? -qn : qn, batch_id: v.batch_id, reason: [v.why, v.note].filter(Boolean).join(' — ') }); };
+        };
+        el.querySelector('[data-set]').onclick = () => {
+          form.innerHTML = `<section class="panel" style="margin-bottom:12px"><form data-f class="stack" style="gap:10px"><div class="chips"><label class="chip"><input type="checkbox" name="track_stock" ${it.track_stock ? 'checked' : ''}>Keep stock</label><label class="chip"><input type="checkbox" name="track_batch" ${it.track_batch ? 'checked' : ''}>Batch &amp; expiry on receipt</label></div>
+            <div class="grid3">${field('Reorder at', inp('reorder_level', it.reorder_level ?? '', 'type="number" min="0" step="any"'))}${field('Order quantity', inp('reorder_qty', it.reorder_qty ?? '', 'type="number" min="0" step="any"'))}${field('Usual supplier', sel('supplier_id', [['', '—'], ...sups.filter(x => x.active).map(x => [x.id, x.name])], it.supplier_id || ''))}</div></form><button class="btn sm" data-go style="margin-top:10px">Save</button></section>`;
+          form.querySelector('[data-go]').onclick = e => { const f = form.querySelector('[data-f]'); const v = formData(f); busy(e.target, () => api(`/clinic/stock/${id}/settings`, { method: 'PUT', body: { ...v, track_stock: f.track_stock.checked, track_batch: f.track_batch.checked } }), true).then(() => { close(); toast('Saved'); after && after(); }).catch(er => toast(er.message, true)); };
+        };
+      }
+    } });
+}
+
+/* Purchase orders */
+async function viewPOList(s) {
+  const { pos } = await api('/clinic/pos?status=' + encodeURIComponent(s));
+  MAIN.innerHTML = `<div class="head"><div><h1>Purchase orders</h1></div><div class="acts"><a class="btn gold" href="#/po/new">${icon('plus', 18)}New order</a></div></div>${stockTabs('orders')}
+    <div class="seg" style="margin-bottom:14px">${[['open', 'Open'], ['received', 'Received'], ['all', 'All']].map(([k, l]) => `<button data-s="${k}" class="${k === s ? 'on' : ''}">${l}</button>`).join('')}</div>
+    <section class="panel flush">${pos.length ? `<table class="t"><thead><tr><th>Order</th><th>Supplier</th><th>Date</th><th>Status</th><th class="n">Total</th></tr></thead><tbody>${pos.map(p => `<tr data-id="${p.id}" style="cursor:pointer"><td><b>${esc(p.po_no)}</b>${p.legacy ? '<div class="small muted">from previous system</div>' : ''}</td><td>${esc(p.supplier_name)}</td><td class="small">${esc(fDate(p.order_date))}</td><td>${pill(p.status, POST[p.status])}</td><td class="n money">${money(p.total)}</td></tr>`).join('')}</tbody></table>` : emptyState('package', 'No orders here.')}</section>`;
+  MAIN.querySelectorAll('[data-s]').forEach(b => b.onclick = () => go('#/stock?tab=orders&s=' + b.dataset.s));
+  MAIN.querySelectorAll('[data-id]').forEach(r => r.onclick = () => go('#/po/' + r.dataset.id));
+}
+async function viewPO(id) {
+  const sups = (await suppliersList()).filter(x => x.active);
+  const d = id ? await api('/clinic/pos/' + id) : { po: { status: 'draft', order_date: today(), supplier_id: '' }, lines: [], grns: [] };
+  const po = d.po, draft = po.status === 'draft' && !po.legacy;
+  let lines = d.lines.map(l => ({ item_id: l.item_id, name: l.name, qty: l.qty, unit_cost: l.unit_cost, gst_rate: l.gst_rate, qty_received: l.qty_received, unit: l.unit }));
+  MAIN.innerHTML = `<a href="#/stock?tab=orders" class="crumb">${icon('arrow-left', 16)}Purchase orders</a>
+    <div class="head"><div><h1>${id ? esc(po.po_no) : 'New purchase order'}</h1><p>${id ? `${esc(po.supplier_name)} · ${esc(fDate(po.order_date))} ${pill(po.status, POST[po.status])}${po.approved_by_name ? ' · approved by ' + esc(po.approved_by_name) : ''}` : 'Draft — save, then ask a manager to approve.'}</p></div>
+      <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${draft ? `${id ? `<button class="btn quiet" data-del>${icon('trash-2', 16)}Delete</button>` : ''}<button class="btn ghost" data-save>Save draft</button>${id && canMgr() ? `<button class="btn gold" data-approve>${icon('check', 18)}Approve</button>` : ''}` : ''}
+        ${id && !po.legacy ? `<a class="btn ghost" href="${BASE}/api/clinic/pos/${id}/pdf" target="_blank" rel="noopener">${icon('printer', 18)}PDF</a>` : ''}
+        ${['approved', 'part_received'].includes(po.status) && !po.legacy ? `<a class="btn gold" href="#/grn/new?po=${id}">${icon('package', 18)}Receive goods</a>` : ''}
+        ${canMgr() && ['approved', 'part_received'].includes(po.status) ? `<button class="btn quiet" data-close>Close order</button>` : ''}${canMgr() && id && ['draft', 'approved'].includes(po.status) ? `<button class="btn quiet" data-cancel>Cancel order</button>` : ''}</div></div>
+    ${po.legacy ? `<div class="notice">${icon('info', 18)}<span>Carried over from the previous system without its product lines. ${['approved', 'part_received', 'draft'].includes(po.status) ? 'If goods are still due, close this one and raise a new order with the products.' : ''}</span></div>` : ''}
+    <section class="panel" style="margin-bottom:16px"><div class="grid3">${field('Supplier', sel('supplier_id', [['', 'Choose…'], ...sups.map(x => [x.id, x.name])], po.supplier_id, draft ? 'data-sup' : 'disabled'))}${field('Order date', inp('order_date', po.order_date, `type="date" data-od ${draft ? '' : 'disabled'}`))}${field('Deliver by', inp('expected_date', po.expected_date || '', `type="date" data-ed ${draft ? '' : 'disabled'}`))}</div>
+      <div style="margin-top:10px">${field('Notes for supplier', inp('notes', po.notes || '', `maxlength="300" data-notes ${draft ? '' : 'disabled'}`))}</div></section>
+    <section class="panel flush"><table class="t"><thead><tr><th>Product</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">GST</th><th class="n">Amount</th>${draft ? '<th></th>' : '<th class="n">Received</th>'}</tr></thead><tbody data-lines></tbody></table>
+      ${draft ? '<div style="padding:14px 16px;border-top:1px solid var(--line-soft)" data-add></div>' : ''}
+      <div style="padding:14px 20px;border-top:1px solid var(--line-soft);text-align:right" data-tot></div></section>
+    ${d.grns.length ? `<section class="panel flush" style="margin-top:16px"><div class="panel-h" style="padding:16px 20px 0"><h3>Goods received</h3></div><div class="rows">${d.grns.map(g => `<a class="row" href="#/grn/${g.id}"><div class="grow"><b>${esc(g.grn_no)}</b><span>${esc(fDate(g.received_date))}${g.supplier_invoice_no ? ' · invoice ' + esc(g.supplier_invoice_no) : ''}</span></div><span class="money">${money(g.total)}</span></a>`).join('')}</div></section>` : ''}`;
+  const tbody = MAIN.querySelector('[data-lines]');
+  const draw = () => {
+    tbody.innerHTML = lines.length ? lines.map((l, i) => draft ? `<tr><td><b>${esc(l.name)}</b></td><td class="n"><input class="in" data-k="qty" data-i="${i}" value="${l.qty}" type="number" min="0" step="any" style="width:80px;height:34px;text-align:right"></td>
+        <td class="n"><input class="in" data-k="unit_cost" data-i="${i}" value="${l.unit_cost}" type="number" min="0" step="0.01" style="width:100px;height:34px;text-align:right"></td><td class="n">${sel('g' + i, GSTR.map(r => [r, r + '%']), l.gst_rate, `data-k="gst_rate" data-i="${i}" style="width:80px;height:34px"`)}</td>
+        <td class="n money">${money(l.qty * l.unit_cost * (1 + l.gst_rate / 100))}</td><td><button class="btn sm quiet icon" data-rm="${i}" aria-label="Remove">${icon('x', 16)}</button></td></tr>`
+      : `<tr><td><b>${esc(l.name)}</b></td><td class="n">${qtyf(l.qty)}</td><td class="n money">${money(l.unit_cost)}</td><td class="n">${l.gst_rate}%</td><td class="n money">${money(l.qty * l.unit_cost * (1 + l.gst_rate / 100))}</td><td class="n">${qtyf(l.qty_received || 0)}</td></tr>`).join('') : `<tr><td colspan="6" class="muted">${po.legacy ? 'Product lines were not carried over.' : 'Add products below.'}</td></tr>`;
+    const sub = lines.reduce((s, l) => s + l.qty * l.unit_cost, 0), tax = lines.reduce((s, l) => s + l.qty * l.unit_cost * l.gst_rate / 100, 0);
+    MAIN.querySelector('[data-tot]').innerHTML = po.legacy ? `<b>Order total ${money(po.total)}</b>` : `<span class="small muted">Value ${money(sub)} · GST ${money(tax)}</span><div style="font-size:20px;font-weight:700;margin-top:4px">${money(sub + tax)}</div>`;
+    tbody.querySelectorAll('[data-k]').forEach(x => x.onchange = () => { lines[+x.dataset.i][x.dataset.k] = Number(x.value) || 0; draw(); });
+    tbody.querySelectorAll('[data-rm]').forEach(x => x.onclick = () => { lines.splice(+x.dataset.rm, 1); draw(); });
+  };
+  draw();
+  if (draft) {
+    productPicker(MAIN.querySelector('[data-add]'), it => { lines.push({ item_id: it.id, name: it.name, qty: it.reorder_qty || 1, unit_cost: it.cost || 0, gst_rate: GSTR.includes(it.gst_rate) ? it.gst_rate : 0 }); draw(); });
+    const body = () => ({ supplier_id: MAIN.querySelector('[data-sup]').value, order_date: MAIN.querySelector('[data-od]').value, expected_date: MAIN.querySelector('[data-ed]').value, notes: MAIN.querySelector('[data-notes]').value, lines });
+    const save = () => api(id ? '/clinic/pos/' + id : '/clinic/pos', { method: id ? 'PUT' : 'POST', body: body() });
+    MAIN.querySelector('[data-save]').onclick = e => busy(e.target, save).then(r => { toast('Saved'); if (!id) go('#/po/' + r.id); else route(); }).catch(() => {});
+    const ap = MAIN.querySelector('[data-approve]'); if (ap) ap.onclick = e => busy(e.target, async () => { await save(); return api(`/clinic/pos/${id}/approve`, { method: 'POST', body: {} }); }).then(() => { toast('Order approved'); route(); }).catch(() => {});
+    const del = MAIN.querySelector('[data-del]'); if (del) del.onclick = () => { if (confirm('Delete this draft order?')) api('/clinic/pos/' + id, { method: 'DELETE', body: {} }).then(() => go('#/stock?tab=orders')).catch(e => toast(e.message, true)); };
+  }
+  const act = (sel2, action, msg) => { const b = MAIN.querySelector(sel2); if (b) b.onclick = () => { const reason = prompt(msg); if (reason === null) return; api(`/clinic/pos/${id}/${action}`, { method: 'POST', body: { reason } }).then(() => { toast('Done'); route(); }).catch(e => toast(e.message, true)); }; };
+  act('[data-close]', 'close', 'Close this order? No more goods will be received against it. Reason (optional):');
+  act('[data-cancel]', 'cancel', 'Cancel this order? Reason:');
+}
+
+/* Goods received */
+async function viewGRNList() {
+  const { grns } = await api('/clinic/grns');
+  MAIN.innerHTML = `<div class="head"><div><h1>Goods received</h1></div><div class="acts"><a class="btn gold" href="#/grn/new">${icon('package', 18)}Receive goods</a></div></div>${stockTabs('grn')}
+    <section class="panel flush">${grns.length ? `<table class="t"><thead><tr><th>GRN</th><th>Supplier</th><th>Received</th><th>Supplier invoice</th><th class="n">Total</th></tr></thead><tbody>${grns.map(g => `<tr data-id="${g.id}" style="cursor:pointer"><td><b>${esc(g.grn_no)}</b><div class="small muted">${g.po_no ? esc(g.po_no) : 'no order'}${g.legacy ? ' · previous system' : ''}</div></td><td>${esc(g.supplier_name)}</td><td class="small">${esc(fDate(g.received_date))}</td><td class="small">${esc(g.supplier_invoice_no || '—')}</td><td class="n money">${money(g.total)}</td></tr>`).join('')}</tbody></table>` : emptyState('package', 'Nothing received yet.')}</section>`;
+  MAIN.querySelectorAll('[data-id]').forEach(r => r.onclick = () => go('#/grn/' + r.dataset.id));
+}
+async function viewGRN(id) {
+  const d = await api('/clinic/grns/' + id), g = d.grn;
+  MAIN.innerHTML = `<a href="#/stock?tab=grn" class="crumb">${icon('arrow-left', 16)}Goods received</a>
+    <div class="head"><div><h1>${esc(g.grn_no)}</h1><p>${esc(g.supplier_name)} · received ${esc(fDate(g.received_date))}${g.received_by_name ? ' by ' + esc(g.received_by_name) : ''}${g.po_no ? ` · <a href="#/po/${g.po_id}">${esc(g.po_no)}</a>` : ''}</p></div></div>
+    ${g.legacy ? `<div class="notice">${icon('info', 18)}<span>Carried over from the previous system — product lines were not available.</span></div>` : ''}
+    <section class="panel" style="margin-bottom:16px"><div class="grid3"><div><div class="small muted">Supplier invoice</div><b>${esc(g.supplier_invoice_no || '—')}</b>${g.supplier_invoice_date ? ' · ' + esc(fDate(g.supplier_invoice_date)) : ''}</div><div><div class="small muted">GST</div><b>${g.igst ? 'IGST ' + money(g.igst) : `CGST ${money(g.cgst)} · SGST ${money(g.sgst)}`}</b></div><div><div class="small muted">Total</div><b class="money" style="font-size:18px">${money(g.total)}</b></div></div>${g.notes ? `<p class="small muted" style="margin-top:10px">${esc(g.notes)}</p>` : ''}</section>
+    ${d.lines.length ? `<section class="panel flush"><table class="t"><thead><tr><th>Product</th><th class="n">Qty</th><th class="n">Free</th><th class="n">Rate</th><th class="n">GST</th><th>Batch · expiry</th><th class="n">Amount</th></tr></thead><tbody>${d.lines.map(l => `<tr><td><b>${esc(l.name)}</b></td><td class="n">${qtyf(l.qty)}</td><td class="n">${l.free_qty ? qtyf(l.free_qty) : '—'}</td><td class="n money">${money(l.unit_cost)}</td><td class="n">${l.gst_rate}%</td><td class="small">${esc(l.batch_no || '—')}${l.expiry ? ' · ' + esc(fDate(l.expiry)) : ''}</td><td class="n money">${money(l.total)}</td></tr>`).join('')}</tbody></table></section>` : ''}`;
+}
+async function newGRN(poId) {
+  const sups = (await suppliersList()).filter(x => x.active);
+  const cat = await products();
+  let po = null, lines = [];
+  if (poId) {
+    const d = await api('/clinic/pos/' + poId); po = d.po;
+    lines = d.lines.filter(l => l.qty - (l.qty_received || 0) > 0).map(l => ({ po_line_id: l.id, item_id: l.item_id, name: l.name, ordered: l.qty - (l.qty_received || 0), qty: r2(l.qty - (l.qty_received || 0)), free_qty: 0, unit_cost: l.unit_cost, gst_rate: l.gst_rate, batch_no: '', expiry: '', track_batch: l.track_batch }));
+  }
+  MAIN.innerHTML = `<a href="${po ? '#/po/' + po.id : '#/stock?tab=grn'}" class="crumb">${icon('arrow-left', 16)}${po ? esc(po.po_no) : 'Goods received'}</a>
+    <div class="head"><div><h1>Receive goods</h1><p>${po ? `Against ${esc(po.po_no)} · ${esc(po.supplier_name)}` : 'Without a purchase order'}. Check quantities, batch numbers and expiry dates against the supplier's invoice.</p></div></div>
+    <section class="panel" style="margin-bottom:16px"><form data-h class="stack" style="gap:12px"><div class="grid3">${field('Supplier', sel('supplier_id', [['', 'Choose…'], ...sups.map(x => [x.id, x.name])], po ? po.supplier_id : '', po ? 'disabled' : ''))}${field('Received on', inp('received_date', today(), 'type="date"'))}${field('Round-off (₹)', inp('round_off', '0', 'type="number" step="0.01"'), 'to match the invoice total')}</div>
+      <div class="grid3">${field('Supplier invoice no.', inp('supplier_invoice_no', '', 'maxlength="40"'))}${field('Invoice date', inp('supplier_invoice_date', '', 'type="date"'))}${field('Notes', inp('notes', '', 'maxlength="300"'))}</div></form></section>
+    <section class="panel flush"><div style="overflow-x:auto"><table class="t"><thead><tr><th>Product</th><th class="n">Qty</th><th class="n">Free</th><th class="n">Rate</th><th class="n">GST</th><th>Batch no.</th><th>Expiry</th><th class="n">Amount</th><th></th></tr></thead><tbody data-lines></tbody></table></div>
+      <div style="padding:14px 16px;border-top:1px solid var(--line-soft)" data-add></div>
+      <div style="padding:14px 20px;border-top:1px solid var(--line-soft);display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><span class="small muted">Stock goes up as soon as you post. Free quantity adds to stock at no cost.</span><div style="text-align:right"><div data-tot></div><button class="btn gold" data-post style="margin-top:8px">${icon('check', 18)}Post goods received</button></div></div></section>`;
+  const tbody = MAIN.querySelector('[data-lines]');
+  const I = (k, i, v, a = '') => `<input class="in" data-k="${k}" data-i="${i}" value="${esc(v ?? '')}" ${a} style="height:34px">`;
+  const draw = () => {
+    tbody.innerHTML = lines.length ? lines.map((l, i) => `<tr><td><b>${esc(l.name)}</b>${l.ordered != null ? `<div class="small muted">due ${qtyf(l.ordered)}</div>` : ''}</td>
+      <td class="n">${I('qty', i, l.qty, 'type="number" min="0" step="any" style="width:76px;height:34px;text-align:right"')}</td><td class="n">${I('free_qty', i, l.free_qty, 'type="number" min="0" step="any" style="width:64px;height:34px;text-align:right"')}</td>
+      <td class="n">${I('unit_cost', i, l.unit_cost, 'type="number" min="0" step="0.01" style="width:92px;height:34px;text-align:right"')}</td><td class="n">${sel('g' + i, GSTR.map(r => [r, r + '%']), l.gst_rate, `data-k="gst_rate" data-i="${i}" style="width:76px;height:34px"`)}</td>
+      <td>${I('batch_no', i, l.batch_no, `maxlength="40" style="width:110px;height:34px" ${l.track_batch ? 'placeholder="required"' : ''}`)}</td><td>${I('expiry', i, l.expiry, 'type="date" style="width:140px;height:34px"')}</td>
+      <td class="n money">${money(l.qty * l.unit_cost * (1 + l.gst_rate / 100))}</td><td><button class="btn sm quiet icon" data-rm="${i}" aria-label="Remove">${icon('x', 16)}</button></td></tr>`).join('') : '<tr><td colspan="9" class="muted">Add the products received below.</td></tr>';
+    const sub = lines.reduce((s, l) => s + l.qty * l.unit_cost, 0), tax = lines.reduce((s, l) => s + l.qty * l.unit_cost * l.gst_rate / 100, 0), ro = Number(MAIN.querySelector('[name=round_off]').value) || 0;
+    MAIN.querySelector('[data-tot]').innerHTML = `<span class="small muted">Value ${money(sub)} · GST ${money(tax)}${ro ? ' · round-off ' + money(ro) : ''}</span><div style="font-size:20px;font-weight:700">${money(sub + tax + ro)}</div>`;
+    tbody.querySelectorAll('[data-k]').forEach(x => x.onchange = () => { const l = lines[+x.dataset.i]; l[x.dataset.k] = ['batch_no', 'expiry'].includes(x.dataset.k) ? x.value : Number(x.value) || 0; draw(); });
+    tbody.querySelectorAll('[data-rm]').forEach(x => x.onclick = () => { lines.splice(+x.dataset.rm, 1); draw(); });
+  };
+  MAIN.querySelector('[name=round_off]').onchange = draw;
+  draw();
+  productPicker(MAIN.querySelector('[data-add]'), it => { lines.push({ item_id: it.id, name: it.name, qty: 1, free_qty: 0, unit_cost: it.cost || 0, gst_rate: GSTR.includes(it.gst_rate) ? it.gst_rate : 0, batch_no: '', expiry: '', track_batch: it.track_batch }); draw(); });
+  MAIN.querySelector('[data-post]').onclick = e => {
+    const h = formData(MAIN.querySelector('[data-h]'));
+    if (po) h.supplier_id = po.supplier_id;
+    busy(e.target, () => api('/clinic/grns', { method: 'POST', body: { ...h, po_id: po ? po.id : null, lines } })).then(r => { toast(`${r.grn_no} posted — stock updated`); go('#/grn/' + r.id); }).catch(() => {});
+  };
+}
+
+/* Suppliers */
+async function viewSuppliers() {
+  const sups = await suppliersList(true);
+  MAIN.innerHTML = `<div class="head"><div><h1>Suppliers</h1><p>Balance = goods received minus payments made.</p></div>${canMgr() ? `<div class="acts"><button class="btn gold" data-add>${icon('plus', 18)}Add supplier</button></div>` : ''}</div>${stockTabs('suppliers')}
+    <input class="in" data-q placeholder="Search supplier" style="max-width:300px;margin-bottom:14px"><section class="panel flush" data-list></section>`;
+  const draw = q => { const list = sups.filter(s => !q || s.name.toLowerCase().includes(q.toLowerCase()));
+    MAIN.querySelector('[data-list]').innerHTML = `<table class="t"><thead><tr><th>Supplier</th><th>GSTIN</th><th class="n">Open orders</th><th class="n">Balance</th></tr></thead><tbody>${list.map(s => `<tr data-id="${s.id}" style="cursor:pointer${s.active ? '' : ';opacity:.5'}"><td><b>${esc(s.name)}</b><div class="small muted">${esc([s.contact, s.phone, s.city].filter(Boolean).join(' · '))}</div></td><td class="small">${esc(s.gstin || '—')}</td><td class="n">${s.open_pos || ''}</td><td class="n money"${s.balance > 0 ? ' style="font-weight:700"' : ''}>${money(s.balance)}</td></tr>`).join('')}</tbody></table>`;
+    MAIN.querySelectorAll('[data-id]').forEach(r => r.onclick = () => supplierModal(+r.dataset.id)); };
+  MAIN.querySelector('[data-q]').oninput = e => draw(e.target.value);
+  const add = MAIN.querySelector('[data-add]'); if (add) add.onclick = () => supplierForm(null);
+  draw('');
+}
+function supplierForm(s) {
+  s = s || {};
+  modal({ title: s.id ? 'Edit supplier' : 'Add supplier', wide: true, body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('Name', inp('name', s.name || '', 'maxlength="120"'))}${field('GSTIN', inp('gstin', s.gstin || '', 'maxlength="15" style="text-transform:uppercase"'))}</div>
+      <div class="grid3">${field('Contact person', inp('contact', s.contact || ''))}${field('Phone', inp('phone', s.phone || ''))}${field('Email', inp('email', s.email || ''))}</div>
+      ${field('Address', inp('address', s.address || '', 'maxlength="300"'))}<div class="grid3">${field('City', inp('city', s.city || ''))}${field('State', inp('state', s.state || 'Kerala'))}${field('Credit days', inp('terms_days', s.terms_days ?? 0, 'type="number" min="0"'))}</div>
+      ${field('Notes', inp('notes', s.notes || '', 'maxlength="300"'))}${s.id ? `<label class="chip"><input type="checkbox" name="active" ${s.active ? 'checked' : ''}>Active</label>` : ''}</form>`,
+    actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>',
+    onMount(el, close) { const b = el.querySelector('[data-save]'); b.onclick = () => { const f = el.querySelector('[data-f]'); busy(b, () => api(s.id ? '/clinic/suppliers/' + s.id : '/clinic/suppliers', { method: s.id ? 'PUT' : 'POST', body: { ...formData(f), active: f.active ? f.active.checked : true } }), true).then(() => { close(); toast('Saved'); SUP = null; route(); }).catch(e => toast(e.message, true)); }; } });
+}
+async function supplierModal(id) {
+  const d = await api('/clinic/suppliers/' + id), s = d.supplier;
+  modal({ title: s.name, wide: true, body: `<div class="kpis" style="margin-bottom:14px"><div class="kpi"><div class="l">Goods received</div><div class="v money" style="font-size:20px">${money(s.billed)}</div></div><div class="kpi"><div class="l">Paid</div><div class="v money" style="font-size:20px">${money(s.paid)}</div></div><div class="kpi"><div class="l">Balance</div><div class="v money" style="font-size:20px">${money(s.balance)}</div><div class="s">${s.terms_days ? s.terms_days + ' days credit' : ''}</div></div></div>
+      <p class="small muted" style="margin-bottom:10px">${esc([s.gstin && 'GSTIN ' + s.gstin, s.contact, s.phone, s.email, s.city].filter(Boolean).join(' · '))}</p>
+      ${canMgr() ? `<div style="display:flex;gap:8px;margin-bottom:12px"><button class="btn sm gold" data-pay>${icon('wallet', 15)}Record payment</button><button class="btn sm ghost" data-edit>${icon('pencil', 15)}Edit</button></div><div data-form></div>` : ''}
+      <h4 style="margin:8px 0">Payments</h4>${d.payments.length ? `<table class="t"><tbody>${d.payments.map(p => `<tr${p.voided ? ' style="opacity:.5;text-decoration:line-through"' : ''}><td class="small">${esc(fDate(p.paid_on))}</td><td class="small">${esc(PAYM[p.mode] || p.mode)}${p.reference ? ' · ' + esc(p.reference) : ''}${p.notes ? `<div class="muted">${esc(p.notes)}</div>` : ''}</td><td class="n money">${money(p.amount)}</td><td>${!p.voided && canMgr() ? `<button class="btn sm quiet" data-void="${p.id}">Void</button>` : ''}</td></tr>`).join('')}</tbody></table>` : '<p class="small muted">None yet.</p>'}
+      <h4 style="margin:14px 0 8px">Goods received</h4>${d.grns.length ? `<table class="t"><tbody>${d.grns.map(g => `<tr><td><a href="#/grn/${g.id}">${esc(g.grn_no)}</a></td><td class="small">${esc(fDate(g.received_date))}</td><td class="small">${esc(g.supplier_invoice_no || '')}</td><td class="n money">${money(g.total)}</td></tr>`).join('')}</tbody></table>` : '<p class="small muted">None yet.</p>'}`,
+    actions: '<button class="btn ghost" data-close>Close</button>',
+    onMount(el, close) {
+      el.querySelectorAll('a[href^="#/grn/"]').forEach(a => a.addEventListener('click', () => close()));
+      if (!canMgr()) return;
+      el.querySelector('[data-edit]').onclick = () => { close(); supplierForm(s); };
+      el.querySelector('[data-pay]').onclick = () => {
+        const form = el.querySelector('[data-form]');
+        form.innerHTML = `<section class="panel" style="margin-bottom:12px"><form data-f class="stack" style="gap:10px"><div class="grid3">${field('Amount (₹)', inp('amount', s.balance > 0 ? s.balance : '', 'type="number" min="0" step="0.01"'))}${field('Paid on', inp('paid_on', today(), 'type="date"'))}${field('Mode', sel('mode', Object.entries(PAYM), 'bank'))}</div>
+          <div class="grid2">${field('Reference (UTR / cheque no.)', inp('reference', '', 'maxlength="80"'))}${field('Against GRN', sel('grn_id', [['', '—'], ...d.grns.filter(g => !g.legacy).map(g => [g.id, `${g.grn_no} · ${money(g.total)}`])], ''))}</div>${field('Notes', inp('notes', '', 'maxlength="200"'))}</form><button class="btn sm" data-go style="margin-top:10px">Save payment</button></section>`;
+        form.querySelector('[data-go]').onclick = e => busy(e.target, () => api('/clinic/supplier-payments', { method: 'POST', body: { supplier_id: id, ...formData(form.querySelector('[data-f]')) } }), true).then(() => { close(); toast('Payment recorded'); SUP = null; route(); }).catch(er => toast(er.message, true));
+      };
+      el.querySelectorAll('[data-void]').forEach(b => b.onclick = () => { const reason = prompt('Reason for voiding this payment:'); if (!reason) return; api(`/clinic/supplier-payments/${b.dataset.void}/void`, { method: 'POST', body: { reason } }).then(() => { close(); toast('Voided'); SUP = null; route(); }).catch(e => toast(e.message, true)); });
+    } });
+}
+
+/* Purchase report */
+async function viewPurchaseReport(m) {
+  const r = await api('/clinic/reports/purchases' + (m ? '?month=' + m : ''));
+  const sv = await api('/clinic/reports/stock-value');
+  const t = r.gst.reduce((a, x) => ({ value: a.value + x.value, cgst: a.cgst + x.cgst, sgst: a.sgst + x.sgst, igst: a.igst + x.igst }), { value: 0, cgst: 0, sgst: 0, igst: 0 });
+  MAIN.innerHTML = `<div class="head"><div><h1>Purchase report</h1><p>Input GST on goods received, for the GST return.</p></div><div class="acts"><button class="btn ghost" onclick="window.print()">${icon('printer', 18)}Print</button></div></div>${stockTabs('purchases')}
+    <div style="margin-bottom:14px" class="noprint">${inp('m', r.month, 'type="month" style="width:auto" data-m')}</div>
+    <div class="kpis"><div class="kpi"><div class="l">Purchases (taxable value)</div><div class="v money">${money(t.value)}</div><div class="s">${r.grns.length} goods received</div></div><div class="kpi"><div class="l">Input CGST + SGST</div><div class="v money" style="font-size:20px">${money(t.cgst + t.sgst)}</div></div><div class="kpi"><div class="l">Input IGST</div><div class="v money" style="font-size:20px">${money(t.igst)}</div></div><div class="kpi"><div class="l">Stock value today</div><div class="v money" style="font-size:20px">${money(sv.total)}</div><div class="s">${sv.items.length} products, at average cost</div></div></div>
+    <section class="panel flush" style="margin-bottom:16px"><div class="panel-h" style="padding:16px 20px 0"><h3>By GST rate</h3></div><table class="t sumtable"><thead><tr><th>Rate</th><th class="n">Taxable value</th><th class="n">CGST</th><th class="n">SGST</th><th class="n">IGST</th></tr></thead><tbody>${r.gst.map(x => `<tr><td>${x.rate}%</td><td class="n money">${money(x.value)}</td><td class="n money">${money(x.cgst)}</td><td class="n money">${money(x.sgst)}</td><td class="n money">${money(x.igst)}</td></tr>`).join('') || '<tr><td colspan="5" class="muted">No purchases this month.</td></tr>'}</tbody></table></section>
+    <section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><h3>Supplier invoices</h3></div><table class="t"><thead><tr><th>Date</th><th>Supplier</th><th>GSTIN</th><th>Invoice</th><th class="n">Taxable</th><th class="n">GST</th><th class="n">Total</th></tr></thead><tbody>${r.grns.map(g => `<tr><td class="small">${esc(fDate(g.received_date))}</td><td>${esc(g.supplier_name)}</td><td class="small">${esc(g.supplier_gstin || '—')}</td><td class="small">${esc(g.supplier_invoice_no || '—')}${g.supplier_invoice_date ? ' · ' + esc(fDate(g.supplier_invoice_date)) : ''}</td><td class="n money">${money(g.taxable)}</td><td class="n money">${money(g.cgst + g.sgst + g.igst)}</td><td class="n money">${money(g.total)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">None.</td></tr>'}</tbody></table>
+      ${r.grns.some(g => !g.supplier_invoice_no || !g.supplier_gstin) ? '<p class="small" style="padding:10px 16px;color:var(--alert)">Some entries have no supplier invoice number or GSTIN — input credit can only be claimed with both.</p>' : ''}</section>`;
+  MAIN.querySelector('[data-m]').onchange = e => go('#/stock?tab=purchases&m=' + e.target.value);
+}

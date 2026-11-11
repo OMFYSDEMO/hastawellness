@@ -16,6 +16,7 @@
 import { PDFDocument, StandardFonts, rgb } from './vendor/pdf-lib.esm.min.js';
 import { json, sameOrigin, clean, nz, h, normalisePhone } from './util.js';
 import { getSession, verifySecret, hashSecret, handleEms } from './ems.js';
+import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlerts } from './stock.js';
 
 /* ---------------- helpers ---------------- */
 const IST = 330 * 60000;
@@ -96,9 +97,9 @@ function shell(base) {
 <title>Hasta Clinic</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=1">
+<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=2">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=3"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=4"></script></body></html>`;
 }
 
 /* ---------------- router ---------------- */
@@ -107,6 +108,8 @@ async function route(request, env, url, p) {
   let b = {};
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
+  }
+  if (m !== 'GET' && !(m === 'DELETE' && !request.headers.get('content-type'))) {
     if (!(request.headers.get('content-type') || '').includes('application/json')) return api({ ok: false, error: 'Unsupported' }, 415);
     if (parseInt(request.headers.get('content-length') || '0', 10) > (p === '/catalogue/import' ? 600000 : 60000)) return api({ ok: false, error: 'Too large' }, 413);
     try { b = await request.json(); } catch { return bad('Invalid request'); }
@@ -182,6 +185,10 @@ async function route(request, env, url, p) {
   if (p === '/reports/daybook' && m === 'GET') return api({ ok: true, ...(await dayBook(env, isDate(q('date')) ? q('date') : today())) });
   if (p === '/reports/summary' && m === 'GET') return api({ ok: true, ...(await summary(env, q('month'))) });
   if (p === '/reports/outstanding' && m === 'GET') return api({ ok: true, invoices: await outstanding(env) });
+
+  // Stock & purchasing (src/stock.js)
+  const sr = await stockRoute(request, env, me, p, m, b, q);
+  if (sr) return sr;
 
   return api({ ok: false, error: 'Not found' }, 404);
 }
@@ -756,6 +763,8 @@ async function finalise(env, me, id) {
       .bind(inv.patient_id, def.id, def.name, JSON.stringify(def.items.map(x => ({ item_id: x.item_id, name: x.name, qty: x.qty }))), id, l.id, d, addDays(d, def.validity_days)).run();
   }
   if (inv.appointment_id) await env.DB.prepare("UPDATE cl_appointments SET closure='billed', updated_at=? WHERE id=?").bind(nowIso(), inv.appointment_id).run();
+  // Products sold go out of stock (first expiry first).
+  await stockOutForInvoice(env, me, id);
   // Use any advance automatically, oldest payment first.
   await autoApplyAdvance(env, me, inv.patient_id, id);
   await audit(env, me, 'invoice.final', 'invoice', id, no);
@@ -789,6 +798,7 @@ async function cancelInvoice(env, me, id, b) {
   await env.DB.prepare('DELETE FROM cl_allocations WHERE invoice_id=?').bind(id).run();
   await env.DB.prepare("UPDATE cl_invoices SET status='cancelled', cancelled_by=?, cancelled_at=?, cancel_reason=? WHERE id=?").bind(me.id, nowIso(), reason, id).run();
   await env.DB.prepare("UPDATE cl_patient_packages SET status='cancelled' WHERE invoice_id=?").bind(id).run();
+  await stockBackForInvoice(env, me, id);
   await env.DB.prepare("UPDATE cl_appointments SET closure=NULL, invoice_id=NULL WHERE invoice_id=?").bind(id).run();
   await audit(env, me, 'invoice.cancel', 'invoice', id, `${inv.invoice_no}: ${reason}`);
   return OK();
@@ -890,8 +900,9 @@ async function dashboard(env, me) {
     env.DB.prepare(`SELECT COUNT(*) n, COALESCE(SUM(i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0)),0) s FROM cl_invoices i WHERE i.status='final' AND i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0) > 0.004`).first(),
     env.DB.prepare("SELECT COUNT(*) n FROM leads WHERE status='new'").first(),
   ]);
+  const stock = await stockAlerts(env).catch(() => null);
   const billed = await env.DB.prepare("SELECT COALESCE(SUM(total - passthrough),0) s FROM cl_invoices WHERE status='final' AND legacy=0 AND invoice_date=?").bind(d).first();
-  return { today: d, appointments: appts, unclosed: open, collections: pays, cash: book, outstanding: { count: out.n, amount: r2(out.s) }, new_leads: lds.n, billed_today: r2(billed.s) };
+  return { today: d, appointments: appts, unclosed: open, collections: pays, cash: book, outstanding: { count: out.n, amount: r2(out.s) }, new_leads: lds.n, billed_today: r2(billed.s), stock };
 }
 async function dayBook(env, d) {
   const [invs, pays] = await Promise.all([
