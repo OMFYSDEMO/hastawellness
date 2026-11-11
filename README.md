@@ -119,3 +119,10 @@ client's active package includes them.
 ### Clinic app: speed notes
 - Every D1 query is a network round trip, so the clinic API groups reads with `env.DB.batch()` (boot, dashboard, cash book, stock alerts, package prices) and reads the session, staff record and departments in one query.
 - Files under `/clinic/` and `/ems/` requested with `?v=N` are cached by browsers for a year. **Bump the `?v=` number whenever you change `public/clinic/app.js`, `clinic.css`, `public/ems/core.js` or `app.css`** (in `src/clinic.js` → `shell()` and the import line at the top of `app.js`).
+
+### Clinic app: staff attendance, leave & pay (`src/hr.js`, migration 0015)
+- **Clock in/out:** a manager registers the clinic desktop (Staff → Setup → *Make this computer the attendance screen*); it then shows `/kiosk`, a QR code that changes every 30 s. Staff scan it with their phone camera. The scan is accepted only if the code is current (≤ 90 s old) and the phone's GPS is inside the clinic geofence (Staff → Setup → clinic location, default 150 m). The first scan needs a sign-in; the phone is then remembered for attendance only.
+- **Leave:** applied for in *My attendance* before the day; only the leave approver(s) (`leave_approvers`, Dr Akshara) can approve. 1 paid annual leave day accrues per month; sick / casual allowances per year are configurable (0 by default).
+- **Absences:** a working day (not weekly off / holiday) with no attendance and no approved leave is an unauthorised absence. A manager or the approver either adds the attendance ("was at work") or confirms it, which issues a numbered warning letter PDF (`WL/YYYY/0001`).
+- **Pay:** rate = monthly salary ÷ (working days × daily hours). Paid hours = worked + paid leave, capped at contract hours less absent / unpaid-leave days. No overtime. Months are finalised (locked) by a manager once ended; payslips then appear for staff. PF / ESI / TDS are not included.
+- Staff without the clinic app (e.g. support staff) can sign in and see only *My attendance*.

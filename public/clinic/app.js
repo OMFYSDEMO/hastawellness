@@ -28,6 +28,8 @@ const TIMES = (() => { const o = []; for (let h = 8; h < 22; h++) for (const m o
 // Start-up: fetch the app data (and, on the Today page, the dashboard) at the same time, straight away.
 let DASH = null;
 async function start() {
+  const sm = location.hash.match(/^#\/scan\/([A-Za-z0-9-]+)/);
+  if (sm) return scanScreen(sm[1].toUpperCase());
   const onToday = !location.hash.replace(/^#\/?/, '').split('?')[0];
   const get = path => fetch(BASE + '/api' + path, { credentials: 'same-origin' }).then(async r => ({ status: r.status, data: await r.json().catch(() => ({})) }));
   const bootP = get('/clinic/boot');
@@ -45,12 +47,12 @@ async function start() {
   mount();
 }
 async function signOut() { await api('/auth/logout', { method: 'POST', body: {} }).catch(() => {}); location.hash = ''; location.reload(); }
-function login() {
+function login(note) {
   app.innerHTML = `<div class="auth"><section class="auth-art">
       <div class="brand"><img src="/img/hasta-emblem.webp" alt="" width="44" height="44"><div><b style="font-family:Manrope;font-size:16px">Hasta Wellness</b><div style="font-size:13px;color:#9fb8b4">Clinic</div></div></div>
       <div><h1>Every visit, bill and payment in one place.</h1><p class="lede">Dental, skin, hair and wellness — appointments, GST billing, packages and collections for the Hasta team.</p></div>
       <ul><li>${icon('calendar-days', 20)}Appointments by clinician and room</li><li>${icon('receipt', 20)}GST invoices with packages and discounts</li><li>${icon('wallet', 20)}Payments, advances and cash deposits</li></ul></section>
-    <section class="auth-panel"><div class="auth-box"><div><h2>Team sign in</h2><p class="muted" style="margin-top:6px">Use the same username and password as the EMS app.</p></div>
+    <section class="auth-panel"><div class="auth-box"><div><h2>Team sign in</h2><p class="muted" style="margin-top:6px">${note ? esc(note) : 'Use the same username and password as the EMS app.'}</p></div>
       <form class="stack" style="gap:14px" novalidate>${field('Username', inp('username', '', 'autocomplete="username" autocapitalize="none" required'))}${field('Password', inp('password', '', 'type="password" autocomplete="current-password" required'))}
       <div class="msg"></div><button class="btn" style="height:46px">${icon('key-round', 18)}Sign in</button></form>
       <p class="auth-foot">Need help? Call ${esc(CLINIC_PHONE)}</p></div></section></div>`;
@@ -62,8 +64,8 @@ function login() {
 function mount() {
   app.innerHTML = `<div class="shell"><aside class="side">
     <div class="brand"><img src="/img/hasta-emblem.webp" alt="" width="34" height="34"><div><b>Hasta Clinic</b><span>${esc(B.settings.trade_name)}</span></div></div>
-    <nav class="nav" aria-label="Main">${NAV.map(([k, ic, l]) => `<a href="#/${k}" data-k="${k}">${icon(ic, 20)}<span>${l}</span>${k === 'leads' ? '<i class="badge" data-b hidden></i>' : k === '' ? '<i class="badge alert" data-tb hidden></i>' : ''}</a>`).join('')}
-      <div class="nav-sep"></div><a href="#/settings" data-k="settings">${icon('settings', 20)}<span>Settings</span></a></nav>
+    <nav class="nav" aria-label="Main">${(ME.limited ? [['attendance', 'clock', 'My attendance']] : NAV.concat([['attendance', 'clock', 'My attendance']], hrUser() ? [['staff', 'calendar-check', 'Staff']] : [])).map(([k, ic, l]) => `<a href="#/${k}" data-k="${k}">${icon(ic, 20)}<span>${l}</span>${k === 'leads' ? '<i class="badge" data-b hidden></i>' : k === '' ? '<i class="badge alert" data-tb hidden></i>' : ''}</a>`).join('')}
+      ${ME.limited ? '' : `<div class="nav-sep"></div><a href="#/settings" data-k="settings">${icon('settings', 20)}<span>Settings</span></a>`}</nav>
     <div class="me"><span class="avatar">${esc(initials(ME.name))}</span><div><b>${esc(ME.name)}</b><span>${ME.admin ? 'Admin' : ME.role === 'manager' ? 'Manager' : 'Team'}</span></div>
       <button data-logout aria-label="Sign out" title="Sign out">${icon('log-out', 18)}</button></div>
   </aside><div class="mainwrap"><div class="alertbar" data-alertbar hidden role="alert"></div><main class="main" id="main"></main></div></div>`;
@@ -71,7 +73,7 @@ function mount() {
   app.querySelector('[data-logout]').onclick = signOut;
   window.addEventListener('hashchange', route);
   route();
-  setInterval(checkAlerts, 60000);
+  if (!ME.limited) setInterval(checkAlerts, 60000);
 }
 const go = h => { if (location.hash === h) route(); else location.hash = h; };
 function parseHash() { const [p, q] = location.hash.replace(/^#\/?/, '').split('?'); return { parts: p.split('/').filter(Boolean), q: new URLSearchParams(q || '') }; }
@@ -82,7 +84,10 @@ async function route() {
   MAIN.innerHTML = '<div class="boot" style="min-height:50vh"><img src="/img/hasta-emblem.webp" alt="" width="44" height="44"></div>';
   window.scrollTo(0, 0);
   try {
+    if (!top && ME.limited) return go('#/attendance');
     if (!top) await viewToday();
+    else if (top === 'attendance') await viewMyAttendance(q.get('m') || today().slice(0, 7));
+    else if (top === 'staff') await viewStaff(q.get('tab') || 'today', q);
     else if (top === 'appointments') await viewAppointments(q.get('d') || today(), q.get('dept'), q.get('v'));
     else if (top === 'patients') await viewPatients(q.get('q') || '');
     else if (top === 'patient') await viewPatient(+parts[1], q.get('tab') || 'visits');
@@ -97,6 +102,7 @@ async function route() {
     else if (top === 'settings') await viewSettings(q.get('tab') || (isAdmin() ? 'clinic' : 'account'));
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
   } catch (e) { MAIN.innerHTML = `<section class="panel">${emptyState('alert-triangle', e.message)}</section>`; }
+  if (ME.limited) return;
   checkAlerts();
   api('/clinic/leads?status=new').then(r => { const b = app.querySelector('[data-b]'); if (b) { b.hidden = !r.leads.length; b.textContent = r.leads.length; } }).catch(() => {});
 }
@@ -748,6 +754,263 @@ async function viewLeads(s, ch) {
   MAIN.querySelector('[data-add]').onclick = () => leadModal(() => go('#/leads?s=open&t=' + Date.now()));
   MAIN.querySelectorAll('[data-st]').forEach(x => x.onchange = () => api('/clinic/leads/' + x.dataset.st, { method: 'PUT', body: { status: x.value } }).then(() => toast('Updated')).catch(e => toast(e.message, true)));
   MAIN.querySelectorAll('[data-conv]').forEach(b => b.onclick = () => { const l = leads.find(x => x.id === +b.dataset.conv); patientModal({ name: l.name, phone: String(l.phone || '').replace(/\D/g, '').slice(-10), lead_id: l.id }, p => go('#/patient/' + p.id)); });
+}
+
+/* ---------------- Staff attendance, leave & pay ----------------
+   Everyone: My attendance (today, month, leave balance, apply for leave, warnings, payslips).
+   Managers and the leave approver: Staff (today, month grid, leave, absences, pay, setup). */
+const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const DAYST = { present: ['P', 'Present'], in: ['IN', 'Clocked in'], leave: ['L', 'Leave'], pending: ['?', 'Leave awaiting approval'], absent: ['A', 'Absent — no approved leave'], off: ['W', 'Weekly off'], holiday: ['H', 'Holiday'], upcoming: ['', ''], na: ['', 'Not employed'] };
+const LEAVE_KIND = { annual: 'Annual leave', sick: 'Sick leave', casual: 'Casual leave', unpaid: 'Unpaid leave' };
+const hm = min => `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, '0')}m`;
+const tOnly = s => s ? fTime(s.slice(11, 16)) : '—';
+const fMonth = m => new Date(m + '-01T00:00:00Z').toLocaleDateString('en-IN', { timeZone: 'UTC', month: 'long', year: 'numeric' });
+const prevMonth = m => { const x = new Date(m + '-01T00:00:00Z'); x.setUTCMonth(x.getUTCMonth() - 1); return x.toISOString().slice(0, 7); };
+const nextMonth = m => { const x = new Date(m + '-01T00:00:00Z'); x.setUTCMonth(x.getUTCMonth() + 1); return x.toISOString().slice(0, 7); };
+const hrUser = () => ME.admin || ME.role === 'manager' || String((B.settings || {}).leave_approvers || '').split(',').map(Number).includes(ME.id);
+const isMgr = () => ME.admin || ME.role === 'manager';
+const pdfLink = (path, label) => `<a class="btn sm ghost" href="${BASE}/api/clinic${path}" target="_blank" rel="noopener">${icon('printer', 15)}${label}</a>`;
+const dayCell = d => { const [c, l] = DAYST[d.status] || ['', '']; return `<span class="dc ${d.status}${d.late ? ' late' : ''}${d.confirmed ? ' conf' : ''}${d.missing_out ? ' miss' : ''}" title="${esc(d.day)} · ${esc(d.label || l)}${d.minutes ? ' · ' + hm(d.minutes) : ''}${d.late ? ' · late' : ''}${d.missing_out ? ' · no clock-out' : ''}">${esc(d.status === 'leave' && d.kind === 'unpaid' ? 'U' : c)}</span>`; };
+
+// Phone: opened from the QR on the clinic desktop.
+async function scanScreen(code) {
+  const box = (cls, ic, title, sub, extra = '') => { app.innerHTML = `<div class="scan ${cls}"><div class="scan-card">${icon(ic, 54)}<h1>${title}</h1><p>${sub}</p>${extra}</div></div>`; };
+  box('wait', 'clock', 'Checking you are at the clinic…', 'Allow location if your phone asks.');
+  const pos = await new Promise(res => {
+    if (!navigator.geolocation) return res(null);
+    navigator.geolocation.getCurrentPosition(p => res(p.coords), () => res(null), { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  });
+  const r = await fetch(BASE + '/api/clinic/hr/scan', { method: 'POST', credentials: 'same-origin', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ code, lat: pos && pos.latitude, lng: pos && pos.longitude, acc: pos && pos.accuracy }) })
+    .then(async x => ({ status: x.status, d: await x.json().catch(() => ({})) })).catch(() => ({ status: 0, d: { error: 'No connection. Try again.' } }));
+  const again = `<button class="btn" data-again style="margin-top:18px">${icon('refresh-cw', 18)}Try again</button>`;
+  if (r.status === 401) { ME = null; return login('Sign in once on this phone to clock in. After that, this phone will be remembered.'); }
+  if (!r.d.ok) {
+    box('bad', 'alert-triangle', 'Not recorded', esc(r.d.error || 'Something went wrong.'), r.d.code === 'location' || r.d.code === 'far' || !r.status ? again : `<p class="small" style="margin-top:14px">Scan the QR code on the clinic desktop again.</p>`);
+    const a = app.querySelector('[data-again]'); if (a) a.onclick = () => scanScreen(code);
+    return;
+  }
+  const t = fTime(r.d.at.slice(11, 16));
+  box(r.d.action === 'in' ? 'good' : 'out', r.d.action === 'in' ? 'check-circle' : 'log-out', r.d.action === 'in' ? `Clocked in at ${t}` : `Clocked out at ${t}`,
+    `${esc(r.d.name)}${r.d.late ? ' · <b>late arrival</b>' : ''}`, `<a class="btn ghost" href="#/attendance" data-home style="margin-top:18px">${icon('calendar-check', 18)}My attendance</a>`);
+  app.querySelector('[data-home]').onclick = e => { e.preventDefault(); location.hash = '#/attendance'; start(); };
+}
+
+async function viewMyAttendance(month) { renderMyAttendance(await api('/clinic/hr/me?month=' + month)); }
+function renderMyAttendance(d) {
+  const t = today(), td = (d.days || []).find(x => x.day === t);
+  const openE = td && td.entries.find(e => !e.out_at);
+  MAIN.innerHTML = `<div class="head"><div><h1>My attendance</h1><p>${esc(ME.name)}${d.profile ? ` · ${d.profile.daily_hours} h a day · weekly off ${DOW[d.profile.weekly_off]} · shift from ${esc(fTime(d.profile.shift_start))}` : ''}</p></div>
+      <div class="acts"><button class="btn gold" data-apply>${icon('calendar-plus', 18)}Apply for leave</button></div></div>
+    <div class="grid2">
+      <section class="panel"><div class="panel-h"><div class="t">${icon('clock', 20)}<h3>Today</h3></div></div>
+        ${!d.profile ? `<p class="muted">Your attendance has not been set up yet. Ask Sherly or a manager.</p>` : td && td.status === 'off' ? '<p>Weekly off.</p>' : td && td.status === 'holiday' ? `<p>Holiday — ${esc(td.label)}</p>` : td && td.status === 'leave' ? `<p>On ${esc(LEAVE_KIND[td.kind] || 'leave')}.</p>`
+          : openE ? `<p class="big-status good">${icon('check-circle', 22)} In since ${esc(tOnly(openE.in_at))}</p><p class="muted">Scan the QR on the clinic desktop again when you finish.</p>`
+          : td && td.entries.length ? `<p class="big-status">${icon('log-out', 22)} Out · ${hm(td.minutes)} today</p>` : `<p class="big-status warn">${icon('alert-triangle', 22)} Not clocked in</p><p class="muted">Scan the QR code on the clinic desktop with your phone camera. Your phone must be at the clinic.</p>`}
+        ${td && td.entries.length ? `<div class="rows" style="margin-top:8px">${td.entries.map(e => `<div class="row"><div class="grow"><b>${esc(tOnly(e.in_at))} → ${esc(e.out_at ? tOnly(e.out_at) : 'now')}</b></div>${e.source === 'manual' ? '<span class="small muted">added by manager</span>' : ''}</div>`).join('')}</div>` : ''}</section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('calendar-check', 20)}<h3>Leave balance</h3></div></div>
+        <div class="kpis small-kpis"><div><span>Annual leave</span><b>${d.balance.annual}</b><small>1 day added each month</small></div>${d.allow.sick ? `<div><span>Sick leave</span><b>${d.balance.sick}</b><small>this year</small></div>` : ''}${d.allow.casual ? `<div><span>Casual leave</span><b>${d.balance.casual}</b><small>this year</small></div>` : ''}</div>
+        <p class="small muted" style="margin-top:10px">Leave must be applied for <b>before</b> the day and approved by Dr Akshara. A working day missed without approved leave is an absence: the day's pay is deducted and a warning letter is issued.</p></section>
+    </div>
+    <section class="panel"><div class="panel-h"><div class="t">${icon('calendar-days', 20)}<h3>${esc(fMonth(d.month))}</h3></div>
+      <div style="display:flex;gap:6px"><button class="btn sm ghost icon" data-pm aria-label="Previous month">${icon('chevron-left', 16)}</button><button class="btn sm ghost icon" data-nm aria-label="Next month">${icon('chevron-right', 16)}</button></div></div>
+      ${d.summary ? `<p class="muted">Worked ${d.summary.worked_hours} h of ${d.summary.contract_hours} h contract · late ${d.summary.late_days} · absent ${d.summary.absent_days} · leave ${d.summary.paid_leave_days + d.summary.unpaid_leave_days} day(s)</p>
+        <div class="table-wrap"><table class="t"><thead><tr><th>Day</th><th>Status</th><th>In</th><th>Out</th><th class="num">Hours</th></tr></thead><tbody>
+        ${d.days.filter(x => x.status !== 'upcoming' && x.status !== 'na').reverse().map(x => `<tr><td>${esc(fDay(x.day))} <small class="muted">${DOW[new Date(x.day + 'T00:00:00Z').getUTCDay()].slice(0, 3)}</small></td><td>${dayCell(x)} ${esc(x.status === 'leave' || x.status === 'pending' ? LEAVE_KIND[x.kind] : x.label || DAYST[x.status][1])}${x.late ? ' <span class="pill no_show">Late</span>' : ''}${x.missing_out ? ' <span class="pill no_show">No clock-out</span>' : ''}</td>
+          <td>${esc(x.first_in ? fTime(x.first_in) : '—')}</td><td>${esc(x.entries.length && x.entries[x.entries.length - 1].out_at ? tOnly(x.entries[x.entries.length - 1].out_at) : '—')}</td><td class="num">${x.minutes ? hm(x.minutes) : '—'}</td></tr>`).join('')}</tbody></table></div>` : emptyState('clock', 'No attendance set up.')}</section>
+    <div class="grid2">
+      <section class="panel"><div class="panel-h"><div class="t">${icon('file-text', 20)}<h3>My leave applications</h3></div></div>
+        ${d.leave.length ? `<div class="rows">${d.leave.map(l => `<div class="row"><div class="grow"><b>${esc(LEAVE_KIND[l.kind])} · ${esc(fDay(l.from_date))}${l.to_date !== l.from_date ? ' – ' + esc(fDay(l.to_date)) : ''}</b><span>${l.days} day(s) · ${esc(l.reason || '')}${l.decision_note ? ' · ' + esc(l.decision_note) : ''}</span></div>${pill(l.status === 'approved' ? 'final' : l.status === 'pending' ? 'draft' : 'cancelled', l.status[0].toUpperCase() + l.status.slice(1))}${l.status === 'pending' ? `<button class="btn sm quiet" data-cancel="${l.id}">Withdraw</button>` : ''}</div>`).join('')}</div>` : '<p class="muted">None yet.</p>'}</section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>Warnings & payslips</h3></div></div>
+        ${d.warnings.length ? `<div class="rows">${d.warnings.map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')}</span></div>${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">No warnings.</p>'}
+        <div data-slips class="rows" style="margin-top:10px"></div></section>
+    </div>`;
+  MAIN.querySelector('[data-pm]').onclick = () => go('#/attendance?m=' + prevMonth(d.month));
+  MAIN.querySelector('[data-nm]').onclick = () => go('#/attendance?m=' + nextMonth(d.month));
+  MAIN.querySelector('[data-apply]').onclick = () => leaveModal(d, null, () => route());
+  MAIN.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/hr/leave/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} })).then(() => { toast('Application withdrawn'); route(); }).catch(() => {}));
+  api('/clinic/hr/payslips').then(r => { const el = MAIN.querySelector('[data-slips]'); if (el && r.payslips.length) el.innerHTML = r.payslips.map(p => `<div class="row"><div class="grow"><b>Payslip · ${esc(fMonth(p.month))}</b></div>${pdfLink(`/hr/payslip/${p.month}.pdf`, 'PDF')}</div>`).join(''); }).catch(() => {});
+}
+function leaveModal(d, staff, after) {
+  const kinds = [['annual', `Annual leave (paid${d ? ` · ${d.balance.annual} left` : ''})`], ...(d && d.allow.sick || staff ? [['sick', 'Sick leave (paid)']] : []), ...(d && d.allow.casual || staff ? [['casual', 'Casual leave (paid)']] : []), ['unpaid', 'Unpaid leave']];
+  modal({ title: staff ? `Leave for ${staff.name}` : 'Apply for leave',
+    body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('From', inp('from_date', addDays(today(), 1), `type="date" ${staff ? '' : `min="${today()}"`}`))}${field('To', inp('to_date', addDays(today(), 1), 'type="date"'))}</div>
+      ${field('Type', sel('kind', kinds, 'annual'))}${field('Reason', inp('reason', '', 'maxlength="300" placeholder="e.g. family function"'))}</form>
+      <p class="small muted">${staff ? 'Recorded on their behalf. You can approve it straight away if you are the approver.' : 'Weekly off and clinic holidays are not counted. Dr Akshara will approve or reject it — you will see the decision here.'}</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>${staff ? 'Save' : 'Send application'}</button>`,
+    onMount(el, close) {
+      const s = el.querySelector('[data-save]');
+      s.onclick = () => busy(s, () => api('/clinic/hr/leave', { method: 'POST', body: { ...formData(el.querySelector('[data-f]')), ...(staff ? { staff_id: staff.staff_id } : {}) } })).then(r => { close(); toast(`Applied for ${r.days} day(s)`); after(r); }).catch(() => {});
+    } });
+}
+
+// ---- Staff (managers & leave approver) ----
+function staffTabs(tab) {
+  const T = [['today', 'Today'], ['month', 'Attendance'], ['leave', 'Leave'], ['absences', 'Absences & warnings'], ...(isMgr() ? [['pay', 'Pay'], ['setup', 'Setup']] : [])];
+  return `<nav class="tabs">${T.map(([k, l]) => `<a href="#/staff?tab=${k}" class="${k === tab ? 'on' : ''}" style="text-decoration:none">${l}</a>`).join('')}</nav>`;
+}
+async function viewStaff(tab, q) {
+  if (!hrUser()) { MAIN.innerHTML = emptyState('lock', 'Only managers and the leave approver can see this.'); return; }
+  const head = (sub, acts = '') => `<div class="head"><div><h1>Staff</h1><p>${sub}</p></div><div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${acts}</div></div>${staffTabs(tab)}`;
+  if (tab === 'today') {
+    const d = await api('/clinic/hr/today');
+    const lab = x => x.status === 'in' ? pill('final', 'In') : x.status === 'present' ? pill('billed', 'Finished') : x.status === 'leave' ? pill('package', LEAVE_KIND[x.kind]) : x.status === 'off' ? pill('no_charge', 'Weekly off') : x.status === 'holiday' ? pill('no_charge', 'Holiday') : x.status === 'pending' ? pill('draft', 'Leave pending') : pill('no_show', 'Not in yet');
+    MAIN.innerHTML = head(esc(fLong(today()))) + `${d.pending ? `<div class="notice">${icon('info', 18)}<div>${d.pending} leave application(s) waiting for approval. <a href="#/staff?tab=leave">Review</a></div></div>` : ''}
+      <section class="panel flush"><div class="table-wrap"><table class="t"><thead><tr><th>Staff</th><th>Status</th><th>Shift</th><th>First in</th><th class="num">Hours today</th></tr></thead><tbody>
+      ${d.staff.map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${lab(x)}${x.late ? ' <span class="pill no_show">Late</span>' : ''}</td><td>${esc(fTime(x.shift_start))}</td><td>${esc(x.first_in ? fTime(x.first_in) : '—')}</td><td class="num">${x.minutes ? hm(x.minutes) : '—'}</td></tr>`).join('') || `<tr><td colspan="5">${emptyState('users', 'No staff set up for attendance yet — see Setup.')}</td></tr>`}</tbody></table></div></section>`;
+    return;
+  }
+  if (tab === 'month') {
+    const month = q.get('m') || today().slice(0, 7), d = await api('/clinic/hr/month?month=' + month);
+    const days = d.staff[0] ? d.staff[0].days.map(x => x.day) : [];
+    MAIN.innerHTML = head(`${esc(fMonth(month))}${d.finalised ? ' · pay finalised' : ''}`, `<button class="btn ghost icon" data-pm>${icon('chevron-left', 18)}</button><button class="btn ghost icon" data-nm>${icon('chevron-right', 18)}</button>${isMgr() ? `<button class="btn gold" data-add>${icon('plus', 18)}Add attendance</button>` : ''}`) +
+      `<section class="panel flush"><div class="table-wrap"><table class="t attgrid"><thead><tr><th>Staff</th>${days.map(x => `<th class="${x === today() ? 'is-today' : ''}">${+x.slice(8)}<small>${DOW[new Date(x + 'T00:00:00Z').getUTCDay()][0]}</small></th>`).join('')}<th class="num">Worked / contract</th><th class="num">Late</th><th class="num">Absent</th></tr></thead><tbody>
+      ${d.staff.map(s => `<tr><td><b>${esc(s.name)}</b>${s.summary.unconfirmed ? `<div class="small" style="color:var(--alert)">${s.summary.unconfirmed} absence(s) to review</div>` : ''}${s.summary.missing_out ? `<div class="small" style="color:var(--alert)">${s.summary.missing_out} missing clock-out</div>` : ''}</td>
+        ${s.days.map(x => `<td data-cell="${s.staff_id}|${x.day}">${dayCell(x)}</td>`).join('')}<td class="num">${s.summary.worked_hours} / ${s.summary.contract_hours} h</td><td class="num">${s.summary.late_days}</td><td class="num">${s.summary.absent_days}</td></tr>`).join('') || `<tr><td>${emptyState('users', 'No staff set up for attendance yet.')}</td></tr>`}</tbody></table></div></section>
+      <p class="small muted att-legend">${Object.entries({ P: 'present', IN: 'clocked in', L: 'paid leave', U: 'unpaid leave', '?': 'leave pending', A: 'absent', W: 'weekly off', H: 'holiday' }).map(([k, v]) => `<span class="dc ${({ P: 'present', IN: 'in', L: 'leave', U: 'leave', '?': 'pending', A: 'absent', W: 'off', H: 'holiday' })[k]}">${k}</span> ${v}`).join(' &nbsp; ')} · red outline = late · click a day to see or correct it.</p>`;
+    MAIN.querySelector('[data-pm]').onclick = () => go('#/staff?tab=month&m=' + prevMonth(month));
+    MAIN.querySelector('[data-nm]').onclick = () => go('#/staff?tab=month&m=' + nextMonth(month));
+    const add = MAIN.querySelector('[data-add]'); if (add) add.onclick = () => entryModal(null, { staff: d.staff }, () => route());
+    MAIN.querySelectorAll('[data-cell]').forEach(c => c.onclick = () => { const [sid, day] = c.dataset.cell.split('|'); const s = d.staff.find(x => x.staff_id === +sid); dayModal(s, s.days.find(x => x.day === day), d.staff); });
+    return;
+  }
+  if (tab === 'leave') {
+    const d = await api('/clinic/hr/leave' + (q.get('s') ? '?status=' + q.get('s') : ''));
+    MAIN.innerHTML = head(d.can_decide ? 'You approve leave.' : 'Leave is approved by the leave approver.', `<button class="btn gold" data-onb>${icon('plus', 18)}Record leave for staff</button>`) +
+      `<section class="panel flush"><div class="rows">${d.leave.map(l => { const bal = d.balances[l.staff_id]; return `<div class="row"><div class="grow"><b>${esc(l.staff_name)} · ${esc(LEAVE_KIND[l.kind])}</b><span>${esc(fDay(l.from_date))}${l.to_date !== l.from_date ? ' – ' + esc(fDay(l.to_date)) : ''} · ${l.days} day(s) · ${esc(l.reason || '')}</span>
+        <span class="small muted">Applied ${esc(fWhen(l.applied_at))}${bal && l.status === 'pending' ? ` · balance: annual ${bal.annual}${bal.sick ? ', sick ' + bal.sick : ''}${bal.casual ? ', casual ' + bal.casual : ''}` : ''}${l.decided_by_name ? ` · ${esc(l.status)} by ${esc(l.decided_by_name)}${l.decision_note ? ': ' + esc(l.decision_note) : ''}` : ''}</span></div>
+        ${l.status === 'pending' && d.can_decide ? `<button class="btn sm quiet" data-rej="${l.id}">Reject</button><button class="btn sm" data-ok="${l.id}">${icon('check', 15)}Approve</button>` : pill(l.status === 'approved' ? 'final' : l.status === 'pending' ? 'draft' : 'cancelled', l.status[0].toUpperCase() + l.status.slice(1))}
+        ${l.status === 'approved' && d.can_decide && l.from_date >= today() ? `<button class="btn sm quiet" data-cx="${l.id}">Cancel</button>` : ''}</div>`; }).join('') || emptyState('calendar-check', 'No leave applications.')}</div></section>`;
+    MAIN.querySelector('[data-onb]').onclick = async () => { const setup = await api('/clinic/hr/month?month=' + today().slice(0, 7)); pickStaff(setup.staff, s => leaveModal(null, s, async r => { if (d.can_decide && confirm('Approve this leave now?')) await api(`/clinic/hr/leave/${r.id}/decide`, { method: 'POST', body: { status: 'approved', note: 'Recorded by ' + ME.name } }); route(); })); };
+    MAIN.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/hr/leave/${b.dataset.ok}/decide`, { method: 'POST', body: { status: 'approved' } })).then(() => { toast('Leave approved'); route(); }).catch(() => {}));
+    MAIN.querySelectorAll('[data-rej]').forEach(b => b.onclick = () => modal({ title: 'Reject leave', body: `<form data-f>${field('Reason', inp('note', '', 'maxlength="300"'))}</form>`, actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Reject</button>',
+      onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api(`/clinic/hr/leave/${b.dataset.rej}/decide`, { method: 'POST', body: { status: 'rejected', ...formData(el.querySelector('[data-f]')) } })).then(() => { close(); toast('Leave rejected'); route(); }).catch(() => {}); } }));
+    MAIN.querySelectorAll('[data-cx]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/hr/leave/${b.dataset.cx}/cancel`, { method: 'POST', body: {} })).then(() => route()).catch(() => {}));
+    return;
+  }
+  if (tab === 'absences') {
+    const m0 = today().slice(0, 7), [a, bb, w] = await Promise.all([api('/clinic/hr/month?month=' + prevMonth(m0)), api('/clinic/hr/month?month=' + m0), api('/clinic/hr/warnings')]);
+    const list = [];
+    for (const src of [a, bb]) for (const s of src.staff) for (const x of s.days) if (x.status === 'absent' && !x.confirmed) list.push({ ...x, staff_id: s.staff_id, name: s.name, s });
+    const by = {}; for (const x of list) (by[x.staff_id] ||= []).push(x);
+    MAIN.innerHTML = head('Working days with no attendance and no approved leave') +
+      `<section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>To review</h3></div></div>
+      <p class="small muted">If the person was at work but forgot to scan, add their attendance. Otherwise confirm the absence: their pay for the day is deducted and a warning letter is issued.</p>
+      ${Object.values(by).map(arr => `<div class="absgroup"><b>${esc(arr[0].name)}</b><div class="rows">${arr.map(x => `<div class="row"><label class="grow" style="display:flex;gap:10px;align-items:center"><input type="checkbox" data-pick="${x.staff_id}" value="${x.day}" checked> ${esc(fLong(x.day))}</label>${isMgr() ? `<button class="btn sm ghost" data-was="${x.staff_id}|${x.day}">Was at work</button>` : ''}</div>`).join('')}</div>
+        <button class="btn sm" data-warn="${arr[0].staff_id}" style="margin-top:8px">${icon('file-text', 15)}Confirm absence & issue warning</button></div>`).join('') || emptyState('check-circle', 'Nothing to review.')}</section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('file-text', 20)}<h3>Warning letters</h3></div></div>
+      ${w.warnings.length ? `<div class="rows">${w.warnings.map(x => `<div class="row"><div class="grow"><b>${esc(x.letter_no)} · ${esc(x.staff_name)}</b><span>Absent ${JSON.parse(x.days).map(fDay).join(', ')} · issued ${esc(fDate(x.issued_at.slice(0, 10)))} by ${esc(x.issued_by_name)}</span></div>${pdfLink(`/hr/warnings/${x.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">None issued.</p>'}</section>`;
+    MAIN.querySelectorAll('[data-was]').forEach(b => b.onclick = () => { const [sid, day] = b.dataset.was.split('|'); entryModal(null, { staff: bb.staff, staff_id: +sid, day }, () => route()); });
+    MAIN.querySelectorAll('[data-warn]').forEach(b => b.onclick = () => {
+      const sid = +b.dataset.warn, days = [...MAIN.querySelectorAll(`[data-pick="${sid}"]:checked`)].map(x => x.value);
+      if (!days.length) return toast('Tick the days first');
+      modal({ title: 'Issue warning letter', body: `<p>${esc(by[sid][0].name)} · absent ${days.map(fDay).join(', ')}</p><form data-f>${field('Extra note on the letter (optional)', `<textarea class="in" name="note" rows="3" maxlength="600"></textarea>`)}</form><p class="small muted">The day's pay is deducted. The letter is saved as a PDF to print and hand over for signature.</p>`,
+        actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Issue letter</button>',
+        onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api('/clinic/hr/absences/confirm', { method: 'POST', body: { staff_id: sid, days, ...formData(el.querySelector('[data-f]')) } })).then(r => { close(); toast('Warning ' + r.letter_no + ' issued'); window.open(`${BASE}/api/clinic/hr/warnings/${r.id}/pdf`, '_blank'); route(); }).catch(() => {}); } });
+    });
+    return;
+  }
+  if (tab === 'pay' && isMgr()) {
+    const month = q.get('m') || prevMonth(today().slice(0, 7)), d = await api('/clinic/hr/payroll?month=' + month);
+    const sum = k => d.rows.reduce((n, r) => n + (r[k] || 0), 0);
+    MAIN.innerHTML = head(`${esc(fMonth(month))} · ${d.finalised ? `finalised by ${esc(d.rows[0] ? d.rows[0].finalised_by_name : '')}` : 'draft — changes until finalised'}`,
+      `<button class="btn ghost icon" data-pm>${icon('chevron-left', 18)}</button><button class="btn ghost icon" data-nm>${icon('chevron-right', 18)}</button>${pdfLink(`/hr/payroll/${month}.pdf`, 'Pay sheet PDF')}${!d.finalised && month < today().slice(0, 7) ? `<button class="btn gold" data-fin>${icon('lock', 18)}Finalise month</button>` : ''}`) +
+      `<section class="panel flush"><div class="table-wrap"><table class="t"><thead><tr><th>Staff</th><th class="num">Salary</th><th class="num">Contract h</th><th class="num">Rate / h</th><th class="num">Worked h</th><th class="num">Paid leave</th><th class="num">Unpaid / absent</th><th class="num">Deductions</th><th class="num">Net pay</th><th></th></tr></thead><tbody>
+      ${d.rows.map(r => { const ded = Object.values(r.deductions).reduce((n, v) => n + v, 0); return `<tr><td><b>${esc(r.name)}</b>${r.pending_leave_days || r.missing_out || r.unconfirmed_absences ? `<div class="small" style="color:var(--alert)">${[r.pending_leave_days && r.pending_leave_days + ' leave pending', r.missing_out && r.missing_out + ' no clock-out', r.unconfirmed_absences && r.unconfirmed_absences + ' absence(s) to review'].filter(Boolean).join(' · ')}</div>` : ''}</td>
+        <td class="num">${money(r.salary)}</td><td class="num">${r.contract_hours}</td><td class="num">${money(r.rate)}</td><td class="num">${r.worked_hours}</td><td class="num">${r.paid_leave_days}</td><td class="num">${r.unpaid_leave_days} / ${r.absent_days}</td>
+        <td class="num" title="${esc(`Absence ${money(r.deductions.absence)} · unpaid leave ${money(r.deductions.unpaid_leave)} · short hours ${money(r.deductions.short_hours)} (${r.short_hours} h)${r.deductions.not_employed ? ' · not yet joined ' + money(r.deductions.not_employed) : ''}`)}">${money(ded)}</td><td class="num"><b>${money(r.net)}</b></td><td>${pdfLink(`/hr/payroll/${month}.pdf?staff=${r.staff_id}`, 'Payslip')}</td></tr>`; }).join('') || `<tr><td colspan="10">${emptyState('wallet', 'No staff with a pay profile — see Setup.')}</td></tr>`}
+      ${d.rows.length ? `<tr class="tot"><td>Total</td><td class="num">${money(sum('salary'))}</td><td colspan="6"></td><td class="num"><b>${money(sum('net'))}</b></td><td></td></tr>` : ''}</tbody></table></div></section>
+      <p class="small muted">Rate = salary ÷ contract hours (working days × daily hours; weekly off and holidays are paid). Pay = rate × paid hours, where paid hours = hours worked + paid leave, capped at contract hours less absent and unpaid-leave days. No overtime. PF, ESI and TDS are not included.</p>`;
+    MAIN.querySelector('[data-pm]').onclick = () => go('#/staff?tab=pay&m=' + prevMonth(month));
+    MAIN.querySelector('[data-nm]').onclick = () => go('#/staff?tab=pay&m=' + nextMonth(month));
+    const f = MAIN.querySelector('[data-fin]'); if (f) f.onclick = () => { if (confirm(`Finalise pay for ${fMonth(month)}? Figures are then locked and payslips appear for staff.`)) busy(f, () => api('/clinic/hr/payroll/finalise', { method: 'POST', body: { month } })).then(() => { toast('Pay finalised'); route(); }).catch(() => {}); };
+    return;
+  }
+  if (tab === 'setup' && isMgr()) {
+    const d = await api('/clinic/hr/setup'), S = B.settings;
+    MAIN.innerHTML = head('Pay profiles, clinic location, holidays and the attendance screen') + `
+      <section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('users', 20)}<h3>Staff pay & hours</h3></div></div>
+        <div class="table-wrap"><table class="t"><thead><tr><th>Staff</th><th class="num">Monthly salary</th><th class="num">Hours / day</th><th>Weekly off</th><th>Shift starts</th><th>Joined</th><th>Attendance</th><th></th></tr></thead><tbody>
+        ${d.staff.map(s => `<tr><td><b>${esc(s.name)}</b><div class="small muted">${esc(s.role)}</div></td><td class="num">${s.staff_id ? money(s.monthly_salary) : '—'}</td><td class="num">${s.staff_id ? s.daily_hours : '—'}</td><td>${s.staff_id ? DOW[s.weekly_off] : '—'}</td><td>${s.staff_id ? esc(fTime(s.shift_start)) : '—'}</td><td>${esc(s.joined_on ? fDate(s.joined_on) : '—')}</td><td>${s.staff_id ? (s.attendance_required ? pill('final', 'Required') : pill('no_charge', 'Not tracked')) : pill('draft', 'Not set up')}</td><td><button class="btn sm ghost" data-edit="${s.id}">${icon('pencil', 15)}${s.staff_id ? 'Edit' : 'Set up'}</button></td></tr>`).join('')}</tbody></table></div>
+        <p class="small muted" style="padding:0 20px 16px">Staff who are not in this list need an account first (Settings → Team). Visiting consultants paid per session can be left "not tracked". Staff without clinic access only see My attendance.</p></section>
+      <div class="grid2">
+      <section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>Clinic location (geofence)</h3></div></div>
+        <form data-geo class="stack" style="gap:12px"><div class="grid2">${field('Latitude', inp('geo_lat', S.geo_lat, 'inputmode="decimal"'))}${field('Longitude', inp('geo_lng', S.geo_lng, 'inputmode="decimal"'))}</div>
+        <div class="grid2">${field('Radius (metres)', inp('geo_radius_m', S.geo_radius_m || 150, 'type="number" min="30" max="1000"'))}${field('Late after (minutes past shift start)', inp('att_grace_min', S.att_grace_min || 10, 'type="number" min="0" max="120"'))}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn ghost" data-here>${icon('activity', 18)}Use my current location</button><button class="btn" data-savegeo>Save</button></div></form>
+        <p class="small muted">Stand inside the clinic with your phone (GPS on) and press "Use my current location", then Save. Clock-in only works within this distance.</p></section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('calendar-check', 20)}<h3>Leave rules</h3></div></div>
+        <form data-lv class="stack" style="gap:12px"><div class="grid2">${field('Paid annual leave per month', inp('leave_annual_per_month', S.leave_annual_per_month ?? 1, 'type="number" step="0.5" min="0" max="5"'))}${field('Sick leave per year', inp('leave_sick_per_year', S.leave_sick_per_year ?? 0, 'type="number" min="0" max="30"'))}</div>
+        ${field('Casual leave per year', inp('leave_casual_per_year', S.leave_casual_per_year ?? 0, 'type="number" min="0" max="30"'))}
+        ${ME.admin ? field('Leave approver(s)', `<div class="checks">${B.team.filter(t => t.active).map(t => `<label><input type="checkbox" name="appr" value="${t.id}"${String(S.leave_approvers || '').split(',').map(Number).includes(t.id) ? ' checked' : ''}> ${esc(t.name)}</label>`).join('')}</div>`) : `<p class="small">Leave approver: <b>${esc(String(S.leave_approvers || '').split(',').map(Number).filter(Boolean).map(staffName).join(', ') || 'admin')}</b></p>`}
+        <button class="btn" data-savelv>Save</button></form></section>
+      </div>
+      <div class="grid2">
+      <section class="panel"><div class="panel-h"><div class="t">${icon('calendar-x', 20)}<h3>Clinic holidays</h3></div></div>
+        <form data-hol class="grid2" style="align-items:end">${field('Date', inp('day', '', 'type="date"'))}${field('Name', inp('name', '', 'maxlength="80" placeholder="e.g. Thiruvonam"'))}<button class="btn">${icon('plus', 18)}Add</button></form>
+        <div class="rows" style="margin-top:10px">${d.holidays.filter(h => h.day >= today().slice(0, 4) + '-01-01').map(h => `<div class="row"><div class="grow"><b>${esc(fDate(h.day))}</b><span>${esc(h.name)}</span></div><button class="btn sm quiet icon" data-delhol="${h.day}" aria-label="Remove">${icon('x', 15)}</button></div>`).join('') || '<p class="muted">None added.</p>'}</div>
+        <p class="small muted">Holidays are paid and are not working days.</p></section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('layout-dashboard', 20)}<h3>Attendance screen (clinic desktop)</h3></div></div>
+        <p>Open this page on the clinic desktop and press the button there. The desktop then shows a QR code that changes every 30 seconds; staff scan it with their phones.</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0"><button class="btn gold" data-kiosk>${icon('layout-dashboard', 18)}Make this computer the attendance screen</button><a class="btn ghost" href="${BASE}/kiosk" target="_blank" rel="noopener">${icon('external-link', 18)}Open attendance screen</a></div>
+        <div class="rows">${d.kiosks.filter(k => k.active).map(k => `<div class="row"><div class="grow"><b>${esc(k.name)}</b><span>Set up ${esc(fDate(k.created_at.slice(0, 10)))}${k.last_seen ? ' · last on ' + esc(fWhen(k.last_seen)) : ''}</span></div><button class="btn sm quiet" data-rk="${k.id}">Remove</button></div>`).join('')}</div>
+        <h4 style="margin:16px 0 6px">Remembered phones</h4>
+        <div class="rows">${d.devices.map(x => `<div class="row"><div class="grow"><b>${esc(x.name)}</b><span class="small muted">${esc((x.agent || '').slice(0, 70))} · since ${esc(fDate(x.created_at.slice(0, 10)))}</span></div><button class="btn sm quiet" data-rd="${x.id}">Forget</button></div>`).join('') || '<p class="muted small">None yet. A phone is remembered after its first signed-in scan.</p>'}</div></section>
+      </div>`;
+    MAIN.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => staffPayModal(d.staff.find(s => s.id === +b.dataset.edit), () => route()));
+    const geo = MAIN.querySelector('[data-geo]');
+    MAIN.querySelector('[data-here]').onclick = e => { const btn = e.currentTarget; btn.disabled = true; navigator.geolocation.getCurrentPosition(p => { geo.geo_lat.value = p.coords.latitude.toFixed(6); geo.geo_lng.value = p.coords.longitude.toFixed(6); btn.disabled = false; toast(`Location found (±${Math.round(p.coords.accuracy)} m)`); }, () => { btn.disabled = false; toast('Could not get your location — allow location for this site.'); }, { enableHighAccuracy: true, timeout: 15000 }); };
+    geo.onsubmit = e => { e.preventDefault(); busy(MAIN.querySelector('[data-savegeo]'), () => api('/clinic/hr/settings', { method: 'PUT', body: formData(geo) })).then(async () => { toast('Saved'); await refreshBoot(); route(); }).catch(() => {}); };
+    const lv = MAIN.querySelector('[data-lv]');
+    lv.onsubmit = e => { e.preventDefault(); const body = formData(lv); delete body.appr; if (ME.admin) body.leave_approvers = [...lv.querySelectorAll('[name=appr]:checked')].map(x => x.value).join(','); busy(MAIN.querySelector('[data-savelv]'), () => api('/clinic/hr/settings', { method: 'PUT', body })).then(async () => { toast('Saved'); await refreshBoot(); route(); }).catch(() => {}); };
+    const hol = MAIN.querySelector('[data-hol]');
+    hol.onsubmit = e => { e.preventDefault(); busy(hol.querySelector('button'), () => api('/clinic/hr/holidays', { method: 'POST', body: formData(hol) })).then(() => route()).catch(() => {}); };
+    MAIN.querySelectorAll('[data-delhol]').forEach(b => b.onclick = () => busy(b, () => api('/clinic/hr/holidays/' + b.dataset.delhol, { method: 'DELETE' })).then(() => route()).catch(() => {}));
+    MAIN.querySelector('[data-kiosk]').onclick = e => { const name = prompt('Name for this computer', 'Reception desktop'); if (!name) return; busy(e.currentTarget, () => api('/clinic/hr/kiosks', { method: 'POST', body: { name } })).then(() => { toast('This computer is now the attendance screen'); window.open(BASE + '/kiosk', '_blank'); route(); }).catch(() => {}); };
+    MAIN.querySelectorAll('[data-rk]').forEach(b => b.onclick = () => confirm('Remove this attendance screen?') && busy(b, () => api(`/clinic/hr/kiosks/${b.dataset.rk}/revoke`, { method: 'POST', body: {} })).then(() => route()).catch(() => {}));
+    MAIN.querySelectorAll('[data-rd]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/hr/devices/${b.dataset.rd}/revoke`, { method: 'POST', body: {} })).then(() => route()).catch(() => {}));
+    return;
+  }
+  go('#/staff?tab=today');
+}
+function pickStaff(staff, cb) {
+  modal({ title: 'Choose staff member', body: `<div class="rows">${staff.map(s => `<button class="row" data-s="${s.staff_id}" style="width:100%;text-align:left;background:none;border:0;cursor:pointer"><b>${esc(s.name)}</b></button>`).join('')}</div>`, actions: '<button class="btn ghost" data-close>Cancel</button>',
+    onMount(el, close) { el.querySelectorAll('[data-s]').forEach(b => b.onclick = () => { close(); cb(staff.find(s => s.staff_id === +b.dataset.s)); }); } });
+}
+function staffPayModal(s, after) {
+  const p = s.staff_id ? s : { monthly_salary: '', daily_hours: 8, weekly_off: 0, shift_start: '09:30', attendance_required: 1, leave_opening: 0 };
+  modal({ title: `Pay & hours · ${s.name}`, body: `<form data-f class="stack" style="gap:12px">
+      <div class="grid2">${field('Monthly salary (₹)', inp('monthly_salary', p.monthly_salary, 'type="number" min="0" step="1"'))}${field('Contract hours per working day', inp('daily_hours', p.daily_hours, 'type="number" min="1" max="16" step="0.5"'))}</div>
+      <div class="grid2">${field('Weekly off', sel('weekly_off', DOW.map((d, i) => [i, d]), p.weekly_off))}${field('Shift starts', inp('shift_start', p.shift_start, 'type="time"'))}</div>
+      <div class="grid2">${field('Joined on', inp('joined_on', p.joined_on || '', 'type="date"'))}${field('Left on', inp('left_on', p.left_on || '', 'type="date"'), 'leave blank')}</div>
+      <div class="grid2">${field('Annual leave balance brought in', inp('leave_opening', p.leave_opening || 0, 'type="number" step="0.5" min="0"'))}${field('Monthly accrual starts', inp('leave_from', (p.leave_from || today()).slice(0, 7), 'type="month"'))}</div>
+      <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="attendance_required" ${p.attendance_required ? 'checked' : ''}> Must clock in (uncheck for visiting consultants)</label></form>`,
+    actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>',
+    onMount(el, close) { const sv = el.querySelector('[data-save]'); sv.onclick = () => { const f = el.querySelector('[data-f]'), body = formData(f); body.attendance_required = f.attendance_required.checked; busy(sv, () => api('/clinic/hr/pay/' + s.id, { method: 'PUT', body })).then(() => { close(); toast('Saved'); after(); }).catch(() => {}); }; } });
+}
+function dayModal(s, x, all) {
+  const canEdit = isMgr();
+  modal({ title: `${s.name} · ${fLong(x.day)}`, body: `<p>${dayCell(x)} ${esc(x.status === 'leave' || x.status === 'pending' ? LEAVE_KIND[x.kind] + (x.status === 'pending' ? ' (awaiting approval)' : '') : x.label || DAYST[x.status][1])}${x.late ? ' · <b>late</b>' : ''}${x.minutes ? ' · ' + hm(x.minutes) : ''}</p>
+      ${x.entries.length ? `<div class="rows">${x.entries.map(e => `<div class="row"><div class="grow"><b>${esc(tOnly(e.in_at))} → ${esc(e.out_at ? tOnly(e.out_at) : (x.day < today() ? 'no clock-out' : 'now'))}</b><span class="small muted">${e.source === 'manual' ? 'added' : 'QR'}${e.in_geo ? ` · ${JSON.parse(e.in_geo).dist} m from clinic` : ''}${e.edited_by_name ? ` · edited by ${esc(e.edited_by_name)}: ${esc(e.edited_reason)}` : ''}</span></div>${canEdit ? `<button class="btn sm ghost" data-e="${e.id}">${icon('pencil', 15)}Edit</button>` : ''}</div>`).join('')}</div>` : '<p class="muted">No attendance recorded.</p>'}
+      ${x.status === 'absent' && !x.confirmed ? '<p class="small" style="color:var(--alert)">Unauthorised absence — review it under Absences & warnings.</p>' : ''}`,
+    actions: `<button class="btn ghost" data-close>Close</button>${canEdit && x.day <= today() ? `<button class="btn" data-addh>${icon('plus', 16)}Add attendance</button>` : ''}`,
+    onMount(el, close) {
+      el.querySelectorAll('[data-e]').forEach(b => b.onclick = () => { close(); entryModal(x.entries.find(e => e.id === +b.dataset.e), { staff: all }, () => route()); });
+      const a = el.querySelector('[data-addh]'); if (a) a.onclick = () => { close(); entryModal(null, { staff: all, staff_id: s.staff_id, day: x.day }, () => route()); };
+    } });
+}
+function entryModal(e, ctx, after) {
+  const day = e ? e.day : ctx.day || today();
+  modal({ title: e ? 'Correct attendance' : 'Add attendance', body: `<form data-f class="stack" style="gap:12px">
+      ${e ? '' : field('Staff', sel('staff_id', ctx.staff.map(s => [s.staff_id, s.name]), ctx.staff_id))}
+      <div class="grid2">${field('Day', inp('day', day, `type="date" max="${today()}"`))}<div></div></div>
+      <div class="grid2">${field('In', inp('in_time', e ? e.in_at.slice(11, 16) : '', 'type="time" required'))}${field('Out', inp('out_time', e && e.out_at ? e.out_at.slice(11, 16) : '', 'type="time"'))}</div>
+      ${field('Reason', inp('reason', '', 'maxlength="200" placeholder="e.g. forgot to scan out — confirmed by Dr Akshara" required'))}</form><p class="small muted">Recorded in your name with the reason.</p>`,
+    actions: `${e ? '<button class="btn quiet" data-del style="margin-right:auto">Delete</button>' : ''}<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
+    onMount(el, close) {
+      const s = el.querySelector('[data-save]');
+      s.onclick = () => busy(s, () => api('/clinic/hr/attendance' + (e ? '/' + e.id : ''), { method: e ? 'PUT' : 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Saved'); after(); }).catch(() => {});
+      const d = el.querySelector('[data-del]'); if (d) d.onclick = () => confirm('Delete this entry?') && busy(d, () => api('/clinic/hr/attendance/' + e.id, { method: 'DELETE' })).then(() => { close(); after(); }).catch(() => {});
+    } });
 }
 
 /* ---------------- Reports ---------------- */

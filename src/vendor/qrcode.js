@@ -2286,4 +2286,5 @@ var qrcode = function() {
 
 }();
 
+
 export default qrcode;

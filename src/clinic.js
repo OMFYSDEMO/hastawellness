@@ -18,6 +18,7 @@ import { json, sameOrigin, clean, nz, h, normalisePhone, sha256 } from './util.j
 import { verifySecret, hashSecret, handleEms } from './ems.js';
 import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlertStmts, stockAlertsFrom } from './stock.js';
 import { careRoute, uploadPhoto, recallStmt } from './care.js';
+import { hrRoute, kioskRoute, scanRoute } from './hr.js';
 
 /* ---------------- helpers ---------------- */
 const IST = 330 * 60000;
@@ -33,7 +34,7 @@ const parse = (s, f) => { try { return s ? JSON.parse(s) : f; } catch { return f
 const minutesOf = s => { const [hh, mm] = s.slice(11, 16).split(':').map(Number); return hh * 60 + mm; };
 const addMin = (s, m) => { const d = new Date(s + ':00Z'); d.setUTCMinutes(d.getUTCMinutes() + m); return d.toISOString().slice(0, 16); };
 
-const HEADERS = { 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=()' };
+const HEADERS = { 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=(self)' };
 const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 const api = (data, status = 200) => json(data, status, HEADERS);
 const bad = msg => api({ ok: false, error: msg }, 400);
@@ -45,7 +46,9 @@ export const MODES = { cash: 'Cash', upi: 'UPI', card: 'Card (POS)', bank: 'Bank
 export const APPT_STATUS = ['booked', 'arrived', 'in_treatment', 'completed', 'no_show', 'cancelled'];
 const HOURS = { 0: ['10:00', '14:00'], 1: ['10:00', '20:00'], 2: ['10:00', '20:00'], 3: ['10:00', '20:00'], 4: ['10:00', '20:00'], 5: ['10:00', '20:00'], 6: ['10:00', '20:00'] };
 const DEFAULT_DEPTS = [['Dental', '#2f6f8f'], ['Skin & Aesthetics', '#b0607a'], ['Hair', '#8a6a2f'], ['Wellness', '#34595e'], ['Body Contouring', '#6b4a8f'], ['General / Clinic', '#5e6d6c']];
-const SETTING_KEYS = { legal_name: 'HASWEL CARE Private Limited', trade_name: 'Hasta Wellness', gstin: '', address: '1st floor, Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram, Kerala 695582', state: 'Kerala (32)', phone: '+91 97784 58883', email: 'hello@hastawellnessclinic.com', invoice_prefix: 'HW', discount_limit_pct: '10', discount_approvers: '', invoice_footer: 'Thank you for choosing Hasta Wellness.' };
+const SETTING_KEYS = { legal_name: 'HASWEL CARE Private Limited', trade_name: 'Hasta Wellness', gstin: '', address: '1st floor, Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram, Kerala 695582', state: 'Kerala (32)', phone: '+91 97784 58883', email: 'hello@hastawellnessclinic.com', invoice_prefix: 'HW', discount_limit_pct: '10', discount_approvers: '', invoice_footer: 'Thank you for choosing Hasta Wellness.',
+  // Attendance & leave (src/hr.js)
+  leave_approvers: '', leave_annual_per_month: '1', leave_sick_per_year: '0', leave_casual_per_year: '0', att_grace_min: '10', geo_lat: '', geo_lng: '', geo_radius_m: '150' };
 
 async function audit(env, me, action, entity, id, detail) {
   await env.DB.prepare('INSERT INTO cl_audit (staff_id, staff_name, action, entity, entity_id, detail) VALUES (?,?,?,?,?,?)').bind(me.id, me.name, action, entity, id || null, detail ? String(detail).slice(0, 500) : null).run();
@@ -64,8 +67,9 @@ async function clinicSession(request, env) {
   if (r.sid === 0) return { me: { kind: 'staff', id: 0, name: 'Clinic admin', role: 'admin', username: 'hasta', skills: ['doctor'], admin: true, depts: [] } };
   if (!r.id) return { status: 401 };
   const apps = parse(r.apps, ['ems']);
-  if (r.role !== 'admin' && !apps.includes('clinic')) return { status: 403 };
-  return { me: { kind: 'staff', id: r.id, name: r.name, role: r.role, username: r.username, reg_no: r.reg_no, skills: parse(r.skills, []), admin: r.role === 'admin', depts: String(r.depts || '').split(',').filter(Boolean).map(Number) } };
+  // Staff without the clinic app can still use attendance & leave ("My attendance" only).
+  const limited = r.role !== 'admin' && !apps.includes('clinic');
+  return { me: { kind: 'staff', id: r.id, name: r.name, role: r.role, username: r.username, reg_no: r.reg_no, skills: parse(r.skills, []), admin: r.role === 'admin', depts: String(r.depts || '').split(',').filter(Boolean).map(Number), limited } };
 }
 const canManage = u => u.admin || u.role === 'manager';
 // Who may approve discounts above the limit: the staff named in Settings (discount_approvers),
@@ -88,11 +92,16 @@ export async function handleClinic(request, env, url, ctx, base, serveAsset) {
   // Sign-in, sign-out, "who am I" and password change are shared with the EMS platform.
   if (/^\/api\/(auth\/|me(\/secret)?$)/.test(path)) return handleEms(request, env, url, ctx, base, serveAsset);
   if (path.startsWith('/api/clinic/')) {
-    try { return await route(request, env, url, path.slice(11)); }
+    try { return await route(request, env, url, path.slice(11), base); }
     catch (err) { console.error('Clinic error', path, err && err.stack || err); return api({ ok: false, error: 'Something went wrong. Please try again.' }, 500); }
+  }
+  if (path.startsWith('/api/kiosk/')) {
+    try { return (await kioskRoute(request, env, url, base, path.slice(4))) || api({ ok: false, error: 'Not found' }, 404); }
+    catch (err) { console.error('Kiosk error', err && err.stack || err); return api({ ok: false, error: 'Something went wrong.' }, 500); }
   }
   if (path.startsWith('/api/')) return api({ ok: false, error: 'Not found' }, 404);
   if (request.method !== 'GET' && request.method !== 'HEAD') return new Response('Method not allowed', { status: 405 });
+  if (path === '/kiosk') return new Response(kioskShell(base), { headers: { ...HEADERS, 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP } });
   return new Response(shell(base), { headers: { ...HEADERS, 'content-type': 'text/html; charset=utf-8', 'content-security-policy': CSP } });
 }
 
@@ -104,14 +113,23 @@ function shell(base) {
 <title>Hasta Clinic</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=4">
-<link rel="modulepreload" href="/clinic/app.js?v=9"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=5">
+<link rel="modulepreload" href="/clinic/app.js?v=10"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=9"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=10"></script></body></html>`;
+}
+
+// Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
+function kioskShell(base) {
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="robots" content="noindex,nofollow"><meta name="ems-base" content="${h(base)}"><title>Staff attendance · Hasta</title>
+<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=5">
+</head><body class="kiosk-body"><div id="kiosk" class="kiosk"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
+<script type="module" src="/clinic/kiosk.js?v=1"></script></body></html>`;
 }
 
 /* ---------------- router ---------------- */
-async function route(request, env, url, p) {
+async function route(request, env, url, p, base) {
   const m = request.method;
   let b = {};
   // Clinical photo upload: raw image body, not JSON.
@@ -131,8 +149,14 @@ async function route(request, env, url, p) {
     if (!b || typeof b !== 'object') return bad('Invalid request');
   }
   const auth = await clinicSession(request, env);
+  // Clock-in / out: a signed-in phone, or one remembered from an earlier scan.
+  if (p === '/hr/scan' && m === 'POST') return scanRoute(request, env, url, base, auth.me || null, b);
   if (auth.status === 401) return api({ ok: false, error: 'Please sign in.' }, 401);
   const me = auth.me;
+  if (me && me.limited) {
+    if (p === '/boot' && m === 'GET') return api({ ok: true, me, limited: true, settings: { trade_name: (await settings(env)).trade_name } });
+    if (!p.startsWith('/hr/')) return api({ ok: false, error: 'Your account only has access to My attendance.', code: 'no_access' }, 403);
+  }
   if (!me) return api({ ok: false, error: 'Your account does not have access to the clinic app. Ask an admin to turn it on in Settings → Team.', code: 'no_access' }, 403);
   await ensureSeed(env);
   const q = k => url.searchParams.get(k);
@@ -206,6 +230,7 @@ async function route(request, env, url, p) {
   const sr = await stockRoute(request, env, me, p, m, b, q);
   if (sr) return sr;
   // Care records: notes, dental chart, plans, recalls, photos (src/care.js)
+  { const hr = await hrRoute(request, env, url, me, p, m, b, q, base); if (hr) return hr; }
   const cr = await careRoute(request, env, me, p, m, b, q);
   if (cr) return cr;
 
