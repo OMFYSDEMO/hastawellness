@@ -17,6 +17,7 @@ import { PDFDocument, StandardFonts, rgb } from './vendor/pdf-lib.esm.min.js';
 import { json, sameOrigin, clean, nz, h, normalisePhone } from './util.js';
 import { getSession, verifySecret, hashSecret, handleEms } from './ems.js';
 import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlerts } from './stock.js';
+import { careRoute, uploadPhoto, recallList } from './care.js';
 
 /* ---------------- helpers ---------------- */
 const IST = 330 * 60000;
@@ -33,7 +34,7 @@ const minutesOf = s => { const [hh, mm] = s.slice(11, 16).split(':').map(Number)
 const addMin = (s, m) => { const d = new Date(s + ':00Z'); d.setUTCMinutes(d.getUTCMinutes() + m); return d.toISOString().slice(0, 16); };
 
 const HEADERS = { 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'x-frame-options': 'DENY', 'x-content-type-options': 'nosniff', 'referrer-policy': 'same-origin', 'permissions-policy': 'camera=(), microphone=(), geolocation=()' };
-const CSP = "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+const CSP = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; font-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
 const api = (data, status = 200) => json(data, status, HEADERS);
 const bad = msg => api({ ok: false, error: msg }, 400);
 const done = ([status, error, extra]) => status === 200 ? api({ ok: true, ...(extra || {}) }) : api({ ok: false, error, ...(extra || {}) }, status);
@@ -99,13 +100,21 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=2">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=4"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=5"></script></body></html>`;
 }
 
 /* ---------------- router ---------------- */
 async function route(request, env, url, p) {
   const m = request.method;
   let b = {};
+  // Clinical photo upload: raw image body, not JSON.
+  if (p === '/photos' && m === 'POST') {
+    if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
+    const ses = await getSession(request, env);
+    const u = ses && await clinicUser(env, ses);
+    if (!u) return api({ ok: false, error: 'Please sign in.' }, 401);
+    return uploadPhoto(request, env, u, url);
+  }
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
   }
@@ -189,6 +198,9 @@ async function route(request, env, url, p) {
   // Stock & purchasing (src/stock.js)
   const sr = await stockRoute(request, env, me, p, m, b, q);
   if (sr) return sr;
+  // Care records: notes, dental chart, plans, recalls, photos (src/care.js)
+  const cr = await careRoute(request, env, me, p, m, b, q);
+  if (cr) return cr;
 
   return api({ ok: false, error: 'Not found' }, 404);
 }
@@ -624,6 +636,19 @@ async function invoiceDetail(env, id) {
   const bal = await balances(env, inv.patient_id);
   return { invoice: withBalance(inv), lines: (lines || []).map(l => ({ ...l, tax_parts: parse(l.tax_parts, null) })), payments: allocs || [], advance: bal.advance };
 }
+// Used by treatment plans: a draft bill with the given lines. Returns the invoice id, or the
+// error from saveInvoice (e.g. a discount needing authorisation), in which case the draft is removed.
+export async function createInvoiceWithLines(env, me, patientId, lines, authoriser) {
+  const id = (await env.DB.prepare('INSERT INTO cl_invoices (patient_id, invoice_date, created_by) VALUES (?,?,?)').bind(patientId, today(), me.id).run()).meta.last_row_id;
+  const r = await saveInvoice(env, me, id, { lines, authoriser });
+  if (r[0] !== 200) {
+    await env.DB.prepare('DELETE FROM cl_invoice_lines WHERE invoice_id=?').bind(id).run();
+    await env.DB.prepare('DELETE FROM cl_invoices WHERE id=?').bind(id).run();
+    return r;
+  }
+  await audit(env, me, 'invoice.draft', 'invoice', id, 'from treatment plan');
+  return OK({ id });
+}
 async function createInvoice(env, me, b) {
   const patientId = parseInt(b.patient_id, 10);
   if (!(await env.DB.prepare("SELECT 1 FROM cl_patients WHERE id=? AND status='active'").bind(patientId).first())) return R(400, 'Choose the patient.');
@@ -901,8 +926,9 @@ async function dashboard(env, me) {
     env.DB.prepare("SELECT COUNT(*) n FROM leads WHERE status='new'").first(),
   ]);
   const stock = await stockAlerts(env).catch(() => null);
+  const recalls = await recallList(env, 'due').catch(() => []);
   const billed = await env.DB.prepare("SELECT COALESCE(SUM(total - passthrough),0) s FROM cl_invoices WHERE status='final' AND legacy=0 AND invoice_date=?").bind(d).first();
-  return { today: d, appointments: appts, unclosed: open, collections: pays, cash: book, outstanding: { count: out.n, amount: r2(out.s) }, new_leads: lds.n, billed_today: r2(billed.s), stock };
+  return { today: d, appointments: appts, unclosed: open, collections: pays, cash: book, outstanding: { count: out.n, amount: r2(out.s) }, new_leads: lds.n, billed_today: r2(billed.s), stock, recalls };
 }
 async function dayBook(env, d) {
   const [invs, pays] = await Promise.all([

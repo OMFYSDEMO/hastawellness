@@ -18,6 +18,7 @@ const staffName = id => (B.team.find(t => t.id === id) || {}).name || '';
 const clinicians = deptId => B.team.filter(t => t.active && (t.apps.includes('clinic') || t.role === 'admin') && (deptId ? t.depts.includes(deptId) : t.depts.length));
 const assistants = () => B.team.filter(t => t.active && t.skills.some(s => s === 'nurse' || s === 'dental_assistant'));
 const isAdmin = () => ME.admin;
+const isClin = () => ME.admin || (ME.skills || []).some(s2 => ['doctor', 'nurse', 'dental_assistant', 'medical_lead'].includes(s2));
 const canManage = () => ME.admin || ME.role === 'manager';
 const approvers = () => String(B.settings.discount_approvers || '').split(',').map(Number).filter(Boolean);
 const approverText = () => approvers().length ? B.team.filter(t => approvers().includes(t.id)).map(t => t.name).join(' or ') : 'a doctor or admin';
@@ -146,11 +147,13 @@ async function viewToday() {
     ${d.stock && (d.stock.low || d.stock.expiring || d.stock.draft_pos) ? `<div class="notice">${icon('package', 18)}<span>${[d.stock.low && `<a href="#/stock?f=low">${d.stock.low} product${d.stock.low === 1 ? '' : 's'} at or below reorder level</a>`, d.stock.expiring && `<a href="#/stock?f=exp">${d.stock.expiring} batch${d.stock.expiring === 1 ? '' : 'es'} expiring within 60 days</a>`, d.stock.draft_pos && `<a href="#/stock?tab=orders">${d.stock.draft_pos} purchase order${d.stock.draft_pos === 1 ? '' : 's'} waiting for approval</a>`].filter(Boolean).join(' · ')}</span></div>` : ''}
     ${d.unclosed.length ? `<section class="panel flush" style="margin-bottom:18px;border-color:#e6c3bc"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('alert-triangle', 20)}<div><h3>Visits to close</h3><p class="small muted">Completed visits must be billed, covered by a package, or marked no charge.</p></div></div></div>
       <div class="rows">${d.unclosed.map(a => closeRow(a)).join('')}</div></section>` : ''}
+    ${d.recalls && d.recalls.length ? `<section class="panel flush" style="margin-bottom:18px"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('bell', 20)}<div><h3>Follow-ups due</h3><p class="small muted">Patients to call back this week, from doctors' review dates and recalls.</p></div></div></div><div class="rows" data-recalls></div></section>` : ''}
     <section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('calendar-days', 20)}<h3>Today's appointments</h3></div><a class="btn quiet sm" href="#/appointments">Calendar ${icon('chevron-right', 16)}</a></div>
       <div class="rows">${d.appointments.length ? d.appointments.map(a => apptRow(a)).join('') : emptyState('calendar-days', 'No appointments today.')}</div></section>`;
   MAIN.querySelector('[data-newp]').onclick = () => patientModal({}, p => go('#/patient/' + p.id));
   MAIN.querySelector('[data-newa]').onclick = () => apptModal({}, () => route());
   wireApptRows(MAIN, d.appointments.concat(d.unclosed), () => route());
+  const rc = MAIN.querySelector('[data-recalls]'); if (rc) recallRows(rc, d.recalls, () => route(), true);
 }
 function closeRow(a) {
   return `<div class="row"><div class="grow"><b>${esc(a.patient_name)} <small class="muted">${esc(a.patient_no)}</small></b><span>${esc(fDay(a.start_at))} ${esc(fTime(a.start_at))} · ${deptTag(a.dept_id)} ${a.doctor_name ? '· ' + esc(a.doctor_name) : ''}${a.invoice_status === 'draft' ? ' · draft invoice not finalised' : ''}</span></div>
@@ -240,13 +243,14 @@ function apptDetail(a, after) {
       ${a.reason ? `<dt>Reason</dt><dd>${esc(a.reason)}</dd>` : ''}${a.planned_items.length ? `<dt>Planned</dt><dd>${a.planned_items.map(x => esc((CAT || []).find(i => i.id === x.item_id)?.name || 'item') + (x.qty > 1 ? ' × ' + x.qty : '')).join(', ')}</dd>` : ''}
       ${a.notes ? `<dt>Notes</dt><dd>${esc(a.notes)}</dd>` : ''}<dt>Status</dt><dd>${st(a.status)} ${a.closure ? st(a.closure) : ''}${a.invoice_no ? ` <a href="#/invoice/${a.invoice_id}" data-close>${esc(a.invoice_no)}</a>` : a.invoice_id ? ` <a href="#/invoice/${a.invoice_id}" data-close>draft invoice</a>` : ''}${a.closure_note ? `<div class="small muted">${esc(a.closure_note)}</div>` : ''}</dd></dl>
       ${a.medical_alert ? `<div class="alertline" style="margin-top:12px">${icon('alert-triangle', 16)}${esc(a.medical_alert)}</div>` : ''}`,
-    actions: `${!closed || canManage() ? `<button class="btn quiet" data-edit>${icon('pencil', 16)}Edit / reschedule</button>` : ''}
+    actions: `${isClin() && ['arrived', 'in_treatment', 'completed'].includes(a.status) ? `<button class="btn ghost" data-note>${icon('file-text', 16)}Notes</button>` : ''}${!closed || canManage() ? `<button class="btn quiet" data-edit>${icon('pencil', 16)}Edit / reschedule</button>` : ''}
       ${!closed ? '<button class="btn quiet" data-ns>No-show</button><button class="btn quiet" data-cx>Cancel</button>' : ''}
       ${a.status === 'completed' && !a.closure ? `<button class="btn ghost" data-pkg>${icon('package', 16)}Use package</button><button class="btn gold" data-bill>${icon('receipt', 16)}Bill</button>` : ''}
       ${next ? `<button class="btn" data-next="${next[0]}">${next[1]}</button>` : ''}`,
     onMount(el, close) {
       const set = (s, msg) => api(`/clinic/appointments/${a.id}/status`, { method: 'POST', body: { status: s } }).then(() => { close(); toast(msg); s === 'completed' ? closeVisitModal(a, after) : after(); }).catch(e => toast(e.message, true));
       el.querySelector('[data-edit]') && (el.querySelector('[data-edit]').onclick = () => { close(); apptModal(a, after); });
+      el.querySelector('[data-note]') && (el.querySelector('[data-note]').onclick = () => { close(); noteModal({ patient_id: a.patient_id, appointment_id: a.id, dept_id: a.dept_id, patient_name: a.patient_name }, after); });
       el.querySelector('[data-ns]') && (el.querySelector('[data-ns]').onclick = () => set('no_show', 'Marked as no-show'));
       el.querySelector('[data-cx]') && (el.querySelector('[data-cx]').onclick = () => confirm('Cancel this appointment?') && set('cancelled', 'Appointment cancelled'));
       el.querySelector('[data-next]') && (el.querySelector('[data-next]').onclick = () => set(el.querySelector('[data-next]').dataset.next, 'Updated'));
@@ -340,7 +344,8 @@ function patientModal(prefill = {}, after) {
 async function viewPatient(id, tab) {
   const d = await api('/clinic/patients/' + id);
   const p = d.patient;
-  const TABS = [['visits', 'calendar-days', 'Visits'], ['invoices', 'receipt', 'Invoices'], ['payments', 'wallet', 'Payments'], ['packages', 'package', 'Packages'], ['details', 'user', 'Details']];
+  const TABS = [['visits', 'calendar-days', 'Visits'], ...(isClin() ? [['notes', 'file-text', 'Notes'], ['dental', 'stethoscope', 'Dental chart']] : []), ['plans', 'list-checks', 'Plans'], ...(isClin() ? [['photos', 'eye', 'Photos']] : []), ['followups', 'bell', 'Follow-ups'],
+    ['invoices', 'receipt', 'Invoices'], ['payments', 'wallet', 'Payments'], ['packages', 'package', 'Packages'], ['details', 'user', 'Details']];
   const age = p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 31557600000) : null;
   MAIN.innerHTML = `<a href="#/patients" class="crumb">${icon('arrow-left', 16)}Patients</a>
     <div class="head"><div style="display:flex;gap:16px;align-items:center"><span class="avatar" style="width:56px;height:56px;font-size:20px">${esc(initials(p.name))}</span><div><h1>${esc(p.name)}</h1>
@@ -378,6 +383,8 @@ async function viewPatient(id, tab) {
       : `<section class="panel">${emptyState('package', 'No packages yet. Use “Sell package” above.')}</section>`;
     body.querySelectorAll('[data-use]').forEach(b => b.onclick = () => redeemModal(id, null, after, +b.dataset.use));
     body.querySelectorAll('[data-vr]').forEach(b => b.onclick = () => { const reason = prompt('Reason for undoing this redemption?'); if (!reason) return; busy(b, () => api(`/clinic/redemptions/${b.dataset.vr}/void`, { method: 'POST', body: { reason } })).then(() => { toast('Redemption undone'); after(); }).catch(() => {}); });
+  } else if (['notes', 'dental', 'plans', 'photos', 'followups'].includes(tab)) {
+    await careTab(tab, p, body, after);
   } else {
     body.innerHTML = `<section class="panel" style="max-width:860px"><form data-f class="stack" style="gap:14px">${patientForm(p)}</form><div style="margin-top:14px"><button class="btn" data-save>Save details</button></div>
       <p class="small muted" style="margin-top:14px">Added ${esc(fDate(p.created_at))} · source: ${esc(p.source || '—')}</p></section>`;
@@ -1058,4 +1065,213 @@ async function viewPurchaseReport(m) {
     <section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><h3>Supplier invoices</h3></div><table class="t"><thead><tr><th>Date</th><th>Supplier</th><th>GSTIN</th><th>Invoice</th><th class="n">Taxable</th><th class="n">GST</th><th class="n">Total</th></tr></thead><tbody>${r.grns.map(g => `<tr><td class="small">${esc(fDate(g.received_date))}</td><td>${esc(g.supplier_name)}</td><td class="small">${esc(g.supplier_gstin || '—')}</td><td class="small">${esc(g.supplier_invoice_no || '—')}${g.supplier_invoice_date ? ' · ' + esc(fDate(g.supplier_invoice_date)) : ''}</td><td class="n money">${money(g.taxable)}</td><td class="n money">${money(g.cgst + g.sgst + g.igst)}</td><td class="n money">${money(g.total)}</td></tr>`).join('') || '<tr><td colspan="7" class="muted">None.</td></tr>'}</tbody></table>
       ${r.grns.some(g => !g.supplier_invoice_no || !g.supplier_gstin) ? '<p class="small" style="padding:10px 16px;color:var(--alert)">Some entries have no supplier invoice number or GSTIN — input credit can only be claimed with both.</p>' : ''}</section>`;
   MAIN.querySelector('[data-m]').onchange = e => go('#/stock?tab=purchases&m=' + e.target.value);
+}
+
+/* ---------------- Care records (phase 2) ---------------- */
+const COND = { caries: ['Caries', '#c0392b'], filled: ['Filled', '#2f6f8f'], rct: ['Root canal', '#6b4a8f'], crown: ['Crown', '#b08a2f'], bridge: ['Bridge', '#b08a2f'], implant: ['Implant', '#2c6b4f'],
+  missing: ['Missing', '#8c9796'], extraction: ['Extraction', '#7a1f1f'], fractured: ['Fractured', '#d07a2f'], mobile: ['Mobile', '#d07a2f'], impacted: ['Impacted', '#8a6a2f'], veneer: ['Veneer', '#b0607a'],
+  sensitivity: ['Sensitivity', '#5e6d6c'], stain: ['Stain', '#8a6a2f'], other: ['Other', '#5e6d6c'] };
+const CSTAT = { existing: 'Existing', planned: 'Planned', done: 'Done' };
+const PLST = { proposed: 'Proposed', accepted: 'Accepted', completed: 'Completed', cancelled: 'Cancelled' };
+const PHT = { before: 'Before', after: 'After', progress: 'Progress', xray: 'X-ray', scan: 'Scan', other: 'Other' };
+const ta = (n, v, a = '') => `<textarea class="in" name="${n}" ${a}>${esc(v || '')}</textarea>`;
+async function careTab(tab, p, body, after) {
+  const c = await api('/clinic/care/' + p.id);
+  if (tab === 'notes') return notesTab(p, c, body, after);
+  if (tab === 'dental') return dentalTab(p, c, body, after);
+  if (tab === 'plans') return plansTab(p, c, body, after);
+  if (tab === 'photos') return photosTab(p, c, body, after);
+  return followupsTab(p, c, body, after);
+}
+
+/* Notes */
+function notesTab(p, c, body, after) {
+  const blk = (k, v) => v ? `<div style="margin-top:8px"><div class="small muted" style="font-weight:600">${k}</div><div style="white-space:pre-wrap">${esc(v)}</div></div>` : '';
+  body.innerHTML = `<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn gold" data-new>${icon('plus', 18)}New note</button></div>
+    ${c.notes.length ? c.notes.map(n => { const v = n.vitals || {}; const vs = [v.bp && 'BP ' + v.bp, v.pulse && 'Pulse ' + v.pulse, v.weight && 'Wt ' + v.weight + ' kg', v.spo2 && 'SpO₂ ' + v.spo2 + '%', v.temp && 'Temp ' + v.temp].filter(Boolean);
+      return `<section class="panel" style="margin-bottom:14px"><div class="panel-h"><div><h3>${esc(fDate(n.visit_date))} ${n.dept_id ? deptTag(n.dept_id) : ''}</h3><p class="small muted">${esc(n.author_name || '')}${n.updated_at ? ' · edited' : ''}${n.editable ? ' · can be edited until 24 h after writing' : ''}</p></div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">${n.rx.length ? `<a class="btn sm ghost" href="${BASE}/api/clinic/notes/${n.id}/rx" target="_blank" rel="noopener">${icon('printer', 15)}Prescription</a>` : ''}${n.editable ? `<button class="btn sm ghost" data-edit="${n.id}">${icon('pencil', 15)}Edit</button>` : `<button class="btn sm quiet" data-add="${n.id}">Addendum</button>`}</div></div>
+        ${vs.length ? `<p class="small" style="margin-top:4px">${esc(vs.join(' · '))}</p>` : ''}
+        ${blk('Complaint', n.complaint)}${blk('History', n.history)}${blk('Findings', n.findings)}${blk('Diagnosis', n.diagnosis)}${blk('Treatment done', n.treatment)}
+        ${n.rx.length ? `<div style="margin-top:8px"><div class="small muted" style="font-weight:600">Prescription</div>${n.rx.map((x, i) => `<div>${i + 1}. <b>${esc(x.name)}</b> ${esc([x.dose, x.freq, x.days && 'for ' + x.days].filter(Boolean).join(' · '))}${x.note ? ` <span class="muted">— ${esc(x.note)}</span>` : ''}</div>`).join('')}</div>` : ''}
+        ${blk('Advice', n.advice)}${n.review_date ? `<p style="margin-top:8px;font-weight:600;color:var(--teal-ink)">${icon('bell', 14)} Review ${esc(fDate(n.review_date))}${n.review_note ? ' — ' + esc(n.review_note) : ''}</p>` : ''}
+        ${n.addenda.length ? `<div style="margin-top:10px;border-top:1px solid var(--line-soft);padding-top:8px">${n.addenda.map(x => `<div class="small"><b>Addendum</b> · ${esc(x.by)} · ${esc(fDate(x.at.slice(0, 10)))}<div style="white-space:pre-wrap">${esc(x.text)}</div></div>`).join('')}</div>` : ''}</section>`; }).join('')
+    : `<section class="panel">${emptyState('file-text', 'No notes yet.')}</section>`}`;
+  body.querySelector('[data-new]').onclick = () => noteModal({ patient_id: p.id, patient_name: p.name }, after);
+  body.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => noteModal({ ...c.notes.find(n => n.id === +b.dataset.edit), patient_name: p.name }, after));
+  body.querySelectorAll('[data-add]').forEach(b => b.onclick = () => modal({ title: 'Addendum', body: `<form data-f>${field('Addendum', ta('text', '', 'maxlength="1500" rows="4"'))}</form><p class="small muted">Added below the original note with your name and the time. The original is not changed.</p>`,
+    actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-ok>Add</button>',
+    onMount(el, close) { const ok = el.querySelector('[data-ok]'); ok.onclick = () => busy(ok, () => api(`/clinic/notes/${b.dataset.add}/addendum`, { method: 'POST', body: formData(el.querySelector('[data-f]')) }), true).then(() => { close(); toast('Addendum added'); after(); }).catch(e => toast(e.message, true)); } }));
+}
+async function noteModal(n, after) {
+  const meds = (await catalogue()).filter(i => i.kind === 'product' && (i.dept_id === 7 || /tab|cap|inj|syrup|gel|cream|lotion|serum|drops|sachet/i.test(i.name))).map(i => i.name);
+  let rx = (n.rx || []).map(x => ({ ...x }));
+  const v = n.vitals || {};
+  const quick = [[7, '1 week'], [14, '2 weeks'], [30, '1 month'], [90, '3 months'], [180, '6 months']];
+  modal({ title: `${n.id ? 'Edit note' : 'Visit note'} · ${n.patient_name || ''}`, wide: true, body: `<form data-f class="stack" style="gap:12px">
+      ${field('Chief complaint', ta('complaint', n.complaint, 'maxlength="1000" rows="2"'))}
+      ${field('History', ta('history', n.history, 'maxlength="2000" rows="2" placeholder="Relevant medical / dental history, medicines"'), 'optional')}
+      <div class="grid3" style="grid-template-columns:repeat(5,minmax(0,1fr))">${field('BP', inp('bp', v.bp, 'maxlength="12" placeholder="120/80"'))}${field('Pulse', inp('pulse', v.pulse, 'maxlength="6"'))}${field('Weight (kg)', inp('weight', v.weight, 'maxlength="8"'))}${field('SpO₂ %', inp('spo2', v.spo2, 'maxlength="6"'))}${field('Temp', inp('temp', v.temp, 'maxlength="8"'))}</div>
+      ${field('Examination findings', ta('findings', n.findings, 'maxlength="3000" rows="3"'))}
+      ${field('Diagnosis', ta('diagnosis', n.diagnosis, 'maxlength="1000" rows="2"'))}
+      ${field('Treatment done today', ta('treatment', n.treatment, 'maxlength="3000" rows="3"'))}
+      <div><h4 style="margin:4px 0 8px">Prescription</h4><datalist id="medlist">${meds.map(m => `<option value="${esc(m)}">`).join('')}</datalist><div data-rx></div><button type="button" class="btn sm ghost" data-rxadd style="margin-top:6px">${icon('plus', 15)}Add medicine</button></div>
+      ${field('Advice', ta('advice', n.advice, 'maxlength="1500" rows="2" placeholder="Care instructions for the patient"'))}
+      <div class="grid2">${field('Review on', inp('review_date', n.review_date || '', 'type="date" data-rd'), 'creates a follow-up for the front desk')}${field('Review for', inp('review_note', n.review_note || '', 'maxlength="200" placeholder="e.g. Suture removal, PRP session 2"'))}</div>
+      <div class="chips">${quick.map(([d, l]) => `<button type="button" class="chip" data-q="${d}">+${l}</button>`).join('')}</div></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>${icon('check', 18)}Save note</button>`,
+    onMount(el, close) {
+      const box = el.querySelector('[data-rx]');
+      const draw = () => {
+        box.innerHTML = rx.map((x, i) => `<div style="display:grid;grid-template-columns:2fr 1fr 1fr 1fr 1.4fr auto;gap:6px;margin-bottom:6px">
+          <input class="in" list="medlist" data-k="name" data-i="${i}" value="${esc(x.name || '')}" placeholder="Medicine" style="height:36px"><input class="in" data-k="dose" data-i="${i}" value="${esc(x.dose || '')}" placeholder="Dose (1 tab)" style="height:36px">
+          <input class="in" data-k="freq" data-i="${i}" value="${esc(x.freq || '')}" placeholder="1-0-1" style="height:36px"><input class="in" data-k="days" data-i="${i}" value="${esc(x.days || '')}" placeholder="5 days" style="height:36px">
+          <input class="in" data-k="note" data-i="${i}" value="${esc(x.note || '')}" placeholder="After food" style="height:36px"><button type="button" class="btn sm quiet icon" data-rm="${i}" aria-label="Remove">${icon('x', 16)}</button></div>`).join('') || '<p class="small muted">No medicines.</p>';
+        box.querySelectorAll('[data-k]').forEach(x => x.oninput = () => { rx[+x.dataset.i][x.dataset.k] = x.value; });
+        box.querySelectorAll('[data-rm]').forEach(x => x.onclick = () => { rx.splice(+x.dataset.rm, 1); draw(); });
+      };
+      draw();
+      el.querySelector('[data-rxadd]').onclick = () => { rx.push({ name: '', dose: '', freq: '', days: '', note: '' }); draw(); };
+      el.querySelectorAll('[data-q]').forEach(b => b.onclick = () => { el.querySelector('[data-rd]').value = addDays(today(), +b.dataset.q); });
+      const s = el.querySelector('[data-save]');
+      s.onclick = () => { const f = formData(el.querySelector('[data-f]'));
+        const bodyN = { ...f, vitals: { bp: f.bp, pulse: f.pulse, weight: f.weight, spo2: f.spo2, temp: f.temp }, rx: rx.filter(x => x.name && x.name.trim()), patient_id: n.patient_id, appointment_id: n.appointment_id, dept_id: n.dept_id };
+        busy(s, () => api(n.id ? '/clinic/notes/' + n.id : '/clinic/notes', { method: n.id ? 'PUT' : 'POST', body: bodyN }), true).then(() => { close(); toast('Note saved'); after && after(); }).catch(e => toast(e.message, true)); };
+    } });
+}
+
+/* Dental chart */
+function dentalTab(p, c, body, after) {
+  let kids = false, picked = new Set();
+  const Q = a => kids ? a.kid : a.adult;
+  const rows = [{ adult: [18, 17, 16, 15, 14, 13, 12, 11], kid: [55, 54, 53, 52, 51] }, { adult: [21, 22, 23, 24, 25, 26, 27, 28], kid: [61, 62, 63, 64, 65] }, { adult: [48, 47, 46, 45, 44, 43, 42, 41], kid: [85, 84, 83, 82, 81] }, { adult: [31, 32, 33, 34, 35, 36, 37, 38], kid: [71, 72, 73, 74, 75] }];
+  const of = t => c.chart.filter(x => x.tooth === String(t));
+  const tooth = t => { const es = of(t); const main = es.find(x => x.status !== 'done') || es[0]; const col = main ? COND[main.condition][1] : null;
+    return `<button type="button" data-t="${t}" title="${es.map(x => COND[x.condition][0] + ' (' + CSTAT[x.status] + ')').join(', ')}" style="width:44px;height:52px;border-radius:10px;border:2px ${main && main.status === 'planned' ? 'dashed' : 'solid'} ${col || 'var(--line)'};background:${picked.has(String(t)) ? 'var(--gold-soft, #f4e8c8)' : col ? col + '1f' : 'var(--paper, #fff)'};cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;font-weight:700;color:var(--ink)">${t}<span style="font-size:9px;font-weight:600;color:${col || 'var(--muted)'}">${main ? esc(COND[main.condition][0].slice(0, 7)) : ''}</span></button>`; };
+  const draw = () => {
+    body.innerHTML = `<section class="panel" style="margin-bottom:14px"><div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px;margin-bottom:12px"><div class="seg"><button data-k="0" class="${kids ? '' : 'on'}">Permanent</button><button data-k="1" class="${kids ? 'on' : ''}">Primary (milk) teeth</button></div>
+        <div style="display:flex;gap:8px"><span class="small muted" style="align-self:center">${picked.size ? picked.size + ' selected' : 'Tap teeth to select'}</span><button class="btn gold" data-addf ${picked.size ? '' : 'disabled'}>${icon('plus', 16)}Record finding</button></div></div>
+      <div style="overflow-x:auto"><div style="display:grid;grid-template-columns:auto auto;gap:10px 18px;justify-content:center;min-width:max-content">
+        <div style="display:flex;gap:4px;justify-content:flex-end;padding-bottom:10px;border-bottom:2px solid var(--line);border-right:2px solid var(--line);padding-right:10px">${Q(rows[0]).map(tooth).join('')}</div>
+        <div style="display:flex;gap:4px;padding-bottom:10px;border-bottom:2px solid var(--line)">${Q(rows[1]).map(tooth).join('')}</div>
+        <div style="display:flex;gap:4px;justify-content:flex-end;border-right:2px solid var(--line);padding-right:10px">${Q(rows[2]).map(tooth).join('')}</div>
+        <div style="display:flex;gap:4px">${Q(rows[3]).map(tooth).join('')}</div></div></div>
+      <p class="small muted" style="margin-top:10px;text-align:center">Patient's right ← → left · FDI numbering · dashed = planned</p>
+      <div class="chips" style="margin-top:8px;justify-content:center">${Object.entries(COND).filter(([k]) => c.chart.some(x => x.condition === k)).map(([k, [l, col]]) => `<span class="chip" style="border-color:${col};color:${col}">${esc(l)}</span>`).join('')}</div></section>
+    <section class="panel flush">${c.chart.length ? `<table class="t"><thead><tr><th>Tooth</th><th>Finding</th><th>Status</th><th>Note</th><th>By</th><th></th></tr></thead><tbody>${c.chart.slice().sort((a, b) => a.tooth.localeCompare(b.tooth)).map(x => `<tr><td><b>${esc(x.tooth)}</b>${x.surfaces ? ` <small class="muted">${esc(x.surfaces)}</small>` : ''}</td><td><span style="color:${COND[x.condition][1]};font-weight:600">${esc(COND[x.condition][0])}</span></td>
+      <td>${sel('s' + x.id, Object.entries(CSTAT), x.status, `data-st="${x.id}" style="width:auto;height:32px"`)}</td><td class="small">${esc(x.note || '')}</td><td class="small">${esc(x.recorded_by_name || '')} · ${esc(fDate(x.created_at.slice(0, 10)))}</td><td><button class="btn sm quiet icon" data-rm="${x.id}" aria-label="Remove">${icon('x', 15)}</button></td></tr>`).join('')}</tbody></table>` : emptyState('stethoscope', 'Nothing charted yet.')}</section>`;
+    body.querySelectorAll('[data-k]').forEach(b => b.onclick = () => { kids = b.dataset.k === '1'; picked.clear(); draw(); });
+    body.querySelectorAll('[data-t]').forEach(b => b.onclick = () => { const t = b.dataset.t; picked.has(t) ? picked.delete(t) : picked.add(t); draw(); });
+    body.querySelector('[data-addf]').onclick = () => modal({ title: `Teeth ${[...picked].join(', ')}`, body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('Finding', sel('condition', Object.entries(COND).map(([k, [l]]) => [k, l]), 'caries'))}${field('Status', sel('status', Object.entries(CSTAT), 'existing'))}</div>
+        <div><div class="small" style="font-weight:600;margin-bottom:6px">Surfaces (optional)</div><div class="chips">${[['M', 'Mesial'], ['O', 'Occlusal'], ['D', 'Distal'], ['B', 'Buccal'], ['L', 'Lingual/Palatal'], ['I', 'Incisal']].map(([k, l]) => `<label class="chip"><input type="checkbox" name="sf.${k}">${l}</label>`).join('')}</div></div>${field('Note', inp('note', '', 'maxlength="200"'))}</form>`,
+      actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-ok>Save</button>',
+      onMount(el, close) { const ok = el.querySelector('[data-ok]'); ok.onclick = () => { const f = el.querySelector('[data-f]'), v = formData(f); const surfaces = [...f.querySelectorAll('[name^="sf."]:checked')].map(x => x.name.slice(3));
+        busy(ok, () => api('/clinic/chart', { method: 'POST', body: { patient_id: p.id, teeth: [...picked], condition: v.condition, status: v.status, note: v.note, surfaces } }), true).then(() => { close(); toast('Charted'); after(); }).catch(e => toast(e.message, true)); }; } });
+    body.querySelectorAll('[data-st]').forEach(x => x.onchange = () => api('/clinic/chart/' + x.dataset.st, { method: 'PUT', body: { status: x.value } }).then(() => { toast('Updated'); after(); }).catch(e => toast(e.message, true)));
+    body.querySelectorAll('[data-rm]').forEach(x => x.onclick = () => confirm('Remove this entry from the chart?') && api('/clinic/chart/' + x.dataset.rm, { method: 'PUT', body: { remove: true } }).then(() => { toast('Removed'); after(); }).catch(e => toast(e.message, true)));
+  };
+  draw();
+}
+
+/* Treatment plans */
+function plansTab(p, c, body, after) {
+  body.innerHTML = `${isClin() ? `<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn gold" data-new>${icon('plus', 18)}New treatment plan</button></div>` : ''}
+    ${c.plans.length ? c.plans.map(pl => `<section class="panel flush" style="margin-bottom:14px" data-plan="${pl.id}"><div class="panel-h" style="padding:16px 20px 0"><div><h3>${esc(pl.title)} ${pill(pl.status, PLST[pl.status])}</h3><p class="small muted">${pl.dept_id ? deptTag(pl.dept_id) + ' · ' : ''}${esc(pl.created_by_name || '')} · ${esc(fDate(pl.created_at.slice(0, 10)))} · total ${money(pl.total)} · billed ${money(pl.billed_total)}</p>${pl.notes ? `<p class="small" style="margin-top:4px">${esc(pl.notes)}</p>` : ''}</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${['proposed', 'accepted'].includes(pl.status) && isClin() ? `<button class="btn sm ghost" data-edit="${pl.id}">${icon('pencil', 15)}Edit</button>` : ''}${pl.status === 'proposed' ? `<button class="btn sm gold" data-acc="${pl.id}">Patient accepted</button>` : ''}
+        ${pl.status === 'accepted' ? `<button class="btn sm gold" data-bill="${pl.id}">${icon('receipt', 15)}Bill selected</button><button class="btn sm quiet" data-done="${pl.id}">Mark complete</button>` : ''}${['proposed', 'accepted'].includes(pl.status) ? `<button class="btn sm quiet" data-cx="${pl.id}">Cancel</button>` : ''}</div></div>
+      <table class="t"><thead><tr>${pl.status === 'accepted' ? '<th></th>' : ''}<th>Stage</th><th>Treatment</th><th>Tooth / area</th><th class="n">Qty</th><th class="n">Amount</th><th>Status</th></tr></thead><tbody>${pl.items.map(x => `<tr>${pl.status === 'accepted' ? `<td>${x.billed ? '' : `<input type="checkbox" data-pick="${x.id}" checked>`}</td>` : ''}<td>${x.stage}</td><td><b>${esc(x.name)}</b>${x.note ? `<div class="small muted">${esc(x.note)}</div>` : ''}</td><td class="small">${esc(x.tooth || '')}</td><td class="n">${x.qty}</td>
+        <td class="n money">${money(x.qty * x.unit_price - x.discount)}${x.discount ? `<div class="small muted">after ${money(x.discount)} off</div>` : ''}</td><td class="small">${x.billed ? `<a href="#/invoice/${x.invoice_id}">${esc(x.invoice_no || 'draft bill')}</a>` : 'Not billed'}${isClin() ? ` · <label style="white-space:nowrap"><input type="checkbox" data-dn="${x.id}" ${x.done ? 'checked' : ''}> done</label>` : x.done ? ' · done' : ''}</td></tr>`).join('')}</tbody></table></section>`).join('')
+    : `<section class="panel">${emptyState('list-checks', 'No treatment plans yet.')}</section>`}`;
+  const nw = body.querySelector('[data-new]'); if (nw) nw.onclick = () => planModal(p, null, after);
+  body.querySelectorAll('[data-edit]').forEach(b => b.onclick = () => planModal(p, c.plans.find(x => x.id === +b.dataset.edit), after));
+  const st2 = (id, status, reason) => api(`/clinic/plans/${id}/status`, { method: 'POST', body: { status, reason } }).then(() => { toast('Updated'); after(); }).catch(e => toast(e.message, true));
+  body.querySelectorAll('[data-acc]').forEach(b => b.onclick = () => st2(b.dataset.acc, 'accepted'));
+  body.querySelectorAll('[data-done]').forEach(b => b.onclick = () => confirm('Mark this plan as complete?') && st2(b.dataset.done, 'completed'));
+  body.querySelectorAll('[data-cx]').forEach(b => b.onclick = () => { const r = prompt('Why is this plan being cancelled?'); if (r) st2(b.dataset.cx, 'cancelled', r); });
+  body.querySelectorAll('[data-dn]').forEach(x => x.onchange = () => api(`/clinic/plan-items/${x.dataset.dn}/done`, { method: 'POST', body: { done: x.checked } }).then(() => toast('Updated')).catch(e => toast(e.message, true)));
+  body.querySelectorAll('[data-bill]').forEach(b => b.onclick = () => {
+    const sec = body.querySelector(`[data-plan="${b.dataset.bill}"]`);
+    const item_ids = [...sec.querySelectorAll('[data-pick]:checked')].map(x => +x.dataset.pick);
+    if (!item_ids.length) return toast('Tick the treatments to bill.', true);
+    const send = authoriser => api(`/clinic/plans/${b.dataset.bill}/bill`, { method: 'POST', body: { item_ids, authoriser } });
+    busy(b, () => send().catch(e => {
+      if (!(e.data && e.data.code === 'authorise')) throw e;
+      return new Promise((resolve, reject) => modal({ title: 'Discount authorisation', body: `<p>${esc(e.message)}</p><form data-f class="stack" style="gap:12px">${field('Approver username', inp('username', '', 'autocapitalize="none"'))}${field('Their password', inp('password', '', 'type="password"'))}</form>`,
+        actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-ok>Authorise</button>',
+        onMount(el, close) { el.querySelector('[data-close]').addEventListener('click', () => reject(new Error('Not authorised.'))); const ok = el.querySelector('[data-ok]'); ok.onclick = () => busy(ok, () => send(formData(el.querySelector('[data-f]'))), true).then(r => { close(); resolve(r); }).catch(er => toast(er.message, true)); } }));
+    })).then(r => { toast('Draft bill created'); go('#/invoice/' + r.invoice_id); }).catch(() => {});
+  });
+}
+async function planModal(p, pl, after) {
+  await catalogue();
+  let items = pl ? pl.items.map(x => ({ ...x })) : [];
+  modal({ title: pl ? 'Edit treatment plan' : 'New treatment plan', wide: true, body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('Title', inp('title', pl ? pl.title : '', 'maxlength="120" placeholder="e.g. Upper arch rehabilitation"'))}${field('Department', sel('dept_id', [['', '—'], ...B.departments.map(d => [d.id, d.name])], pl ? pl.dept_id : ''))}</div>${field('Notes for the patient', inp('notes', pl ? pl.notes || '' : '', 'maxlength="500"'))}</form>
+      <div style="margin-top:12px;overflow-x:auto"><table class="t"><thead><tr><th>Stage</th><th>Treatment</th><th>Tooth / area</th><th class="n">Qty</th><th class="n">Price</th><th class="n">Discount ₹</th><th></th></tr></thead><tbody data-l></tbody></table></div><div data-add style="margin-top:10px"></div><p class="small muted" data-tot style="margin-top:8px;text-align:right"></p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>Save plan</button>`,
+    onMount(el, close) {
+      const tb = el.querySelector('[data-l]');
+      const draw = () => {
+        tb.innerHTML = items.map((x, i) => { const lock = x.billed || x.done; return `<tr${lock ? ' style="opacity:.6"' : ''}><td><input class="in" data-k="stage" data-i="${i}" value="${x.stage || 1}" type="number" min="1" max="9" style="width:56px;height:34px" ${lock ? 'disabled' : ''}></td><td><b>${esc(x.name)}</b>${lock ? '<div class="small muted">billed / done — kept as is</div>' : ''}</td>
+          <td><input class="in" data-k="tooth" data-i="${i}" value="${esc(x.tooth || '')}" placeholder="e.g. 16, 26" style="width:110px;height:34px" ${lock ? 'disabled' : ''}></td><td class="n"><input class="in" data-k="qty" data-i="${i}" value="${x.qty || 1}" type="number" min="1" style="width:60px;height:34px;text-align:right" ${lock ? 'disabled' : ''}></td>
+          <td class="n"><input class="in" data-k="unit_price" data-i="${i}" value="${x.unit_price}" type="number" min="0" style="width:96px;height:34px;text-align:right" ${lock ? 'disabled' : ''}></td><td class="n"><input class="in" data-k="discount" data-i="${i}" value="${x.discount || 0}" type="number" min="0" style="width:90px;height:34px;text-align:right" ${lock ? 'disabled' : ''}></td>
+          <td>${lock ? '' : `<button type="button" class="btn sm quiet icon" data-rm="${i}" aria-label="Remove">${icon('x', 15)}</button>`}</td></tr>`; }).join('') || '<tr><td colspan="7" class="muted">Add treatments below.</td></tr>';
+        el.querySelector('[data-tot]').textContent = 'Plan total (before GST): ' + money(items.reduce((s, x) => s + (Number(x.qty) || 1) * (Number(x.unit_price) || 0) - (Number(x.discount) || 0), 0));
+        tb.querySelectorAll('[data-k]').forEach(x => x.onchange = () => { items[+x.dataset.i][x.dataset.k] = x.dataset.k === 'tooth' ? x.value : Number(x.value) || 0; draw(); });
+        tb.querySelectorAll('[data-rm]').forEach(x => x.onclick = () => { items.splice(+x.dataset.rm, 1); draw(); });
+      };
+      draw();
+      itemPicker(el.querySelector('[data-add]'), it => { items.push({ item_id: it.id, name: it.name, qty: 1, unit_price: it.price, discount: 0, stage: items.length ? items[items.length - 1].stage || 1 : 1, tooth: '' }); draw(); }, { placeholder: 'Add a treatment — type a name or code' });
+      const s = el.querySelector('[data-save]');
+      s.onclick = () => busy(s, () => api(pl ? '/clinic/plans/' + pl.id : '/clinic/plans', { method: pl ? 'PUT' : 'POST', body: { ...formData(el.querySelector('[data-f]')), patient_id: p.id, items } }), true).then(() => { close(); toast('Plan saved'); after(); }).catch(e => toast(e.message, true));
+    } });
+}
+
+/* Photos */
+function photosTab(p, c, body, after) {
+  const src = id => `${BASE}/api/clinic/photos/${id}`;
+  body.innerHTML = `<section class="panel" style="margin-bottom:14px"><form data-f class="stack" style="gap:10px"><div class="grid3">${field('Photo', '<input class="in" type="file" name="file" accept="image/*" capture="environment" style="padding:8px">')}${field('Type', sel('tag', Object.entries(PHT), 'before'))}${field('Taken on', inp('taken_on', today(), 'type="date"'))}</div>
+      <div class="grid2">${field('Area', inp('area', '', 'maxlength="60" placeholder="e.g. Face, Scalp crown, Upper arch"'))}${field('Caption', inp('caption', '', 'maxlength="200"'))}</div></form>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:10px;gap:8px;flex-wrap:wrap"><span class="small muted">Photos are private to clinicians and are not shown to patients or front-desk staff. Ask for the patient's consent before taking them.</span><button class="btn gold" data-up>${icon('upload', 18)}Upload</button></div></section>
+    ${c.photos.length ? `<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px">${c.photos.map(x => `<figure class="panel" style="padding:8px;margin:0"><img src="${src(x.id)}" alt="" loading="lazy" data-big="${x.id}" style="width:100%;aspect-ratio:1;object-fit:cover;border-radius:8px;cursor:zoom-in"><figcaption class="small" style="margin-top:6px"><b>${esc(PHT[x.tag] || x.tag)}</b>${x.area ? ' · ' + esc(x.area) : ''}<div class="muted">${esc(fDate(x.taken_on || x.created_at.slice(0, 10)))} · ${esc(x.uploaded_by_name || '')}</div>${x.caption ? `<div>${esc(x.caption)}</div>` : ''}<button class="btn sm quiet" data-del="${x.id}" style="margin-top:4px">Delete</button></figcaption></figure>`).join('')}</div>`
+    : `<section class="panel">${emptyState('eye', 'No photos yet.')}</section>`}`;
+  body.querySelector('[data-up]').onclick = e => {
+    const f = body.querySelector('[data-f]'), file = f.file.files[0], v = formData(f);
+    if (!file) return toast('Choose a photo first.', true);
+    busy(e.currentTarget, async () => {
+      const blob = await shrink(file);
+      const qs = new URLSearchParams({ patient_id: p.id, tag: v.tag, taken_on: v.taken_on, area: v.area, caption: v.caption });
+      const res = await fetch(`${BASE}/api/clinic/photos?${qs}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': blob.type }, body: blob });
+      const d = await res.json(); if (!d.ok) throw new Error(d.error || 'Upload failed.'); return d;
+    }).then(() => { toast('Photo added'); after(); }).catch(er => toast(er.message, true));
+  };
+  body.querySelectorAll('[data-big]').forEach(im => im.onclick = () => modal({ title: 'Photo', wide: true, body: `<img src="${src(im.dataset.big)}" alt="" style="width:100%;border-radius:10px">`, actions: '<button class="btn ghost" data-close>Close</button>' }));
+  body.querySelectorAll('[data-del]').forEach(b => b.onclick = () => confirm('Delete this photo permanently?') && api('/clinic/photos/' + b.dataset.del, { method: 'DELETE' }).then(() => { toast('Deleted'); after(); }).catch(er => toast(er.message, true)));
+}
+// Resize to at most 1600 px on the long side and re-encode as JPEG, so uploads stay small.
+function shrink(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file), img = new Image();
+    img.onload = () => { const k = Math.min(1, 1600 / Math.max(img.width, img.height)); const cv = document.createElement('canvas'); cv.width = Math.round(img.width * k); cv.height = Math.round(img.height * k); cv.getContext('2d').drawImage(img, 0, 0, cv.width, cv.height); URL.revokeObjectURL(url); cv.toBlob(b => b ? resolve(b) : reject(new Error('Could not read the photo.')), 'image/jpeg', 0.85); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('That file is not a photo this browser can read.')); };
+    img.src = url;
+  });
+}
+
+/* Follow-ups (recalls) */
+function followupsTab(p, c, body, after) {
+  const RST = { open: 'To call', booked: 'Booked', done: 'Done', dismissed: 'Dismissed' };
+  body.innerHTML = `<section class="panel" style="margin-bottom:14px"><form data-f class="stack" style="gap:10px"><div class="grid3">${field('Call back on', inp('due_date', addDays(today(), 30), 'type="date"'))}${field('For', inp('reason', '', 'maxlength="200" placeholder="e.g. 6-month cleaning, PRP session 3"'))}${field('Department', sel('dept_id', [['', '—'], ...B.departments.map(d => [d.id, d.name])], ''))}</div></form><button class="btn gold" data-add style="margin-top:10px">${icon('plus', 18)}Add follow-up</button></section>
+    <section class="panel flush">${c.recalls.length ? `<table class="t"><thead><tr><th>Due</th><th>For</th><th>Status</th><th>Outcome</th><th>Added by</th></tr></thead><tbody>${c.recalls.map(r => `<tr><td${r.status === 'open' && r.due_date <= today() ? ' style="color:var(--alert);font-weight:700"' : ''}>${esc(fDate(r.due_date))}</td><td>${esc(r.reason)}${r.dept_id ? ' ' + deptTag(r.dept_id) : ''}</td><td>${pill(r.status, RST[r.status])}</td><td class="small">${esc(r.outcome || '')}</td><td class="small">${esc(r.created_by_name || '')}</td></tr>`).join('')}</tbody></table>` : emptyState('bell', 'No follow-ups.')}</section>`;
+  const b = body.querySelector('[data-add]');
+  b.onclick = () => busy(b, () => api('/clinic/recalls', { method: 'POST', body: { ...formData(body.querySelector('[data-f]')), patient_id: p.id } })).then(() => { toast('Follow-up added'); after(); }).catch(() => {});
+}
+function recallRows(root, list, after, compact) {
+  root.innerHTML = list.map(r => `<div class="row" style="flex-wrap:wrap"><div class="grow" style="min-width:220px"><b><a href="#/patient/${r.patient_id}?tab=followups">${esc(r.patient_name)}</a> <small class="muted">${esc(r.patient_no)}</small></b><span>${esc(r.reason)}${r.dept_name ? ' · ' + esc(r.dept_name) : ''} · due <b${r.due_date < today() ? ' style="color:var(--alert)"' : ''}>${esc(fDate(r.due_date))}</b>${r.next_appt ? ` · next visit ${esc(fDate(r.next_appt.slice(0, 10)))}` : ''}${r.outcome ? ` · ${esc(r.outcome)}` : ''}</span></div>
+    <a class="btn sm ghost icon" href="tel:+91${esc(r.patient_phone)}" aria-label="Call">${icon('phone', 16)}</a><a class="btn sm ghost icon" href="${wa(r.patient_phone, `Hello ${first(r.patient_name)}, this is Hasta Wellness. It's time for your ${r.reason.toLowerCase()}. Shall we book a convenient time?`)}" target="_blank" rel="noopener" aria-label="WhatsApp">${icon('message-circle', 16)}</a>
+    <button class="btn sm gold" data-rbook="${r.id}">${icon('calendar-plus', 15)}Book</button><button class="btn sm quiet" data-rlater="${r.id}">Later</button><button class="btn sm quiet" data-rdone="${r.id}">Close</button></div>`).join('');
+  const find = id => list.find(r => r.id === +id);
+  const upd = (id, body2) => api('/clinic/recalls/' + id, { method: 'PUT', body: body2 }).then(() => { toast('Updated'); after(); }).catch(e => toast(e.message, true));
+  root.querySelectorAll('[data-rbook]').forEach(b => b.onclick = async () => { const r = find(b.dataset.rbook); const pt = (await api('/clinic/patients/' + r.patient_id)).patient; apptModal({ dept_id: r.dept_id, reason: r.reason }, () => upd(r.id, { status: 'booked', outcome: 'Booked' }), pt); });
+  root.querySelectorAll('[data-rlater]').forEach(b => b.onclick = () => { const r = find(b.dataset.rlater); const note = prompt('What happened? (e.g. No answer, will call next week)'); if (note === null) return; upd(r.id, { due_date: addDays(today(), 7), outcome: note || 'Try again' }); });
+  root.querySelectorAll('[data-rdone]').forEach(b => b.onclick = () => { const r = find(b.dataset.rdone); const note = prompt('Close this follow-up — outcome? (e.g. Not interested, already visited)'); if (note === null) return; upd(r.id, { status: 'dismissed', outcome: note || 'Closed' }); });
 }
