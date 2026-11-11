@@ -8,7 +8,7 @@
 //  - Pass-through items (outsourced imaging) are collected for a partner: no GST, not clinic revenue.
 //  - Packages are priced from their contents' list value minus a package discount; GST on a package
 //    is split across its contents in proportion to their list value.
-//  - Discounts above the limit need a doctor or admin to authorise with their password; recorded.
+//  - Discounts above the limit need an approver (Settings: discount_approvers; default any doctor/admin) to authorise with their password; recorded.
 //  - Every completed visit must end billed, covered by a package, or marked no-charge with a reason.
 //  - Payments carry a mode and a reference (UPI/card/bank/finance). A payment is applied to one invoice;
 //    any excess stays as the patient's advance, which can later be applied to another invoice.
@@ -43,7 +43,7 @@ export const MODES = { cash: 'Cash', upi: 'UPI', card: 'Card (POS)', bank: 'Bank
 export const APPT_STATUS = ['booked', 'arrived', 'in_treatment', 'completed', 'no_show', 'cancelled'];
 const HOURS = { 0: ['10:00', '14:00'], 1: ['10:00', '20:00'], 2: ['10:00', '20:00'], 3: ['10:00', '20:00'], 4: ['10:00', '20:00'], 5: ['10:00', '20:00'], 6: ['10:00', '20:00'] };
 const DEFAULT_DEPTS = [['Dental', '#2f6f8f'], ['Skin & Aesthetics', '#b0607a'], ['Hair', '#8a6a2f'], ['Wellness', '#34595e'], ['Body Contouring', '#6b4a8f'], ['General / Clinic', '#5e6d6c']];
-const SETTING_KEYS = { legal_name: 'HASWEL CARE Private Limited', trade_name: 'Hasta Wellness', gstin: '', address: '1st floor, Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram, Kerala 695582', state: 'Kerala (32)', phone: '+91 97784 58883', email: 'hello@hastawellnessclinic.com', invoice_prefix: 'HW', discount_limit_pct: '10', invoice_footer: 'Thank you for choosing Hasta Wellness.' };
+const SETTING_KEYS = { legal_name: 'HASWEL CARE Private Limited', trade_name: 'Hasta Wellness', gstin: '', address: '1st floor, Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram, Kerala 695582', state: 'Kerala (32)', phone: '+91 97784 58883', email: 'hello@hastawellnessclinic.com', invoice_prefix: 'HW', discount_limit_pct: '10', discount_approvers: '', invoice_footer: 'Thank you for choosing Hasta Wellness.' };
 
 async function audit(env, me, action, entity, id, detail) {
   await env.DB.prepare('INSERT INTO cl_audit (staff_id, staff_name, action, entity, entity_id, detail) VALUES (?,?,?,?,?,?)').bind(me.id, me.name, action, entity, id || null, detail ? String(detail).slice(0, 500) : null).run();
@@ -61,7 +61,10 @@ async function clinicUser(env, me) {
   return { kind: 'staff', id: s.id, name: s.name, role: s.role, username: s.username, reg_no: s.reg_no, skills: parse(s.skills, []), admin: s.role === 'admin', depts: (results || []).map(r => r.dept_id) };
 }
 const canManage = u => u.admin || u.role === 'manager';
-const canAuthorise = u => u.admin || u.skills.includes('doctor');
+// Who may approve discounts above the limit: the staff named in Settings (discount_approvers),
+// or — if nobody is named — any doctor or admin.
+const approverIds = s => String(s.discount_approvers || '').split(',').map(Number).filter(Boolean);
+const canAuthorise = (u, s) => { const ids = approverIds(s); return ids.length ? ids.includes(u.id) : (u.admin || u.skills.includes('doctor')); };
 
 /* ---------------- entry ---------------- */
 export async function handleClinic(request, env, url, ctx, base, serveAsset) {
@@ -196,6 +199,7 @@ export async function settings(env) {
 async function saveSettings(env, me, b) {
   if (b.gstin && !/^\d{2}[A-Z]{5}\d{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(String(b.gstin).toUpperCase().trim())) return R(400, 'That GSTIN does not look right (15 characters, e.g. 32ABCDE1234F1Z5).');
   if (b.invoice_prefix && !/^[A-Z0-9-]{1,8}$/i.test(b.invoice_prefix)) return R(400, 'Invoice prefix: up to 8 letters, numbers or hyphens.');
+  if (b.discount_approvers !== undefined) b.discount_approvers = String(b.discount_approvers).split(',').map(Number).filter(Boolean).join(',');
   const lim = Number(b.discount_limit_pct);
   if (b.discount_limit_pct !== undefined && !(lim >= 0 && lim <= 100)) return R(400, 'Discount limit must be 0–100%.');
   for (const k of Object.keys(SETTING_KEYS)) if (b[k] !== undefined) {
@@ -655,7 +659,8 @@ async function saveInvoice(env, me, id, b) {
   const s = await settings(env), limit = Number(s.discount_limit_pct) || 0;
   const { results: prevLines } = await env.DB.prepare('SELECT * FROM cl_invoice_lines WHERE invoice_id=?').bind(id).all();
   // Authoriser, if any line goes over the discount limit and the user can't authorise.
-  let authoriser = canAuthorise(me) ? { id: me.id, name: me.name } : null;
+  const sets = await settings(env);
+  let authoriser = canAuthorise(me, sets) ? { id: me.id, name: me.name } : null;
   let authChecked = false;
   const rows = [];
   for (const l of src) {
@@ -679,9 +684,9 @@ async function saveInvoice(env, me, id, b) {
             authChecked = true;
             const a = b.authoriser || {};
             const u = a.username ? await env.DB.prepare('SELECT id, name, role, skills, pass_hash, apps FROM ems_staff WHERE username=? AND active=1').bind(clean(a.username, 40).toLowerCase()).first() : null;
-            if (u && (u.role === 'admin' || parse(u.skills, []).includes('doctor')) && await verifySecret(String(a.password || ''), u.pass_hash)) authoriser = { id: u.id, name: u.name };
+            if (u && canAuthorise({ id: u.id, admin: u.role === 'admin', skills: parse(u.skills, []) }, sets) && await verifySecret(String(a.password || ''), u.pass_hash)) authoriser = { id: u.id, name: u.name };
           }
-          if (!authoriser) return R(403, `The discount on ${row.name} is over ${limit}%. A doctor or admin must authorise it.`, { code: 'authorise' });
+          if (!authoriser) return R(403, `The discount on ${row.name} is over ${limit}%. ${approverIds(sets).length ? 'An approved person' : 'A doctor or admin'} must authorise it.`, { code: 'authorise' });
           row.discount_by = authoriser.id; row.discount_by_name = authoriser.name;
         }
       }

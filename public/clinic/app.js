@@ -19,6 +19,8 @@ const clinicians = deptId => B.team.filter(t => t.active && (t.apps.includes('cl
 const assistants = () => B.team.filter(t => t.active && t.skills.some(s => s === 'nurse' || s === 'dental_assistant'));
 const isAdmin = () => ME.admin;
 const canManage = () => ME.admin || ME.role === 'manager';
+const approvers = () => String(B.settings.discount_approvers || '').split(',').map(Number).filter(Boolean);
+const approverText = () => approvers().length ? B.team.filter(t => approvers().includes(t.id)).map(t => t.name).join(' or ') : 'a doctor or admin';
 const TIMES = (() => { const o = []; for (let h = 8; h < 22; h++) for (const m of [0, 15, 30, 45]) o.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`); return o; })();
 
 /* ---------------- start & login ---------------- */
@@ -437,7 +439,7 @@ async function viewInvoice(id) {
     <section class="panel flush"><table class="t inv-lines"><thead><tr><th>Item</th><th>Clinician</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Discount (₹)</th><th class="n">GST</th><th class="n">Amount</th>${draft ? '<th></th>' : ''}</tr></thead><tbody data-lines></tbody></table>
       ${draft ? `<div style="padding:14px 16px;border-top:1px solid var(--line-soft);display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:10px"><div data-add></div>${sel('addpkg', [['', '+ Add a package'], ...B.packages.filter(x => x.active).map(x => [x.id, `${x.name} — ${money(x.price)}`])])}</div>` : ''}
       <div style="padding:16px 20px;border-top:1px solid var(--line-soft);display:grid;grid-template-columns:minmax(0,1fr) auto;gap:20px;align-items:end">
-        <div>${draft ? field('Note on invoice', inp('notes', inv.notes || '', 'maxlength="300" data-notes')) : inv.notes ? `<p class="small muted">${esc(inv.notes)}</p>` : ''}${draft ? `<p class="small muted" style="margin-top:8px">Discounts above ${limit}% need a doctor or admin to authorise. Prices exclude GST.</p>` : ''}</div>
+        <div>${draft ? field('Note on invoice', inp('notes', inv.notes || '', 'maxlength="300" data-notes')) : inv.notes ? `<p class="small muted">${esc(inv.notes)}</p>` : ''}${draft ? `<p class="small muted" style="margin-top:8px">Discounts above ${limit}% need ${esc(approverText())} to authorise. Prices exclude GST.</p>` : ''}</div>
         <div class="inv-tot" data-tot></div></div></section>
     ${!draft ? `<section class="panel" style="margin-top:16px"><div class="panel-h"><div class="t">${icon('wallet', 20)}<h3>Payments on this invoice</h3></div></div>${d.payments.length ? `<table class="t"><tbody>${d.payments.map(x => `<tr><td>${esc(fDate(x.paid_on))}</td><td>${esc(B.modes[x.mode])}${x.lender ? ' · ' + esc(x.lender) : ''}</td><td class="small">${esc(x.reference || '')}</td><td class="n money">${money(x.amount)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">No payments yet.</p>'}</section>` : ''}`;
   const tbody = MAIN.querySelector('[data-lines]'), totEl = MAIN.querySelector('[data-tot]');
@@ -460,7 +462,7 @@ async function viewInvoice(id) {
       const it = l.item_id ? CAT.find(x => x.id === l.item_id) : null, pk = l.package_def_id ? B.packages.find(x => x.id === l.package_def_id) : null, c = lineCalc(l);
       const variable = it && !(it.price > 0);
       return `<tr data-i="${i}"><td><b>${esc(pk ? pk.name : it ? it.name : l.name)}</b><div class="small muted">${pk ? 'Package' : esc(it?.dept_name || '')}${it?.kind === 'passthrough' ? ' · partner charge' : ''}</div>
-          ${c.disc > 0 ? `<input class="in" data-k="discount_reason" value="${esc(l.discount_reason)}" placeholder="Reason for discount" maxlength="120" style="margin-top:6px;height:32px">${c.pct > limit + 1e-9 ? `<div class="small" style="color:var(--gold-ink);margin-top:4px">${c.pct.toFixed(0)}% — ${l._saved && l._saved.discount_by_name && l._saved.discount >= c.disc ? 'authorised by ' + esc(l._saved.discount_by_name) : 'needs a doctor or admin to authorise'}</div>` : ''}` : ''}</td>
+          ${c.disc > 0 ? `<input class="in" data-k="discount_reason" value="${esc(l.discount_reason)}" placeholder="Reason for discount" maxlength="120" style="margin-top:6px;height:32px">${c.pct > limit + 1e-9 ? `<div class="small" style="color:var(--gold-ink);margin-top:4px">${c.pct.toFixed(0)}% — ${l._saved && l._saved.discount_by_name && l._saved.discount >= c.disc ? 'authorised by ' + esc(l._saved.discount_by_name) : 'needs ' + esc(approverText()) + ' to authorise'}</div>` : ''}` : ''}</td>
         <td>${pk ? '' : `<select class="in" data-k="doctor_id" style="min-width:130px"><option value="">—</option>${docs.map(t => `<option value="${t.id}"${t.id === l.doctor_id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select>`}</td>
         <td class="n"><input class="in qty" type="number" min="1" max="999" data-k="qty" value="${l.qty}"></td>
         <td class="n">${variable ? `<input class="in amt" type="number" min="0" step="0.01" data-k="unit_price" value="${l.unit_price || ''}" placeholder="price">` : `<span class="money">${money(c.unit)}</span>`}</td>
@@ -483,7 +485,7 @@ async function viewInvoice(id) {
     const save = (authoriser) => api('/clinic/invoices/' + id, { method: 'PUT', body: { lines, notes: MAIN.querySelector('[data-notes]').value, authoriser } });
     const withAuth = fn => fn().catch(e => {
       if (!(e.data && e.data.code === 'authorise')) throw e;
-      return new Promise((resolve, reject) => modal({ title: 'Discount authorisation', body: `<p>${esc(e.message)}</p><form data-f class="stack" style="gap:12px">${field('Doctor or admin username', inp('username', '', 'autocapitalize="none"'))}${field('Their password', inp('password', '', 'type="password"'))}</form><p class="small muted">Their name is recorded on the invoice line.</p>`,
+      return new Promise((resolve, reject) => modal({ title: 'Discount authorisation', body: `<p>${esc(e.message)}</p><form data-f class="stack" style="gap:12px">${field('Approver username', inp('username', '', 'autocapitalize="none"'))}${field('Their password', inp('password', '', 'type="password"'))}</form><p class="small muted">Their name is recorded on the invoice line.</p>`,
         actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-ok>Authorise</button>`,
         onMount(el, close) { el.querySelector('[data-close]').addEventListener('click', () => reject(new Error('Not authorised.'))); const ok = el.querySelector('[data-ok]'); ok.onclick = () => busy(ok, () => save(formData(el.querySelector('[data-f]'))), true).then(r => { close(); resolve(r); }).catch(err => toast(err.message, true)); } }));
     });
@@ -628,9 +630,10 @@ async function viewSettings(tab) {
       <div class="grid2">${field('Legal name', inp('legal_name', v.legal_name))}${field('Trading name', inp('trade_name', v.trade_name))}</div>
       <div class="grid3">${field('GSTIN', inp('gstin', v.gstin, 'maxlength="15" placeholder="32XXXXX0000X1Z5" style="text-transform:uppercase"'))}${field('State', inp('state', v.state))}${field('Invoice prefix', inp('invoice_prefix', v.invoice_prefix, 'maxlength="8"'), `e.g. ${esc(v.invoice_prefix || 'HW')}/25-26/0001`)}</div>
       ${field('Address on invoices', inp('address', v.address, 'maxlength="300"'))}
-      <div class="grid3">${field('Phone', inp('phone', v.phone))}${field('Email', inp('email', v.email))}${field('Discount without authorisation (%)', inp('discount_limit_pct', v.discount_limit_pct, 'type="number" min="0" max="100"'), 'higher needs a doctor or admin')}</div>
+      <div class="grid3">${field('Phone', inp('phone', v.phone))}${field('Email', inp('email', v.email))}${field('Discount without authorisation (%)', inp('discount_limit_pct', v.discount_limit_pct, 'type="number" min="0" max="100"'), 'higher needs an approver')}</div>
+      <div><h4 style="margin-bottom:4px">Who can approve discounts above the limit</h4><p class="small muted" style="margin-bottom:8px">If nobody is ticked, any doctor or admin can approve.</p><div class="chips">${B.team.filter(t => t.active && t.apps.includes('clinic')).map(t => `<label class="chip"><input type="checkbox" data-appr="${t.id}" ${approvers().includes(t.id) ? 'checked' : ''}>${esc(t.name)}</label>`).join('')}</div></div>
       ${field('Invoice footer', inp('invoice_footer', v.invoice_footer, 'maxlength="300"'))}</form><button class="btn" data-save style="margin-top:14px">Save</button></section>`;
-    const s = body.querySelector('[data-save]'); s.onclick = () => busy(s, () => api('/clinic/settings', { method: 'PUT', body: formData(body.querySelector('[data-f]')) })).then(() => { toast('Saved'); reload(); }).catch(() => {});
+    const s = body.querySelector('[data-save]'); s.onclick = () => busy(s, () => api('/clinic/settings', { method: 'PUT', body: { ...formData(body.querySelector('[data-f]')), discount_approvers: [...body.querySelectorAll('[data-appr]:checked')].map(x => x.dataset.appr).join(',') } })).then(() => { toast('Saved'); reload(); }).catch(() => {});
   } else if (tab === 'catalogue') await settingsCatalogue(body, reload);
   else if (tab === 'packages') await settingsPackages(body, reload);
   else if (tab === 'places') settingsPlaces(body, reload);
