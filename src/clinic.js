@@ -104,10 +104,10 @@ function shell(base) {
 <title>Hasta Clinic</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=2">
-<link rel="modulepreload" href="/clinic/app.js?v=7"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=3">
+<link rel="modulepreload" href="/clinic/app.js?v=8"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=7"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=8"></script></body></html>`;
 }
 
 /* ---------------- router ---------------- */
@@ -140,6 +140,7 @@ async function route(request, env, url, p) {
 
   if (p === '/boot' && m === 'GET') return api({ ok: true, me, ...(await boot(env)) });
   if (p === '/dashboard' && m === 'GET') return api({ ok: true, ...(await dashboard(env, me)) });
+  if (p === '/alerts' && m === 'GET') return api({ ok: true, ...(await visitAlerts(env)) });
 
   // Settings & reference data
   if (p === '/settings' && m === 'PUT') { if (!me.admin) return api({ ok: false, error: 'Admins only.' }, 403); return done(await saveSettings(env, me, b)); }
@@ -956,6 +957,25 @@ async function dashboard(env, me) {
   const recalls = res[10 + stockQ.length].results || [];
   return { today: d, appointments: appts.map(a => ({ ...a, planned_items: parse(a.planned_items, []) })), unclosed: open, collections: pays, cash,
     outstanding: { count: out[0].n, amount: r2(out[0].s) }, new_leads: lds[0].n, billed_today: r2(billed[0].s), stock, recalls };
+}
+// Front-desk reminders, checked every minute by the app and shown as a flashing bar until dealt with:
+//  checkin  — booked, 15 min past the start time, not marked arrived (or no-show) — includes the last 14 days
+//  overrun  — arrived / in treatment, 15 min past the planned end, not marked completed
+//  unbilled — completed but not billed, taken from a package or marked no charge (or the bill is still a draft)
+//  unpaid   — billed today but payment not (fully) collected
+const GRACE_MIN = 15;
+async function visitAlerts(env) {
+  const now = nowLocal(), d = today(), from = addDays(d, -14) + 'T00:00';
+  const late = new Date(Date.parse(now + ':00Z') - GRACE_MIN * 60000).toISOString().slice(0, 16);
+  const [a, b, c, u] = await env.DB.batch([
+    env.DB.prepare(APPT_SELECT + " WHERE a.status='booked' AND a.start_at >= ? AND a.start_at <= ? ORDER BY a.start_at").bind(from, late),
+    env.DB.prepare(APPT_SELECT + " WHERE a.status IN ('arrived','in_treatment') AND a.start_at >= ? AND strftime('%Y-%m-%dT%H:%M', a.start_at, '+' || (a.minutes + ?) || ' minutes') <= ? ORDER BY a.start_at").bind(from, GRACE_MIN, now),
+    env.DB.prepare(APPT_SELECT + " WHERE a.status='completed' AND (a.closure IS NULL OR (a.closure='billed' AND i.status='draft')) ORDER BY a.start_at DESC LIMIT 100"),
+    env.DB.prepare(`SELECT * FROM (${INV_SELECT} WHERE i.status='final' AND i.legacy=0 AND i.invoice_date=?) WHERE total - paid > 0.004 ORDER BY id`).bind(d),
+  ]);
+  const tag = (rows, kind) => (rows.results || []).map(x => ({ ...x, kind }));
+  const unpaid = (u.results || []).map(withBalance);
+  return { now, checkin: tag(a, 'checkin'), overrun: tag(b, 'overrun'), unbilled: tag(c, 'unbilled'), unpaid, unpaid_total: r2(unpaid.reduce((s2, x) => s2 + x.balance, 0)) };
 }
 async function dayBook(env, d) {
   const [invs, pays] = await Promise.all([

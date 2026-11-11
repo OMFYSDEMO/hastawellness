@@ -48,3 +48,15 @@
 .tabs a{display:flex;align-items:center;gap:8px;padding:10px 14px;font-weight:600;font-size:14px;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px;white-space:nowrap}
 .tabs a.on{color:var(--teal-ink);border-bottom-color:var(--gold)}
 .pill.approved,.pill.received{background:#e3efe9;color:#2c6b4f}.pill.part_received{background:#fbf1dc;color:#8a6a2f}.pill.closed{background:#eef1f1;color:#5e6d6c}
+
+/* Front-desk alert bar: flashes until the visits are dealt with */
+.alertbar{position:sticky;top:0;z-index:30;display:flex;align-items:center;gap:12px;padding:10px 18px;background:#a3342a;color:#fff;box-shadow:0 2px 8px rgba(120,30,20,.25);animation:abflash 1.6s ease-in-out infinite}
+.alertbar[hidden]{display:none}
+.alertbar .grow{flex:1;min-width:0}.alertbar b{display:block;font-size:14px}.alertbar span{font-size:12.5px;opacity:.92}
+.alertbar .btn{background:#fff;color:#a3342a;border-color:#fff}
+.alertbar .ab-mute{background:none;border:0;color:#fff;cursor:pointer;padding:6px;border-radius:8px;opacity:.85}.alertbar .ab-mute:hover{opacity:1;background:rgba(255,255,255,.12)}
+@keyframes abflash{0%,100%{background:#a3342a}50%{background:#d9534a}}
+@media (prefers-reduced-motion:reduce){.alertbar{animation:none}}
+.nav .badge.alert{background:#d9534a;color:#fff;animation:abflash-b 1.6s ease-in-out infinite}
+@keyframes abflash-b{0%,100%{opacity:1}50%{opacity:.45}}
+@media (max-width:700px){.alertbar{padding:8px 12px;flex-wrap:wrap}.alertbar span{display:none}}

@@ -62,15 +62,16 @@ function login() {
 function mount() {
   app.innerHTML = `<div class="shell"><aside class="side">
     <div class="brand"><img src="/img/hasta-emblem.webp" alt="" width="34" height="34"><div><b>Hasta Clinic</b><span>${esc(B.settings.trade_name)}</span></div></div>
-    <nav class="nav" aria-label="Main">${NAV.map(([k, ic, l]) => `<a href="#/${k}" data-k="${k}">${icon(ic, 20)}<span>${l}</span>${k === 'leads' ? '<i class="badge" data-b hidden></i>' : ''}</a>`).join('')}
+    <nav class="nav" aria-label="Main">${NAV.map(([k, ic, l]) => `<a href="#/${k}" data-k="${k}">${icon(ic, 20)}<span>${l}</span>${k === 'leads' ? '<i class="badge" data-b hidden></i>' : k === '' ? '<i class="badge alert" data-tb hidden></i>' : ''}</a>`).join('')}
       <div class="nav-sep"></div><a href="#/settings" data-k="settings">${icon('settings', 20)}<span>Settings</span></a></nav>
     <div class="me"><span class="avatar">${esc(initials(ME.name))}</span><div><b>${esc(ME.name)}</b><span>${ME.admin ? 'Admin' : ME.role === 'manager' ? 'Manager' : 'Team'}</span></div>
       <button data-logout aria-label="Sign out" title="Sign out">${icon('log-out', 18)}</button></div>
-  </aside><div class="mainwrap"><main class="main" id="main"></main></div></div>`;
+  </aside><div class="mainwrap"><div class="alertbar" data-alertbar hidden role="alert"></div><main class="main" id="main"></main></div></div>`;
   MAIN = app.querySelector('#main');
   app.querySelector('[data-logout]').onclick = signOut;
   window.addEventListener('hashchange', route);
   route();
+  setInterval(checkAlerts, 60000);
 }
 const go = h => { if (location.hash === h) route(); else location.hash = h; };
 function parseHash() { const [p, q] = location.hash.replace(/^#\/?/, '').split('?'); return { parts: p.split('/').filter(Boolean), q: new URLSearchParams(q || '') }; }
@@ -96,6 +97,7 @@ async function route() {
     else if (top === 'settings') await viewSettings(q.get('tab') || (isAdmin() ? 'clinic' : 'account'));
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
   } catch (e) { MAIN.innerHTML = `<section class="panel">${emptyState('alert-triangle', e.message)}</section>`; }
+  checkAlerts();
   api('/clinic/leads?status=new').then(r => { const b = app.querySelector('[data-b]'); if (b) { b.hidden = !r.leads.length; b.textContent = r.leads.length; } }).catch(() => {});
 }
 async function catalogue() { if (!CAT) CAT = (await api('/clinic/catalogue')).items; return CAT; }
@@ -136,6 +138,61 @@ async function itemPicker(el, onPick, { deptId = null, placeholder = 'Add a serv
   };
   input.addEventListener('input', render);
   input.addEventListener('blur', () => setTimeout(() => { list.hidden = true; }, 150));
+}
+
+/* ---------------- Front-desk alerts ----------------
+   Visits not checked in, treatments running past their time, completed visits not billed and today's bills not paid.
+   Shown as a flashing bar on every page (and in the tab title) until each one is dealt with. */
+let ALERTS = null, ALERT_N = -1;
+const muted = () => { try { return localStorage.getItem('hw_alert_mute') === '1'; } catch { return false; } };
+function beep() {
+  if (muted()) return;
+  try { const c = new (window.AudioContext || window.webkitAudioContext)(), o = c.createOscillator(), g = c.createGain();
+    o.type = 'sine'; o.frequency.value = 880; g.gain.setValueAtTime(0.0001, c.currentTime); g.gain.exponentialRampToValueAtTime(0.2, c.currentTime + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + 0.6);
+    o.connect(g); g.connect(c.destination); o.start(); o.stop(c.currentTime + 0.65); setTimeout(() => c.close(), 1000); } catch {}
+}
+async function checkAlerts() {
+  const bar = app.querySelector('[data-alertbar]'); if (!bar) return;
+  try { ALERTS = await api('/clinic/alerts'); } catch { return; }
+  const A = ALERTS, n = A.checkin.length + A.overrun.length + A.unbilled.length + A.unpaid.length;
+  const parts = [A.checkin.length && `${A.checkin.length} not checked in`, A.overrun.length && `${A.overrun.length} still in treatment past time`,
+    A.unbilled.length && `${A.unbilled.length} finished but not billed`, A.unpaid.length && `${money(A.unpaid_total)} billed today not collected`].filter(Boolean);
+  const tb = app.querySelector('[data-tb]'); if (tb) { tb.hidden = !n; tb.textContent = n; }
+  document.title = n ? `(${n}) Action needed · Hasta Clinic` : 'Hasta Clinic';
+  if (n > ALERT_N && ALERT_N >= 0) beep();
+  ALERT_N = n;
+  bar.hidden = !n;
+  if (!n) { bar.innerHTML = ''; return; }
+  bar.innerHTML = `${icon('alert-triangle', 22)}<div class="grow"><b>${n === 1 ? '1 visit needs' : n + ' visits need'} action at the front desk</b><span>${parts.join(' · ')}</span></div>
+    <button class="btn sm" data-ab-open>Review now</button><button class="ab-mute" data-ab-mute title="${muted() ? 'Turn the alert sound on' : 'Turn the alert sound off'}" aria-label="Alert sound">${icon(muted() ? 'bell-off' : 'bell', 18)}</button>`;
+  bar.querySelector('[data-ab-open]').onclick = alertsModal;
+  bar.querySelector('[data-ab-mute]').onclick = () => { try { localStorage.setItem('hw_alert_mute', muted() ? '0' : '1'); } catch {} checkAlerts(); };
+}
+function alertsModal() {
+  const A = ALERTS; if (!A) return;
+  const late = a => { const m = Math.round((Date.parse(A.now + ':00Z') - Date.parse(a.start_at + ':00Z')) / 60000); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m / 60)} h ${m % 60} min ago` : 'on ' + fDay(a.start_at); };
+  const who = a => `<b>${esc(a.patient_name)} <small class="muted">${esc(a.patient_no)}</small></b><span>${esc(fTime(a.start_at))}${a.start_at.slice(0, 10) !== today() ? ' · ' + esc(fDay(a.start_at)) : ''} · ${deptTag(a.dept_id)}${a.doctor_name ? ' · ' + esc(a.doctor_name) : ''}</span>`;
+  const sec = (title, help, rows) => rows ? `<h4 style="margin:16px 0 4px">${title}</h4><p class="small muted" style="margin:0 0 6px">${help}</p><div class="rows">${rows}</div>` : '';
+  const body = sec('Not checked in', 'Their time has passed. If they came, mark them arrived; if not, mark no-show.', A.checkin.map(a => `<div class="row"><div class="grow">${who(a)}<div class="small" style="color:var(--alert);font-weight:600">Was due ${esc(late(a))}</div></div>
+        <button class="btn sm ghost" data-next="${a.id}" data-s="arrived">Arrived</button><button class="btn sm ghost" data-next="${a.id}" data-s="completed">Completed</button><button class="btn sm quiet" data-ns="${a.id}">No-show</button></div>`).join(''))
+    + sec('Treatment running past time', 'If the treatment is over, mark it completed — you will be asked to bill it.', A.overrun.map(a => `<div class="row"><div class="grow">${who(a)}<div class="small" style="color:var(--alert);font-weight:600">${esc(ST[a.status])} · planned ${a.minutes} min, started ${esc(late(a))}</div></div>
+        <button class="btn sm gold" data-next="${a.id}" data-s="completed">Completed</button></div>`).join(''))
+    + sec('Finished but not billed', 'Bill it, take it from a package, or mark it no charge.', A.unbilled.map(a => closeRow(a)).join(''))
+    + sec('Billed today — payment not collected', 'Take the payment before the patient leaves.', A.unpaid.map(i => `<div class="row"><div class="grow"><b>${esc(i.patient_name)} <small class="muted">${esc(i.patient_no)}</small></b><span>${esc(i.invoice_no)} · total ${money(i.total)}${i.paid ? ' · paid ' + money(i.paid) : ''}</span></div>
+        <b class="money" style="color:var(--alert)">${money(i.balance)}</b><button class="btn sm gold" data-inv="${i.id}">${icon('wallet', 15)}Take payment</button></div>`).join(''));
+  modal({ title: 'Front desk — action needed', body: `<div style="max-height:65vh;overflow:auto">${body || emptyState('check-circle', 'All clear.')}</div>`, actions: '<button class="btn ghost" data-close>Close</button>',
+    onMount(el, close) {
+      const after = () => { close(); checkAlerts(); if (!parseHash().parts[0]) route(); };
+      const list = [...A.checkin, ...A.overrun, ...A.unbilled];
+      el.querySelectorAll('[data-next]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/appointments/${b.dataset.next}/status`, { method: 'POST', body: { status: b.dataset.s } })).then(() => {
+        if (b.dataset.s === 'completed') { close(); closeVisitModal(list.find(a => a.id === +b.dataset.next), () => { checkAlerts(); if (!parseHash().parts[0]) route(); }); }
+        else { toast('Marked ' + ST[b.dataset.s].toLowerCase()); after(); }
+      }).catch(() => {}));
+      el.querySelectorAll('[data-ns]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/appointments/${b.dataset.ns}/status`, { method: 'POST', body: { status: 'no_show' } })).then(() => { toast('Marked no-show'); after(); }).catch(() => {}));
+      el.querySelectorAll('[data-inv]').forEach(b => b.onclick = () => { close(); go('#/invoice/' + b.dataset.inv); });
+      wireApptRows(el, list, after);
+      el.querySelectorAll('[data-bill]').forEach(b => { const f = b.onclick; b.onclick = () => { close(); f(); }; });
+    } });
 }
 
 /* ---------------- Today ---------------- */
