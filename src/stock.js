@@ -43,7 +43,7 @@ export async function stockRoute(request, env, me, p, m, b, q) {
   if (p === '/supplier-payments' && m === 'POST') { if (!canManage(me)) return deny(); return done(await addSupplierPayment(env, me, b)); }
   if ((r = p.match(/^\/supplier-payments\/(\d+)\/void$/)) && m === 'POST') { if (!canManage(me)) return deny(); return done(await voidSupplierPayment(env, me, +r[1], b)); }
 
-  if (p === '/stock' && m === 'GET') return api({ ok: true, items: await stockList(env), alerts: await stockAlerts(env) });
+  if (p === '/stock' && m === 'GET') { const [items, alerts] = await Promise.all([stockList(env), stockAlerts(env)]); return api({ ok: true, items, alerts }); }
   if ((r = p.match(/^\/stock\/(\d+)$/)) && m === 'GET') { const d = await itemStock(env, +r[1]); return d ? api({ ok: true, ...d }) : api({ ok: false, error: 'Not found' }, 404); }
   if ((r = p.match(/^\/stock\/(\d+)\/settings$/)) && m === 'PUT') { if (!canManage(me)) return deny(); return done(await saveStockSettings(env, me, +r[1], b)); }
   if (p === '/stock/move' && m === 'POST') { if (b.kind !== 'use' && !canManage(me)) return deny(); return done(await manualMove(env, me, b)); }
@@ -128,14 +128,19 @@ async function stockList(env) {
     ORDER BY i.name`).all();
   return (results || []).map(x => ({ ...x, on_hand: r3(x.on_hand), value: r2(Math.max(0, x.on_hand) * (x.avg_cost ?? x.cost ?? 0)) }));
 }
-export async function stockAlerts(env) {
+export function stockAlertStmts(env) {
   const d60 = new Date(Date.now() + IST + 60 * 864e5).toISOString().slice(0, 10);
-  const low = await env.DB.prepare(`SELECT COUNT(*) n FROM cl_items i WHERE i.kind='product' AND i.track_stock=1 AND i.active=1 AND i.reorder_level > 0 AND ${ONHAND} <= i.reorder_level`).first();
-  const exp = await env.DB.prepare('SELECT COUNT(*) n FROM cl_batches WHERE qty_left > 0 AND expiry IS NOT NULL AND expiry <= ?').bind(d60).first();
-  const pend = await env.DB.prepare("SELECT COUNT(*) n FROM cl_pos WHERE status IN ('approved','part_received') AND legacy=0").first();
-  const drafts = await env.DB.prepare("SELECT COUNT(*) n FROM cl_pos WHERE status='draft'").first();
-  return { low: low.n, expiring: exp.n, open_pos: pend.n, draft_pos: drafts.n };
+  return [
+    env.DB.prepare(`SELECT COUNT(*) n FROM cl_items i WHERE i.kind='product' AND i.track_stock=1 AND i.active=1 AND i.reorder_level > 0 AND ${ONHAND} <= i.reorder_level`),
+    env.DB.prepare('SELECT COUNT(*) n FROM cl_batches WHERE qty_left > 0 AND expiry IS NOT NULL AND expiry <= ?').bind(d60),
+    env.DB.prepare("SELECT COUNT(*) n FROM cl_pos WHERE status IN ('approved','part_received') AND legacy=0"),
+    env.DB.prepare("SELECT COUNT(*) n FROM cl_pos WHERE status='draft'"),
+  ];
 }
+export function stockAlertsFrom([low, exp, pend, drafts]) {
+  return { low: low.results[0].n, expiring: exp.results[0].n, open_pos: pend.results[0].n, draft_pos: drafts.results[0].n };
+}
+export async function stockAlerts(env) { return stockAlertsFrom(await env.DB.batch(stockAlertStmts(env))); }
 async function itemStock(env, id) {
   const item = await env.DB.prepare(`SELECT i.*, s.name supplier_name, ${ONHAND} on_hand FROM cl_items i LEFT JOIN cl_suppliers s ON s.id=i.supplier_id WHERE i.id=?`).bind(id).first();
   if (!item) return null;

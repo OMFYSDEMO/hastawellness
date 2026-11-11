@@ -14,10 +14,10 @@
 //    any excess stays as the patient's advance, which can later be applied to another invoice.
 
 import { PDFDocument, StandardFonts, rgb } from './vendor/pdf-lib.esm.min.js';
-import { json, sameOrigin, clean, nz, h, normalisePhone } from './util.js';
-import { getSession, verifySecret, hashSecret, handleEms } from './ems.js';
-import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlerts } from './stock.js';
-import { careRoute, uploadPhoto, recallList } from './care.js';
+import { json, sameOrigin, clean, nz, h, normalisePhone, sha256 } from './util.js';
+import { verifySecret, hashSecret, handleEms } from './ems.js';
+import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlertStmts, stockAlertsFrom } from './stock.js';
+import { careRoute, uploadPhoto, recallStmt } from './care.js';
 
 /* ---------------- helpers ---------------- */
 const IST = 330 * 60000;
@@ -52,15 +52,20 @@ async function audit(env, me, action, entity, id, detail) {
 }
 
 /* ---------------- access ---------------- */
-async function clinicUser(env, me) {
-  if (!me || me.kind !== 'staff') return null;
-  if (me.id === 0) return { ...me, skills: ['doctor'], admin: true, depts: [] };
-  const s = await env.DB.prepare('SELECT id, name, role, username, skills, apps, reg_no FROM ems_staff WHERE id=? AND active=1').bind(me.id).first();
-  if (!s) return null;
-  const apps = parse(s.apps, ['ems']);
-  if (s.role !== 'admin' && !apps.includes('clinic')) return null;
-  const { results } = await env.DB.prepare('SELECT dept_id FROM cl_staff_depts WHERE staff_id=?').bind(s.id).all();
-  return { kind: 'staff', id: s.id, name: s.name, role: s.role, username: s.username, reg_no: s.reg_no, skills: parse(s.skills, []), admin: s.role === 'admin', depts: (results || []).map(r => r.dept_id) };
+// One round trip: session → staff → departments. (Each D1 query is a network hop, so fewer is faster.)
+async function clinicSession(request, env) {
+  const m = (request.headers.get('cookie') || '').match(/(?:^|;\s*)ems_s=([a-f0-9]{64})/);
+  if (!m) return { status: 401 };
+  const r = await env.DB.prepare(`SELECT s.subject_id sid, st.id, st.name, st.role, st.username, st.skills, st.apps, st.reg_no,
+      (SELECT group_concat(dept_id) FROM cl_staff_depts WHERE staff_id=st.id) depts
+    FROM ems_sessions s LEFT JOIN ems_staff st ON st.id=s.subject_id AND st.active=1
+    WHERE s.token_hash=? AND s.kind='staff' AND s.expires_at > strftime('%Y-%m-%dT%H:%M:%SZ','now')`).bind(await sha256(m[1])).first();
+  if (!r) return { status: 401 };
+  if (r.sid === 0) return { me: { kind: 'staff', id: 0, name: 'Clinic admin', role: 'admin', username: 'hasta', skills: ['doctor'], admin: true, depts: [] } };
+  if (!r.id) return { status: 401 };
+  const apps = parse(r.apps, ['ems']);
+  if (r.role !== 'admin' && !apps.includes('clinic')) return { status: 403 };
+  return { me: { kind: 'staff', id: r.id, name: r.name, role: r.role, username: r.username, reg_no: r.reg_no, skills: parse(r.skills, []), admin: r.role === 'admin', depts: String(r.depts || '').split(',').filter(Boolean).map(Number) } };
 }
 const canManage = u => u.admin || u.role === 'manager';
 // Who may approve discounts above the limit: the staff named in Settings (discount_approvers),
@@ -76,7 +81,8 @@ export async function handleClinic(request, env, url, ctx, base, serveAsset) {
     const res = await serveAsset(request, env, new URL(path, url));
     const headers = new Headers(res.headers);
     headers.set('x-robots-tag', 'noindex, nofollow');
-    if (/^\/(clinic|ems)\//.test(path)) headers.set('cache-control', 'public, max-age=300, must-revalidate');
+    // Versioned files (?v=N) never change, so browsers may keep them; the version is bumped on every release.
+    if (/^\/(clinic|ems)\//.test(path)) headers.set('cache-control', url.searchParams.has('v') ? 'public, max-age=31536000, immutable' : 'public, max-age=300, must-revalidate');
     return new Response(res.body, { status: res.status, headers });
   }
   // Sign-in, sign-out, "who am I" and password change are shared with the EMS platform.
@@ -99,8 +105,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=2">
+<link rel="modulepreload" href="/clinic/app.js?v=7"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=6"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=7"></script></body></html>`;
 }
 
 /* ---------------- router ---------------- */
@@ -110,8 +117,7 @@ async function route(request, env, url, p) {
   // Clinical photo upload: raw image body, not JSON.
   if (p === '/photos' && m === 'POST') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
-    const ses = await getSession(request, env);
-    const u = ses && await clinicUser(env, ses);
+    const { me: u } = await clinicSession(request, env);
     if (!u) return api({ ok: false, error: 'Please sign in.' }, 401);
     return uploadPhoto(request, env, u, url);
   }
@@ -124,9 +130,9 @@ async function route(request, env, url, p) {
     try { b = await request.json(); } catch { return bad('Invalid request'); }
     if (!b || typeof b !== 'object') return bad('Invalid request');
   }
-  const session = await getSession(request, env);
-  if (!session) return api({ ok: false, error: 'Please sign in.' }, 401);
-  const me = await clinicUser(env, session);
+  const auth = await clinicSession(request, env);
+  if (auth.status === 401) return api({ ok: false, error: 'Please sign in.' }, 401);
+  const me = auth.me;
   if (!me) return api({ ok: false, error: 'Your account does not have access to the clinic app. Ask an admin to turn it on in Settings → Team.', code: 'no_access' }, 403);
   await ensureSeed(env);
   const q = k => url.searchParams.get(k);
@@ -206,8 +212,11 @@ async function route(request, env, url, p) {
 }
 
 /* ---------------- seed, settings, reference data ---------------- */
+let seeded = false;
 async function ensureSeed(env) {
+  if (seeded) return;
   const d = await env.DB.prepare('SELECT COUNT(*) n FROM cl_departments').first();
+  seeded = true;
   if (!d.n) for (const [n, c] of DEFAULT_DEPTS) await env.DB.prepare('INSERT INTO cl_departments (name, colour) VALUES (?,?)').bind(n, c).run();
 }
 export async function settings(env) {
@@ -230,15 +239,19 @@ async function saveSettings(env, me, b) {
   return OK();
 }
 async function boot(env) {
-  const [s, depts, rooms, tm, pk] = await Promise.all([
-    settings(env),
-    env.DB.prepare('SELECT * FROM cl_departments ORDER BY id').all().then(x => x.results || []),
-    env.DB.prepare('SELECT * FROM cl_rooms ORDER BY name').all().then(x => x.results || []),
-    team(env),
-    packageDefs(env),
+  const [st, depts, rooms, staff, sd, defs, items, cnt] = await env.DB.batch([
+    env.DB.prepare('SELECT key, value FROM cl_settings'),
+    env.DB.prepare('SELECT * FROM cl_departments ORDER BY id'),
+    env.DB.prepare('SELECT * FROM cl_rooms ORDER BY name'),
+    env.DB.prepare(TEAM_SQL),
+    env.DB.prepare('SELECT * FROM cl_staff_depts'),
+    env.DB.prepare(DEFS_SQL),
+    env.DB.prepare(DEF_ITEMS_SQL),
+    env.DB.prepare('SELECT COUNT(*) n FROM cl_items WHERE active=1'),
   ]);
-  const itemCount = (await env.DB.prepare('SELECT COUNT(*) n FROM cl_items WHERE active=1').first()).n;
-  return { settings: s, departments: depts, rooms, team: tm, packages: pk, item_count: itemCount, modes: MODES, hours: HOURS };
+  const s = { ...SETTING_KEYS }; for (const r of st.results || []) s[r.key] = r.value;
+  return { settings: s, departments: depts.results || [], rooms: rooms.results || [], team: teamRows(staff.results, sd.results),
+    packages: pricedAll(defs.results, items.results), item_count: cnt.results[0].n, modes: MODES, hours: HOURS };
 }
 async function saveDept(env, b) {
   const name = clean(b.name, 40); if (!name) return R(400, 'Enter a department name.');
@@ -254,10 +267,11 @@ async function saveRoom(env, b) {
   else await env.DB.prepare('INSERT INTO cl_rooms (name, dept_id) VALUES (?,?)').bind(name, dept).run();
   return OK();
 }
+const TEAM_SQL = 'SELECT id, name, username, role, skills, apps, reg_no, active FROM ems_staff ORDER BY active DESC, name';
+const teamRows = (results, d) => (results || []).map(s => ({ id: s.id, name: s.name, username: s.username, role: s.role, reg_no: s.reg_no, active: !!s.active, skills: parse(s.skills, []), apps: parse(s.apps, ['ems']), depts: (d || []).filter(x => x.staff_id === s.id).map(x => x.dept_id) }));
 async function team(env) {
-  const { results } = await env.DB.prepare('SELECT id, name, username, role, skills, apps, reg_no, active FROM ems_staff ORDER BY active DESC, name').all();
-  const { results: d } = await env.DB.prepare('SELECT * FROM cl_staff_depts').all();
-  return (results || []).map(s => ({ id: s.id, name: s.name, username: s.username, role: s.role, reg_no: s.reg_no, active: !!s.active, skills: parse(s.skills, []), apps: parse(s.apps, ['ems']), depts: (d || []).filter(x => x.staff_id === s.id).map(x => x.dept_id) }));
+  const [a, b] = await env.DB.batch([env.DB.prepare(TEAM_SQL), env.DB.prepare('SELECT * FROM cl_staff_depts')]);
+  return teamRows(a.results, b.results);
 }
 const CLINIC_SKILLS = ['trainer', 'coach', 'doctor', 'medical_lead', 'front', 'nurse', 'dental_assistant'];
 async function saveMember(env, me, id, b) {
@@ -356,19 +370,19 @@ async function itemMap(env, ids) {
   const { results } = await env.DB.prepare(`SELECT * FROM cl_items WHERE id IN (${[...new Set(ids)].map(Number).join(',')})`).all();
   return new Map((results || []).map(i => [i.id, i]));
 }
-async function priced(env, def) {
-  const items = parse(def.items, []);
-  const map = await itemMap(env, items.map(x => x.item_id));
-  const rows = items.map(x => { const it = map.get(x.item_id); return it ? { item_id: it.id, name: it.name, qty: x.qty, price: it.price, gst_rate: it.kind === 'passthrough' ? 0 : it.gst_rate, kind: it.kind } : null; }).filter(Boolean);
-  const list = r2(rows.reduce((s, x) => s + x.price * x.qty, 0));
-  const price = Math.round(list * (1 - (def.discount_pct || 0) / 100));
-  return { ...def, items: rows, list_value: list, price };
+const DEFS_SQL = 'SELECT * FROM cl_package_defs ORDER BY active DESC, name';
+const DEF_ITEMS_SQL = "SELECT * FROM cl_items WHERE id IN (SELECT json_extract(j.value, '$.item_id') FROM cl_package_defs d, json_each(d.items) j)";
+function pricedAll(defs, items) {
+  const map = new Map((items || []).map(i => [i.id, i]));
+  return (defs || []).map(def => {
+    const rows = parse(def.items, []).map(x => { const it = map.get(x.item_id); return it ? { item_id: it.id, name: it.name, qty: x.qty, price: it.price, gst_rate: it.kind === 'passthrough' ? 0 : it.gst_rate, kind: it.kind } : null; }).filter(Boolean);
+    const list = r2(rows.reduce((s2, x) => s2 + x.price * x.qty, 0));
+    return { ...def, items: rows, list_value: list, price: Math.round(list * (1 - (def.discount_pct || 0) / 100)) };
+  });
 }
 async function packageDefs(env) {
-  const { results } = await env.DB.prepare('SELECT * FROM cl_package_defs ORDER BY active DESC, name').all();
-  const out = [];
-  for (const d of results || []) out.push(await priced(env, d));
-  return out;
+  const [a, b] = await env.DB.batch([env.DB.prepare(DEFS_SQL), env.DB.prepare(DEF_ITEMS_SQL)]);
+  return pricedAll(a.results, b.results);
 }
 async function savePackageDef(env, me, id, b) {
   const name = clean(b.name, 120);
@@ -481,11 +495,12 @@ async function savePatient(env, me, id, b) {
   return OK({ id });
 }
 async function balances(env, patientId) {
-  const pay = await env.DB.prepare('SELECT COALESCE(SUM(amount),0) s FROM cl_payments WHERE patient_id=? AND voided=0').bind(patientId).first();
-  const alloc = await env.DB.prepare('SELECT COALESCE(SUM(a.amount),0) s FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE p.patient_id=? AND p.voided=0').bind(patientId).first();
-  const due = await env.DB.prepare(`SELECT COALESCE(SUM(i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0)),0) s
-    FROM cl_invoices i WHERE i.patient_id=? AND i.status='final'`).bind(patientId).first();
-  return { advance: r2(pay.s - alloc.s), due: r2(due.s) };
+  const r = await env.DB.prepare(`SELECT
+      (SELECT COALESCE(SUM(amount),0) FROM cl_payments WHERE patient_id=?1 AND voided=0) pay,
+      (SELECT COALESCE(SUM(a.amount),0) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE p.patient_id=?1 AND p.voided=0) alloc,
+      (SELECT COALESCE(SUM(i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0)),0)
+        FROM cl_invoices i WHERE i.patient_id=?1 AND i.status='final') due`).bind(patientId).first();
+  return { advance: r2(r.pay - r.alloc), due: r2(r.due) };
 }
 async function patientDetail(env, id) {
   const p = await env.DB.prepare("SELECT * FROM cl_patients WHERE id=? AND status='active'").bind(id).first();
@@ -497,8 +512,10 @@ async function patientDetail(env, id) {
     patientPackages(env, id),
     balances(env, id),
   ]);
-  const ems = p.ems_client_id ? await env.DB.prepare('SELECT id, name, status FROM ems_clients WHERE id=?').bind(p.ems_client_id).first() : null;
-  const lead = p.lead_id ? await env.DB.prepare('SELECT id, interest, concern, created_at, source FROM leads WHERE id=?').bind(p.lead_id).first() : null;
+  const [ems, lead] = await Promise.all([
+    p.ems_client_id ? env.DB.prepare('SELECT id, name, status FROM ems_clients WHERE id=?').bind(p.ems_client_id).first() : null,
+    p.lead_id ? env.DB.prepare('SELECT id, interest, concern, created_at, source FROM leads WHERE id=?').bind(p.lead_id).first() : null,
+  ]);
   return { patient: p, appointments: appts, invoices: invs, payments: pays, packages: pkgs, ...bal, ems_client: ems, lead };
 }
 async function leads(env, status) {
@@ -761,7 +778,8 @@ async function deleteDraft(env, me, id) {
   await audit(env, me, 'invoice.delete_draft', 'invoice', id);
   return OK();
 }
-const fyOf = d => { const y = +d.slice(0, 4), m = +d.slice(5, 7); const s = m >= 4 ? y : y - 1; return `${String(s).slice(2)}-${String(s + 1).slice(2)}`; };
+// Invoice numbers continue the previous system's series: HW/<year the financial year starts>/00001 (e.g. HW/2026/00180 for FY 2026-27).
+const fyOf = d => { const y = +d.slice(0, 4), m = +d.slice(5, 7); return String(m >= 4 ? y : y - 1); };
 async function finalise(env, me, id) {
   const inv = await env.DB.prepare('SELECT * FROM cl_invoices WHERE id=?').bind(id).first();
   if (!inv) return R(404, 'Not found.');
@@ -774,7 +792,7 @@ async function finalise(env, me, id) {
   for (let attempt = 0; attempt < 5 && !no; attempt++) {
     const last = await env.DB.prepare('SELECT invoice_no FROM cl_invoices WHERE invoice_no LIKE ? ORDER BY length(invoice_no) DESC, invoice_no DESC LIMIT 1').bind(prefix + '%').first();
     const seq = (last ? parseInt(last.invoice_no.slice(prefix.length), 10) : 0) + 1 + attempt;
-    const candidate = prefix + String(seq).padStart(4, '0');
+    const candidate = prefix + String(seq).padStart(5, '0');
     try { await env.DB.prepare("UPDATE cl_invoices SET invoice_no=?, status='final', invoice_date=?, finalised_by=?, finalised_at=? WHERE id=? AND status='draft'").bind(candidate, d, me.id, nowIso(), id).run(); no = candidate; }
     catch (e) { if (!/UNIQUE/i.test(String(e))) throw e; }
   }
@@ -890,14 +908,18 @@ async function listPayments(env, from, to) {
     WHERE p.paid_on BETWEEN ? AND ? ORDER BY p.paid_on DESC, p.id DESC`).bind(f, t).all();
   return results || [];
 }
-async function cashBook(env) {
-  const cash = await env.DB.prepare("SELECT COALESCE(SUM(amount),0) s FROM cl_payments WHERE mode='cash' AND voided=0").first();
-  const dep = await env.DB.prepare('SELECT COALESCE(SUM(amount),0) s FROM cl_cash_deposits').first();
-  const { results: deposits } = await env.DB.prepare('SELECT * FROM cl_cash_deposits ORDER BY deposited_on DESC, id DESC LIMIT 60').all();
-  const lastDep = deposits && deposits[0] ? deposits[0].deposited_on : null;
-  const since = await env.DB.prepare("SELECT MIN(paid_on) d FROM cl_payments WHERE mode='cash' AND voided=0 AND paid_on > ?").bind(lastDep || '0000').first();
-  return { in_hand: r2(cash.s - dep.s), received: r2(cash.s), deposited: r2(dep.s), deposits: deposits || [], oldest_undeposited: since.d };
+// Cash book counts cash taken in this app only — payments carried over from the previous system were banked there.
+const CASH_SQL = [
+  "SELECT COALESCE(SUM(amount),0) s FROM cl_payments WHERE mode='cash' AND voided=0 AND legacy=0",
+  'SELECT COALESCE(SUM(amount),0) s FROM cl_cash_deposits',
+  'SELECT * FROM cl_cash_deposits ORDER BY deposited_on DESC, id DESC LIMIT 60',
+  "SELECT MIN(paid_on) d FROM cl_payments WHERE mode='cash' AND voided=0 AND legacy=0 AND paid_on > COALESCE((SELECT MAX(deposited_on) FROM cl_cash_deposits), '0000')",
+];
+function cashFrom([cash, dep, deposits, since]) {
+  const c = cash.results[0].s, d = dep.results[0].s;
+  return { in_hand: r2(c - d), received: r2(c), deposited: r2(d), deposits: deposits.results || [], oldest_undeposited: since.results[0].d };
 }
+async function cashBook(env) { return cashFrom(await env.DB.batch(CASH_SQL.map(q => env.DB.prepare(q)))); }
 async function addDeposit(env, me, b) {
   const amount = r2(b.amount), ref = clean(b.reference, 80);
   if (!(amount > 0)) return R(400, 'Enter the amount deposited.');
@@ -916,19 +938,24 @@ async function unclosed(env) {
   return results || [];
 }
 async function dashboard(env, me) {
-  const d = today();
-  const [appts, open, pays, book, out, lds] = await Promise.all([
-    listAppointments(env, d, d),
-    unclosed(env),
-    env.DB.prepare('SELECT mode, COALESCE(SUM(amount),0) s, COUNT(*) n FROM cl_payments WHERE paid_on=? AND voided=0 AND legacy=0 GROUP BY mode').bind(d).all().then(x => x.results || []),
-    cashBook(env),
-    env.DB.prepare(`SELECT COUNT(*) n, COALESCE(SUM(i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0)),0) s FROM cl_invoices i WHERE i.status='final' AND i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0) > 0.004`).first(),
-    env.DB.prepare("SELECT COUNT(*) n FROM leads WHERE status='new'").first(),
+  const d = today(), P = (q, ...b) => env.DB.prepare(q).bind(...b);
+  const stockQ = stockAlertStmts(env), recallQ = recallStmt(env, 'due');
+  const res = await env.DB.batch([
+    P(APPT_SELECT + ' WHERE a.start_at >= ? AND a.start_at <= ? ORDER BY a.start_at LIMIT 1000', d + 'T00:00', d + 'T23:59'),
+    P(APPT_SELECT + " WHERE a.status='completed' AND (a.closure IS NULL OR (a.closure='billed' AND i.status='draft')) ORDER BY a.start_at DESC LIMIT 100"),
+    P('SELECT mode, COALESCE(SUM(amount),0) s, COUNT(*) n FROM cl_payments WHERE paid_on=? AND voided=0 AND legacy=0 GROUP BY mode', d),
+    env.DB.prepare(`SELECT COUNT(*) n, COALESCE(SUM(i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0)),0) s FROM cl_invoices i WHERE i.status='final' AND i.total - COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0),0) > 0.004`),
+    P("SELECT COUNT(*) n FROM leads WHERE status='new'"),
+    P("SELECT COALESCE(SUM(total - passthrough),0) s FROM cl_invoices WHERE status='final' AND legacy=0 AND invoice_date=?", d),
+    ...CASH_SQL.map(q => P(q)),
+    ...stockQ, recallQ,
   ]);
-  const stock = await stockAlerts(env).catch(() => null);
-  const recalls = await recallList(env, 'due').catch(() => []);
-  const billed = await env.DB.prepare("SELECT COALESCE(SUM(total - passthrough),0) s FROM cl_invoices WHERE status='final' AND legacy=0 AND invoice_date=?").bind(d).first();
-  return { today: d, appointments: appts, unclosed: open, collections: pays, cash: book, outstanding: { count: out.n, amount: r2(out.s) }, new_leads: lds.n, billed_today: r2(billed.s), stock, recalls };
+  const [appts, open, pays, out, lds, billed] = res.slice(0, 6).map(x => x.results || []);
+  const cash = cashFrom(res.slice(6, 10));
+  const stock = stockAlertsFrom(res.slice(10, 10 + stockQ.length));
+  const recalls = res[10 + stockQ.length].results || [];
+  return { today: d, appointments: appts.map(a => ({ ...a, planned_items: parse(a.planned_items, []) })), unclosed: open, collections: pays, cash,
+    outstanding: { count: out[0].n, amount: r2(out[0].s) }, new_leads: lds[0].n, billed_today: r2(billed[0].s), stock, recalls };
 }
 async function dayBook(env, d) {
   const [invs, pays] = await Promise.all([

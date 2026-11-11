@@ -115,3 +115,7 @@ client's active package includes them.
 - Stock on hand = `SUM(cl_stock_moves.qty)`; batches go out first-expiry-first. A finalised invoice takes its product lines out of stock; cancelling it puts them back.
 - Managers approve orders, pay suppliers and adjust stock; any clinic user can raise a draft order, receive goods and record use in treatment.
 - Data from the previous system (opening stock, suppliers, order and GRN headers) is loaded with `legacy=1` where lines were not available.
+
+### Clinic app: speed notes
+- Every D1 query is a network round trip, so the clinic API groups reads with `env.DB.batch()` (boot, dashboard, cash book, stock alerts, package prices) and reads the session, staff record and departments in one query.
+- Files under `/clinic/` and `/ems/` requested with `?v=N` are cached by browsers for a year. **Bump the `?v=` number whenever you change `public/clinic/app.js`, `clinic.css`, `public/ems/core.js` or `app.css`** (in `src/clinic.js` → `shell()` and the import line at the top of `app.js`).

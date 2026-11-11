@@ -25,15 +25,23 @@ const approverText = () => approvers().length ? B.team.filter(t => approvers().i
 const TIMES = (() => { const o = []; for (let h = 8; h < 22; h++) for (const m of [0, 15, 30, 45]) o.push(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`); return o; })();
 
 /* ---------------- start & login ---------------- */
+// Start-up: fetch the app data (and, on the Today page, the dashboard) at the same time, straight away.
+let DASH = null;
 async function start() {
-  let me = null;
-  try { ({ me } = await api('/me')); } catch (e) { app.innerHTML = `<div class="boot"><p class="err">${esc(e.message)}</p></div>`; return; }
-  if (!me || me.kind !== 'staff') return login();
-  try { B = await api('/clinic/boot'); ME = B.me; }
-  catch (e) {
-    app.innerHTML = `<div class="auth"><section class="auth-panel" style="grid-column:1/-1"><div class="auth-box">${emptyState('lock', e.message)}<button class="btn ghost" data-out>${icon('log-out', 18)}Sign out</button></div></section></div>`;
+  const onToday = !location.hash.replace(/^#\/?/, '').split('?')[0];
+  const get = path => fetch(BASE + '/api' + path, { credentials: 'same-origin' }).then(async r => ({ status: r.status, data: await r.json().catch(() => ({})) }));
+  const bootP = get('/clinic/boot');
+  if (onToday) DASH = get('/clinic/dashboard').then(r => { if (!r.data.ok) throw new Error(r.data.error || 'Could not load.'); return r.data; });
+  if (DASH) DASH.catch(() => {});
+  let r;
+  try { r = await bootP; } catch { app.innerHTML = `<div class="boot"><p class="err">Could not reach the server. Check your connection and try again.</p></div>`; return; }
+  if (r.status === 401) { DASH = null; return login(); }
+  if (!r.data.ok) {
+    DASH = null;
+    app.innerHTML = `<div class="auth"><section class="auth-panel" style="grid-column:1/-1"><div class="auth-box">${emptyState('lock', r.data.error || 'Something went wrong.')}<button class="btn ghost" data-out>${icon('log-out', 18)}Sign out</button></div></section></div>`;
     app.querySelector('[data-out]').onclick = signOut; return;
   }
+  B = r.data; ME = B.me;
   mount();
 }
 async function signOut() { await api('/auth/logout', { method: 'POST', body: {} }).catch(() => {}); location.hash = ''; location.reload(); }
@@ -132,7 +140,8 @@ async function itemPicker(el, onPick, { deptId = null, placeholder = 'Add a serv
 
 /* ---------------- Today ---------------- */
 async function viewToday() {
-  const d = await api('/clinic/dashboard');
+  const pre = DASH; DASH = null;
+  const d = pre ? await pre.catch(() => api('/clinic/dashboard')) : await api('/clinic/dashboard');
   const h = new Date(Date.now() + 330 * 60000).getUTCHours();
   const collected = d.collections.reduce((s, x) => s + x.s, 0);
   MAIN.innerHTML = `<div class="head"><div><h1>${h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening'}${ME.id ? ', ' + esc(first(ME.name)) : ''}</h1><p>${esc(fLong(d.today))}</p></div>

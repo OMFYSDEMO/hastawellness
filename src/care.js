@@ -252,12 +252,15 @@ async function itemDone(env, me, id, b) {
 }
 
 /* ---------------- recalls ---------------- */
-export async function recallList(env, scope) {
+export function recallStmt(env, scope) {
   const where = scope === 'due' ? "r.status='open' AND r.due_date <= ?" : scope === 'upcoming' ? "r.status='open'" : '1=1';
   const bind = scope === 'due' ? [addDays(today(), 7)] : [];
-  const { results } = await env.DB.prepare(`SELECT r.*, p.name patient_name, p.patient_no, p.phone patient_phone, d.name dept_name,
+  return env.DB.prepare(`SELECT r.*, p.name patient_name, p.patient_no, p.phone patient_phone, d.name dept_name,
       (SELECT MIN(start_at) FROM cl_appointments a WHERE a.patient_id=r.patient_id AND a.status IN ('booked','arrived') AND a.start_at >= ?) next_appt
-    FROM cl_recalls r JOIN cl_patients p ON p.id=r.patient_id LEFT JOIN cl_departments d ON d.id=r.dept_id WHERE ${where} ORDER BY r.due_date LIMIT 200`).bind(today(), ...bind).all();
+    FROM cl_recalls r JOIN cl_patients p ON p.id=r.patient_id LEFT JOIN cl_departments d ON d.id=r.dept_id WHERE ${where} ORDER BY r.due_date LIMIT 200`).bind(today(), ...bind);
+}
+export async function recallList(env, scope) {
+  const { results } = await recallStmt(env, scope).all();
   return results || [];
 }
 async function addRecall(env, me, b) {
