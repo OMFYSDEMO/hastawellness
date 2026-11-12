@@ -399,7 +399,7 @@ async function viewClient(id, tab) {
     <div class="head" style="margin-bottom:14px"><div></div><div class="acts">
       <a class="btn ghost" href="${esc(wa(c.phone, `Hi ${first(c.name)}, this is Hasta Wellness.`))}" target="_blank" rel="noopener">${icon('message-circle', 18)}WhatsApp</a>
       <button class="btn ghost" data-measure>${icon('ruler', 18)}Add measurements</button>
-      <button class="btn ghost" data-pay>${icon('receipt', 18)}Record payment</button>
+      ${d.clinic && d.clinic.confirmed ? clinicLink('patient/' + d.clinic.patient.id, 'Clinic record', 'btn ghost') : ''}
       <button class="btn gold" data-book>${icon('calendar-plus', 18)}Book session</button></div></div>
     <nav class="tabs">${TABS.map(([k, ic, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${icon(ic, 17)}${l}</button>`).join('')}</nav>
     <div data-body></div>`;
@@ -413,7 +413,6 @@ async function viewClient(id, tab) {
     onMount(el, close) { const b = el.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api('/staff/clients/' + c.id, { method: 'PUT', body: { coach_id: el.querySelector('[name=coach_id]').value } })).then(() => { close(); toast('Coach allocated'); team(true); after(); }).catch(() => {})); },
   }));
   MAIN.querySelector('[data-measure]').addEventListener('click', () => d.access.measurements ? measureModal(c, after) : toast('Progress measurements are not included in this client\'s package.', true));
-  MAIN.querySelector('[data-pay]').addEventListener('click', () => payModal(c, d.packages, after));
   const body = MAIN.querySelector('[data-body]');
   ({ overview: tabOverview, admission: tabAdmission, sessions: tabSessions, progress: tabProgress, payments: tabPayments, plan: tabPlan, profile: tabProfile }[tab] || tabOverview)(body, d, after);
 }
@@ -432,6 +431,7 @@ function tabOverview(el, d, after) {
         <div class="panel-h" style="margin-top:18px"><div class="t">${icon('line-chart', 20)}<h3>Weight</h3></div>${M.weeklyRate != null ? `<span class="small muted">${M.weeklyRate > 0 ? '+' : ''}${M.weeklyRate} kg / week lately</span>` : ''}</div><div data-w></div>
         <div class="panel-h" style="margin-top:18px"><div class="t">${icon('ruler', 20)}<h3>Waist and hips</h3></div>${M.whr ? `<span class="small ${M.whr.ok ? 'muted' : ''}" style="${M.whr.ok ? '' : 'color:var(--warn)'}">Waist-to-hip ${M.whr.value} (aim ≤ ${M.whr.limit})</span>` : ''}</div><div data-wh></div></section>
     </div><div class="stack">
+      ${clinicPanel(d)}
       <section class="panel"><div class="panel-h"><div class="t">${icon('flame', 20)}<h3>Momentum score</h3></div></div>
         <div class="score"><b>${M.score}</b><div class="meter"><i style="width:${M.score}%"></i></div></div>
         <p class="small muted" style="margin-top:8px">${M.attendance.last28} sessions in 4 weeks${M.habits.days ? `, ${M.habits.days} check-ins this week` : ', no check-ins this week'}${M.bmi ? `. BMI ${M.bmi.value} (${M.bmi.band.toLowerCase()}, Asian bands)` : ''}${M.target && M.target.eta ? `. On this trend, ${M.target.value} kg around ${fDate(M.target.eta)}` : ''}.</p></section>
@@ -442,6 +442,51 @@ function tabOverview(el, d, after) {
   lineChart(el.querySelector('[data-w]'), { series: [{ name: 'Weight', color: '#34595e', points: measureSeries(d.measurements, 'weight') }], unit: ' kg', target: d.client.target_weight });
   lineChart(el.querySelector('[data-wh]'), { series: [{ name: 'Waist', color: '#34595e', points: measureSeries(d.measurements, 'waist') }, { name: 'Hips', color: '#c4a45b', points: measureSeries(d.measurements, 'hips') }], unit: ' cm', height: 200 });
   bindApptActions(el.querySelector('[data-up]'), upcoming, after);
+  wireClinic(el, d, after);
+}
+
+/* ---------------- Clinic record & billing (one person, one money account) ---------------- */
+const CLINIC = location.hostname.startsWith('ems.') ? location.origin.replace('//ems.', '//clinicapp.') : location.origin + '/clinicapp';
+const clinicLink = (hash, label, cls = 'btn sm ghost') => `<a class="${cls}" href="${esc(CLINIC + '/#/' + hash)}" target="_blank" rel="noopener">${cls.includes('btn') ? icon('external-link', 15) : ''}${label}</a>`;
+function clinicPanel(d) {
+  const k = d.clinic || {}, pt = k.patient;
+  let body;
+  if (pt && k.confirmed) {
+    body = `<div class="row" style="padding:0"><div class="grow"><b>${esc(pt.name)}</b> <span class="small muted">${esc(pt.patient_no)} · ${esc(prettyPhone(pt.phone))}</span>
+        <div class="small" style="color:var(--good, #2e7d5b)">${icon('check-circle', 14)} Linked — packages are billed and paid in the clinic app</div></div>
+      ${clinicLink('patient/' + pt.id, 'Open')}<button class="btn sm quiet" data-cl-unlink>Unlink</button></div>
+      ${k.phone_matches ? '' : `<p class="small" style="color:var(--warn);margin-top:8px">The mobile numbers no longer match. Check this is the same person.</p>`}`;
+  } else if (pt) {
+    body = `<p class="small muted" style="margin:0 0 8px">Not confirmed yet. Check it is the same person${k.shared_phone ? ' — <b style="color:var(--warn)">this mobile number is shared by more than one clinic patient</b> (e.g. family)' : ''}.</p>
+      <div class="row" style="padding:0"><div class="grow"><b>${esc(pt.name)}</b> <span class="small muted">${esc(pt.patient_no)} · ${esc(prettyPhone(pt.phone))}</span></div>
+      <button class="btn sm gold" data-cl-link="${pt.id}">Confirm — same person</button><button class="btn sm quiet" data-cl-unlink>Not the same</button></div>`;
+  } else body = '';
+  const sug = (k.suggestions || []).filter(x => !pt || x.id !== pt.id);
+  if (!k.confirmed && sug.length) body += `<p class="small muted" style="margin:${pt ? '12px' : '0'} 0 6px">${pt ? 'Other' : 'Possible'} clinic records with this mobile${k.shared_phone ? ' (shared number — pick the right person)' : ''}:</p>
+    ${sug.map(x => `<div class="row" style="padding:4px 0"><div class="grow"><b>${esc(x.name)}</b> <span class="small muted">${esc(x.patient_no)}${x.gender ? ' · ' + esc(x.gender) : ''}${x.dob ? ' · born ' + esc(x.dob.slice(0, 4)) : ''}</span>${x.linked_elsewhere ? '<div class="small muted">Linked to another EMS client</div>' : ''}</div>
+      ${x.linked_elsewhere || pt ? '' : `<button class="btn sm ghost" data-cl-link="${x.id}">Link</button>`}</div>`).join('')}`;
+  if (!pt) body += `<div style="margin-top:${sug.length ? '10px' : '0'};display:flex;gap:8px;flex-wrap:wrap;align-items:center">${sug.length ? '' : '<p class="small muted" style="margin:0">No clinic record has this mobile number.</p>'}<button class="btn sm ghost" data-cl-create>${icon('user-plus', 15)}Create clinic record</button></div>`;
+  return `<section class="panel"><div class="panel-h"><div class="t">${icon('link', 20)}<h3>Clinic record</h3></div></div>${body}</section>`;
+}
+function wireClinic(el, d, after) {
+  const id = d.client.id;
+  el.querySelectorAll('[data-cl-link]').forEach(b => b.addEventListener('click', () => busy(b, () => api(`/staff/clients/${id}/clinic-link`, { method: 'POST', body: { patient_id: +b.dataset.clLink } })).then(() => { toast('Linked to the clinic record'); after(); }).catch(() => {})));
+  el.querySelectorAll('[data-cl-unlink]').forEach(b => b.addEventListener('click', () => { if (confirm('Unlink this client from the clinic record? Bills already made stay with that patient.')) busy(b, () => api(`/staff/clients/${id}/clinic-unlink`, { method: 'POST', body: {} })).then(() => { toast('Unlinked'); after(); }).catch(() => {}); }));
+  el.querySelectorAll('[data-cl-create]').forEach(b => b.addEventListener('click', () => {
+    const shared = (d.clinic && d.clinic.suggestions || []).length;
+    if (shared && !confirm('A clinic patient already uses this mobile number. Create a separate clinic record anyway (e.g. a family member sharing the phone)?')) return;
+    busy(b, () => api(`/staff/clients/${id}/clinic-create`, { method: 'POST', body: { confirm_shared_phone: !!shared } })).then(r => { toast(`Clinic record ${r.patient_no} created and linked`); after(); }).catch(() => {});
+  }));
+  el.querySelectorAll('[data-bill]').forEach(b => b.addEventListener('click', () => busy(b, () => api(`/staff/client-packages/${b.dataset.bill}/bill`, { method: 'POST', body: {} })).then(r => { toast('Bill created in the clinic app'); window.open(CLINIC + '/#/invoice/' + r.invoice_id, '_blank', 'noopener'); after(); }).catch(() => {})));
+}
+function billLine(p) {
+  if (p.price - p.discount <= 0) return '';
+  if (p.billing === 'none') return p.balance > 0 ? `<div class="small" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="color:var(--warn)">${inr(p.balance)} due · not billed in the clinic yet</span><button class="btn sm ghost" data-bill="${p.id}">${icon('receipt', 15)}Bill in clinic</button></div>`
+    : `<div class="small muted" style="margin-top:6px">Paid in the EMS app before billing moved to the clinic</div>`;
+  const no = p.invoice_no ? esc(p.invoice_no) : 'draft bill';
+  if (p.billing === 'draft') return `<div class="small" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="color:var(--warn)">Bill not finalised · ${inr(p.balance)} to collect</span>${clinicLink('invoice/' + p.invoice_id, 'Collect in clinic')}</div>`;
+  return p.balance > 0 ? `<div class="small" style="margin-top:6px;display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span style="color:var(--warn)">${no} · ${inr(p.balance)} due</span>${clinicLink('invoice/' + p.invoice_id, 'Collect in clinic')}</div>`
+    : `<div class="small muted" style="margin-top:6px">${icon('check-circle', 14)} Paid · ${no}</div>`;
 }
 
 function pkgRow(p, staff = true) {
@@ -449,7 +494,8 @@ function pkgRow(p, staff = true) {
   return `<div class="pkg"><span class="hic" style="width:42px;height:42px;border-radius:12px;display:grid;place-items:center;background:var(--teal-mist);color:var(--teal)">${icon('package', 20)}</span>
     <div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><b>${esc(p.name)}</b>${pill(p.state)}</div>
       <div class="bar" style="margin:8px 0 6px"><i style="width:${u}%"></i><i class="b" style="width:${b}%"></i></div>
-      <span class="small muted">${p.sessions_total ? `${p.used} used, ${p.booked} booked, ${p.remaining} left of ${p.sessions_total} EMS sessions · ` : ''}${p.ent && !p.ent.legacy && p.ent.reviews ? `reviews ${p.reviews_used}/${p.ent.reviews} · ` : ''}${p.ent && !p.ent.legacy && p.ent.wm_consults ? `WM consultations ${p.wm_used}/${p.ent.wm_consults} · ` : ''}${p.ent && p.ent.diet_plan ? 'diet plan · ' : ''}${p.ent && p.ent.measurements ? 'measurements · ' : ''}${fDay(p.start_date)} to ${p.expiry_date ? fDate(p.expiry_date) : 'no expiry'}${staff ? ` · ${inr(p.due)}${p.balance > 0 ? `, <b style="color:var(--warn)">${inr(p.balance)} due</b>` : ', paid'}` : ''}</span></div>
+      <span class="small muted">${p.sessions_total ? `${p.used} used, ${p.booked} booked, ${p.remaining} left of ${p.sessions_total} EMS sessions · ` : ''}${p.ent && !p.ent.legacy && p.ent.reviews ? `reviews ${p.reviews_used}/${p.ent.reviews} · ` : ''}${p.ent && !p.ent.legacy && p.ent.wm_consults ? `WM consultations ${p.wm_used}/${p.ent.wm_consults} · ` : ''}${p.ent && p.ent.diet_plan ? 'diet plan · ' : ''}${p.ent && p.ent.measurements ? 'measurements · ' : ''}${fDay(p.start_date)} to ${p.expiry_date ? fDate(p.expiry_date) : 'no expiry'}${staff ? ` · ${inr(p.due)}${p.balance > 0 ? `, <b style="color:var(--warn)">${inr(p.balance)} due</b>` : ', paid'}` : ''}</span>
+      ${staff ? billLine(p) : ''}</div>
     ${staff ? `<div><button class="btn sm ghost" data-pkg="${p.id}">${icon('pencil', 15)}Manage</button></div>` : ''}</div>`;
 }
 
@@ -461,12 +507,14 @@ function tabSessions(el, d, after) {
     <section class="panel flush"><div class="panel-h" style="padding:18px 20px 0"><div class="t">${icon('calendar-days', 20)}<h3>Bookings and attendance</h3></div>
       <span class="small muted">${appts.filter(a => a.status === 'attended').length} attended · ${appts.filter(a => a.status === 'no_show').length} no-show · ${appts.filter(a => a.status === 'cancelled').length} cancelled</span></div>
       <div class="rows" data-list style="margin-top:8px">${appts.length ? appts.map(a => apptRow(a, { showDate: true, link: false, own: true })).join('') : emptyState('calendar-days', 'No bookings yet.')}</div></section></div>`;
-  el.querySelector('[data-add-pkg]').addEventListener('click', () => packageModal(d.client, after));
+  el.querySelector('[data-add-pkg]').addEventListener('click', () => packageModal(d.client, after, d.clinic));
+  wireClinic(el, d, after);
   el.querySelectorAll('[data-pkg]').forEach(b => b.addEventListener('click', () => managePackage(d.packages.find(p => p.id === +b.dataset.pkg), after)));
   bindApptActions(el.querySelector('[data-list]'), appts, after);
 }
 
-async function packageModal(c, after) {
+async function packageModal(c, after, clinic) {
+  if (clinic && !clinic.confirmed) { toast('Link this client to their clinic record first — packages are billed in the clinic app.', true); return go(`#/clients/${c.id}?tab=overview`); }
   if (!c.cleared) { toast('Complete the admission first — both the clinician and the client must sign before enrolment.', true); return go(`#/clients/${c.id}?tab=admission`); }
   const { packages } = await api('/staff/packages');
   const defs = packages.filter(p => p.active && p.price != null);
@@ -500,7 +548,12 @@ async function packageModal(c, after) {
       };
       f.package_id.addEventListener('change', sync); sync();
       const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => api(`/staff/clients/${c.id}/packages`, { method: 'POST', body: formData(f) })).then(() => { close(); toast('Package added'); after(); }).catch(() => {}));
+      save.addEventListener('click', () => busy(save, () => api(`/staff/clients/${c.id}/packages`, { method: 'POST', body: formData(f) })).then(r => {
+        close(); after();
+        if (!r.invoice_id) return toast('Package added');
+        modal({ title: 'Package added', body: `<p>The bill is ready in the clinic app. Take the payment there so it is in the day book and the GST records.</p>`,
+          actions: `<button class="btn ghost" data-close>Later</button>${clinicLink('invoice/' + r.invoice_id, 'Open bill in clinic', 'btn gold')}` });
+      }).catch(() => {}));
     },
   });
 }
@@ -536,35 +589,6 @@ function measureModal(c, after) {
   });
 }
 
-function payModal(c, packages, after) {
-  const open = packages.filter(p => p.state !== 'closed');
-  if (!open.length) return toast('Add a package first, then record payments against it.', true);
-  const def = open.find(p => p.balance > 0) || open[open.length - 1];
-  modal({
-    title: 'Record payment · ' + c.name,
-    body: `<form class="stack" style="gap:14px" data-f>
-      ${field('Package', sel('client_package_id', open.map(p => [p.id, `${p.name} (${fDay(p.start_date)}) — ${p.balance > 0 ? inr(p.balance) + ' due' : 'paid'}`]), def.id))}
-      <div class="grid2">${field('Amount (₹)', inp('amount', def.balance > 0 ? def.balance : '', 'type="number" min="1" inputmode="numeric"'))}${field('Method', sel('method', ['UPI', 'Cash', 'Card', 'Bank transfer'], 'UPI'))}</div>
-      <div class="grid2">${field('Date', inp('paid_on', today(), `type="date" max="${today()}"`))}${field('Reference', inp('reference', '', 'maxlength="80" placeholder="UPI ref / receipt no."'), 'optional')}</div></form>`,
-    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>${icon('receipt', 18)}Record payment</button>`,
-    onMount(el, close) {
-      const f = el.querySelector('[data-f]');
-      f.client_package_id.addEventListener('change', () => { const p = open.find(x => x.id === +f.client_package_id.value); f.amount.value = p && p.balance > 0 ? p.balance : ''; });
-      const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, async () => {
-        const body = formData(f);
-        await api('/staff/payments', { method: 'POST', body });
-        const p = open.find(x => x.id === +body.client_package_id);
-        const bal = p ? p.balance - +body.amount : 0;
-        close();
-        modal({ title: 'Payment recorded', body: `<p>${inr(body.amount)} by ${esc(body.method)} for ${esc(p ? p.name : 'package')}.${bal > 0 ? ` Balance now ${inr(bal)}.` : ' Package fully paid.'}</p>`,
-          actions: `<a class="btn wa" target="_blank" rel="noopener" href="${esc(wa(c.phone, `Hi ${first(c.name)}, thank you for your payment of ${inr(body.amount)} (${body.method}) on ${fDate(body.paid_on)} for ${p ? p.name : 'your EMS package'} at Hasta Wellness.${bal > 0 ? ` Balance remaining: ${inr(bal)}.` : ' Your package is fully paid.'}`))}">${icon('message-circle', 18)}Send receipt on WhatsApp</a><button class="btn" data-close>Done</button>` });
-        after();
-      }).catch(() => {}));
-    },
-  });
-}
-
 function tabProgress(el, d, after) {
   const ms = d.measurements.slice().reverse();
   el.innerHTML = `<div class="stack">
@@ -594,11 +618,11 @@ function tabPayments(el, d, after) {
       <div class="kpi"><span class="l">${icon('package', 16)}Package value</span><span class="v">${inr(due)}</span></div>
       <div class="kpi"><span class="l">${icon('check-circle', 16)}Paid</span><span class="v">${inr(paid)}</span></div>
       <div class="kpi"><span class="l">${icon('wallet', 16)}Balance</span><span class="v" style="${due - paid > 0 ? 'color:var(--warn)' : ''}">${inr(due - paid)}</span></div></section>
-    <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('package', 20)}<h3>By package</h3></div><button class="btn sm gold" data-pay>${icon('receipt', 16)}Record payment</button></div>
-      ${d.packages.length ? `<table class="t"><thead><tr><th>Package</th><th class="n">Price</th><th class="n">Discount</th><th class="n">Paid</th><th class="n">Balance</th></tr></thead><tbody>${d.packages.slice().reverse().map(p => `<tr><td><b>${esc(p.name)}</b><div class="small muted">from ${fDate(p.start_date)}</div></td><td class="n">${inr(p.price)}</td><td class="n">${p.discount ? inr(p.discount) : '—'}</td><td class="n">${inr(p.paid)}</td><td class="n">${p.balance > 0 ? `<b style="color:var(--warn)">${inr(p.balance)}</b>` : pill('good', 'Paid')}</td></tr>`).join('')}</tbody></table>` : emptyState('package', 'No packages yet.')}</section>
+    <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('package', 20)}<h3>By package</h3></div><span class="small muted">Payments are taken in the clinic app, against each package's bill.</span></div>
+      ${d.packages.length ? `<table class="t"><thead><tr><th>Package</th><th class="n">Price</th><th class="n">Discount</th><th class="n">Paid</th><th class="n">Balance</th></tr></thead><tbody>${d.packages.slice().reverse().map(p => `<tr><td><b>${esc(p.name)}</b><div class="small muted">from ${fDate(p.start_date)}</div></td><td class="n">${inr(p.price)}</td><td class="n">${p.discount ? inr(p.discount) : '—'}</td><td class="n">${inr(p.paid)}</td><td class="n">${p.balance > 0 ? `<b style="color:var(--warn)">${inr(p.balance)}</b>` : pill('good', 'Paid')}${p.invoice_id && p.billing !== 'none' ? `<div>${clinicLink('invoice/' + p.invoice_id, p.balance > 0 ? 'Collect' : esc(p.invoice_no || 'Bill'), 'small')}</div>` : p.balance > 0 && p.price - p.discount > 0 ? `<div><button class="btn sm ghost" data-bill="${p.id}">Bill in clinic</button></div>` : ''}</td></tr>`).join('')}</tbody></table>` : emptyState('package', 'No packages yet.')}</section>
     <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('receipt', 20)}<h3>Payments received</h3></div></div>
-      ${d.payments.length ? `<table class="t"><thead><tr><th>Date</th><th>Package</th><th>Method</th><th class="n">Amount</th>${ME.role === 'admin' ? '<th></th>' : ''}</tr></thead><tbody>${d.payments.map(p => `<tr><td>${esc(fDate(p.paid_on))}</td><td>${esc(p.package_name || '')}</td><td>${esc(p.method)}${p.reference ? `<div class="small muted">${esc(p.reference)}</div>` : ''}</td><td class="n"><b>${inr(p.amount)}</b></td>${ME.role === 'admin' ? `<td class="n"><button class="btn sm quiet icon" data-del="${p.id}" aria-label="Remove payment">${icon('trash-2', 16)}</button></td>` : ''}</tr>`).join('')}</tbody></table>` : emptyState('receipt', 'No payments recorded yet.')}</section></div>`;
-  el.querySelector('[data-pay]').addEventListener('click', () => payModal(d.client, d.packages, after));
+      ${d.payments.length ? `<table class="t"><thead><tr><th>Date</th><th>Package</th><th>Method</th><th class="n">Amount</th>${ME.role === 'admin' ? '<th></th>' : ''}</tr></thead><tbody>${d.payments.map(p => `<tr><td>${esc(fDate(p.paid_on))}</td><td>${esc(p.package_name || '')}</td><td>${esc(p.method)}${p.reference ? `<div class="small muted">${esc(p.reference)}</div>` : ''}${p.invoice_no ? `<div class="small muted">clinic ${esc(p.invoice_no)}</div>` : p.src === 'ems' ? '<div class="small muted">EMS app</div>' : ''}</td><td class="n"><b>${inr(p.amount)}</b></td>${ME.role === 'admin' ? `<td class="n">${p.src === 'ems' ? `<button class="btn sm quiet icon" data-del="${p.id}" aria-label="Remove payment">${icon('trash-2', 16)}</button>` : ''}</td>` : ''}</tr>`).join('')}</tbody></table>` : emptyState('receipt', 'No payments recorded yet.')}</section></div>`;
+  wireClinic(el, d, after);
   el.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { if (confirm('Remove this payment? Only do this to correct a mistake.')) busy(b, () => api('/staff/payments/' + b.dataset.del, { method: 'DELETE', body: {} })).then(() => { toast('Payment removed'); after(); }).catch(() => {}); }));
 }
 
@@ -745,7 +769,7 @@ async function viewPayments(q) {
       <div class="kpi"><span class="l">${icon('circle-dollar-sign', 16)}By method</span><span class="v" style="font-size:16px;line-height:1.6">${Object.entries(byMethod).map(([k, v]) => `${esc(k)} ${inr(v)}`).join('<br>') || '—'}</span></div>
       <div class="kpi"><span class="l">${icon('wallet', 16)}Outstanding (all clients)</span><span class="v">${inr(r.outstanding)}</span><span class="s"><a href="#/reminders">Payment follow-ups</a></span></div></section>
     <section class="panel flush">${r.payments.length ? `<table class="t"><thead><tr><th>Date</th><th>Client</th><th>Package</th><th>Method</th><th class="n">Amount</th></tr></thead><tbody>
-      ${r.payments.map(p => `<tr class="click" data-c="${p.client_id}"><td>${esc(fDate(p.paid_on))}</td><td><b>${esc(p.client_name || '')}</b></td><td>${esc(p.package_name || '')}${multi() ? `<div class="small muted">${esc(p.unit_name || '')}</div>` : ''}</td><td>${esc(p.method)}${p.reference ? `<div class="small muted">${esc(p.reference)}</div>` : ''}</td><td class="n"><b>${inr(p.amount)}</b></td></tr>`).join('')}</tbody></table>`
+      ${r.payments.map(p => `<tr class="click" data-c="${p.client_id}"><td>${esc(fDate(p.paid_on))}</td><td><b>${esc(p.client_name || '')}</b></td><td>${esc(p.package_name || '')}${multi() ? `<div class="small muted">${esc(p.unit_name || '')}</div>` : ''}</td><td>${esc(p.method)}${p.reference ? `<div class="small muted">${esc(p.reference)}</div>` : ''}${p.invoice_no ? `<div class="small muted">clinic ${esc(p.invoice_no)}</div>` : p.src === 'ems' ? '<div class="small muted">EMS app</div>' : ''}</td><td class="n"><b>${inr(p.amount)}</b></td></tr>`).join('')}</tbody></table>`
       : emptyState('receipt', 'No payments in this period.')}</section>`;
   if (ME.role === 'admin' && ALL_UNITS.length > 1) {
     const st = await api(`/staff/reports/settlement?from=${from}&to=${to}`);

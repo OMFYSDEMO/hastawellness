@@ -15,6 +15,7 @@ import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify, leadCha
 import * as AC from './academy.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED } from './packages.js';
+import { clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, createPatientFor } from './emslink.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
 
 const STAFF_TTL_H = 12;
@@ -181,7 +182,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=8"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=9"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -310,10 +311,22 @@ async function route(request, env, url, ctx, base, p) {
   }
   if ((r = p.match(/^\/staff\/clients\/(\d+)$/))) {
     if (m === 'GET') { const v = await clientView(env, +r[1], true); return v ? api({ ok: true, ...v }) : api({ ok: false, error: 'Not found' }, 404); }
-    if (m === 'PUT') return updateClient(env, +r[1], body);
+    if (m === 'PUT') return updateClient(env, +r[1], body, me);
     if (m === 'DELETE') return admin ? deleteClient(env, +r[1]) : api({ ok: false, error: 'Only an admin can delete records.' }, 403);
   }
   if ((r = p.match(/^\/staff\/clients\/(\d+)\/pin$/)) && m === 'POST') return resetPin(env, +r[1]);
+  // Clinic record: one person, one record, one money account (src/emslink.js)
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/clinic$/)) && m === 'GET') {
+    const c = await env.DB.prepare('SELECT * FROM ems_clients WHERE id=?').bind(+r[1]).first();
+    return c ? api({ ok: true, ...(await clinicForClient(env, c)) }) : api({ ok: false, error: 'Not found' }, 404);
+  }
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/clinic-link$/)) && m === 'POST') return done(await clinicLink(env, me, parseInt(body.patient_id, 10) || 0, +r[1]));
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/clinic-create$/)) && m === 'POST') { const x = await createPatientFor(env, me, +r[1], body); return x[0] === 200 ? api({ ok: true, ...x[2] }) : api({ ok: false, error: x[1], ...(x[2] || {}) }, x[0]); }
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/clinic-unlink$/)) && m === 'POST') {
+    const pt = await env.DB.prepare("SELECT id FROM cl_patients WHERE ems_client_id=? AND status='active'").bind(+r[1]).first();
+    return pt ? done(await clinicUnlink(env, me, pt.id)) : bad('This client is not linked to a clinic record.');
+  }
+  if ((r = p.match(/^\/staff\/client-packages\/(\d+)\/bill$/)) && m === 'POST') { const x = await billPackage(env, me, +r[1]); return x[0] === 200 ? api({ ok: true, ...x[2] }) : api({ ok: false, error: x[1] }, x[0]); }
   if ((r = p.match(/^\/staff\/clients\/(\d+)\/admissions$/)) && m === 'POST') return done(await startAdmission(env, me, +r[1], body));
   if ((r = p.match(/^\/staff\/admissions\/(\d+)\/(screening|assess|client-sign|withdraw|pdf)$/))) {
     const a = await env.DB.prepare('SELECT * FROM ems_admissions WHERE id=?').bind(+r[1]).first();
@@ -460,8 +473,9 @@ async function packagesFor(env, clientId) {
   const { results } = await env.DB.prepare(`SELECT cp.*,
     (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='attended') used,
     (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='booked') booked,
-    (SELECT IFNULL(SUM(amount),0) FROM ems_payments p WHERE p.client_package_id=cp.id) paid
-    FROM ems_client_packages cp WHERE cp.client_id=? ORDER BY cp.start_date, cp.id`).bind(clientId).all();
+    (SELECT IFNULL(SUM(amount),0) FROM ems_receipts r WHERE r.client_package_id=cp.id) paid,
+    i.invoice_no, i.status invoice_status
+    FROM ems_client_packages cp LEFT JOIN cl_invoices i ON i.id=cp.invoice_id WHERE cp.client_id=? ORDER BY cp.start_date, cp.id`).bind(clientId).all();
   const t = today();
   const use = await usage(env, (results || []).map(p => p.id));
   return (results || []).map(p => {
@@ -480,7 +494,10 @@ async function packagesFor(env, clientId) {
       else if (p.sessions_total > 0 && usedS >= p.sessions_total && !reviews_left && !wm_left) state = 'completed';
       else if (p.sessions_total === 0 && !reviews_left && !wm_left && !ent.diet_plan) state = 'completed';
     }
-    return { ...p, ent, used: usedS, booked: bookedS, remaining, available: Math.max(0, remaining - bookedS), due, balance: due - p.paid, state, reviews_used: reviews, wm_used: wm, reviews_left, wm_left };
+    // Bills are GST-inclusive splits of the package price, so a fully paid bill can be a paisa short.
+    const left = Math.round((due - p.paid) * 100) / 100, paid = left < 1 ? due : Math.round(p.paid * 100) / 100;
+    const billing = !p.invoice_id || p.invoice_status === 'cancelled' ? 'none' : p.invoice_status;
+    return { ...p, paid, billing, ent, used: usedS, booked: bookedS, remaining, available: Math.max(0, remaining - bookedS), due, balance: left < 1 ? 0 : left, state, reviews_used: reviews, wm_used: wm, reviews_left, wm_left };
   });
 }
 async function bookablePackage(env, clientId) {
@@ -678,7 +695,7 @@ async function createClient(env, me, b, sc) {
   return api({ ok: true, id, pin });
 }
 
-async function updateClient(env, id, b) {
+async function updateClient(env, id, b, me) {
   const { f, bad: errs } = readClientFields(b, true);
   if (errs.length) return bad('Please check: ' + errs.join(', ') + '.');
   if (f.phone) {
@@ -688,6 +705,7 @@ async function updateClient(env, id, b) {
   const cols = Object.keys(f);
   if (!cols.length) return api({ ok: true });
   await env.DB.prepare(`UPDATE ems_clients SET ${cols.map(k => k + '=?').join(',')}, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?`).bind(...cols.map(k => f[k]), id).run();
+  if (f.phone && me) await linkRecheck(env, me, { clientId: id });
   return api({ ok: true });
 }
 
@@ -750,13 +768,21 @@ async function assignPackage(env, clientId, b, me) {
   if (!admin && discount > limit) return bad(maxDisc ? `The most you can discount this package is ${maxDisc}% (₹${limit.toLocaleString('en-IN')}). Ask an admin for more.` : 'Discounts are not allowed on this package. Ask an admin.');
   const el = await eligible(env, clientId, needsProgrammes(programme));
   if (!el.ok) return bad(el.reason);
+  if (price - discount > 0 && !(await confirmedPatient(env, clientId))) return bad('Packages are billed in the clinic app. Link this client to their clinic patient record first (Clinic record, on the Overview tab).');
   const start = isDate(b.start_date) ? b.start_date : today();
   const expiry = addDays(start, validity);
   const cl = await env.DB.prepare('SELECT home_unit_id FROM ems_clients WHERE id=?').bind(clientId).first();
   const unitId = parseInt(b.unit_id, 10) || (cl && cl.home_unit_id) || 1;
   const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme, unit_id, machine_types, entitlements) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
     .bind(clientId, def ? def.id : null, name, ent.sessions, price, discount, start, expiry, programme, unitId, mts, JSON.stringify(ent)).run();
-  return api({ ok: true, id: r.meta.last_row_id });
+  const id = r.meta.last_row_id;
+  if (price - discount <= 0) return api({ ok: true, id });
+  const bill = await billPackage(env, me, id);
+  if (bill[0] !== 200) {
+    await env.DB.prepare('DELETE FROM ems_client_packages WHERE id=?').bind(id).run();
+    return api({ ok: false, error: bill[1] }, bill[0]);
+  }
+  return api({ ok: true, id, invoice_id: bill[2].invoice_id });
 }
 
 async function updateClientPackage(env, id, b) {
@@ -782,24 +808,15 @@ async function addMeasurement(env, me, b) {
 }
 
 async function addPayment(env, me, b) {
-  const cp = await env.DB.prepare('SELECT * FROM ems_client_packages WHERE id=?').bind(parseInt(b.client_package_id, 10) || 0).first();
-  if (!cp) return bad('Choose the package this payment is for.');
-  const amount = int(b.amount, 1, 10000000);
-  if (!amount) return bad('Enter the amount received.');
-  const method = PAY_METHODS.includes(b.method) ? b.method : 'UPI';
-  const day = isDate(b.paid_on) && b.paid_on <= today() ? b.paid_on : today();
-  const r = await env.DB.prepare('INSERT INTO ems_payments (client_id, client_package_id, amount, method, paid_on, reference, staff_id, unit_id) VALUES (?,?,?,?,?,?,?,?)')
-    .bind(cp.client_id, cp.id, amount, method, day, nz(clean(b.reference, 80)), me.id, cp.unit_id || 1).run();
-  return api({ ok: true, id: r.meta.last_row_id });
+  return bad('EMS payments are now taken in the clinic app, against the package bill, so they count in the clinic day book. Open the package and choose "Collect in clinic".');
 }
-
 async function listPayments(env, url, sc) {
   const from = isDate(url.searchParams.get('from')) ? url.searchParams.get('from') : today().slice(0, 8) + '01';
   const to = isDate(url.searchParams.get('to')) ? url.searchParams.get('to') : today();
-  const { results } = await env.DB.prepare(`SELECT p.*, c.name client_name, cp.name package_name, (SELECT name FROM ems_units u WHERE u.id=p.unit_id) unit_name FROM ems_payments p
+  const { results } = await env.DB.prepare(`SELECT p.*, c.name client_name, cp.name package_name, (SELECT name FROM ems_units u WHERE u.id=p.unit_id) unit_name FROM ems_receipts p
     LEFT JOIN ems_clients c ON c.id=p.client_id LEFT JOIN ems_client_packages cp ON cp.id=p.client_package_id
-    WHERE p.paid_on BETWEEN ? AND ? AND IFNULL(p.unit_id,1) IN (${sc.sql}) ORDER BY p.paid_on DESC, p.id DESC`).bind(from, to).all();
-  const out = await env.DB.prepare(`SELECT IFNULL(SUM(cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_payments p WHERE p.client_package_id=cp.id),0)),0) due
+    WHERE p.paid_on BETWEEN ? AND ? AND p.unit_id IN (${sc.sql}) ORDER BY p.paid_on DESC, p.id DESC`).bind(from, to).all();
+  const out = await env.DB.prepare(`SELECT IFNULL(SUM(MAX(0, cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_receipts p WHERE p.client_package_id=cp.id),0) - 0.99)),0) due
     FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id WHERE c.status != 'deleted' AND cp.status != 'closed' AND IFNULL(cp.unit_id,1) IN (${sc.sql})`).first();
   return api({ ok: true, payments: results, from, to, outstanding: out ? out.due : 0 });
 }
@@ -824,7 +841,7 @@ async function clientView(env, id, staff) {
     packagesFor(env, id),
     env.DB.prepare(`${APPT_SELECT} WHERE a.client_id=? ORDER BY a.start_at DESC LIMIT 300`).bind(id).all(),
     env.DB.prepare('SELECT * FROM ems_measurements WHERE client_id=? ORDER BY measured_on, id').bind(id).all(),
-    env.DB.prepare('SELECT p.*, cp.name package_name FROM ems_payments p LEFT JOIN ems_client_packages cp ON cp.id=p.client_package_id WHERE p.client_id=? ORDER BY p.paid_on DESC, p.id DESC').bind(id).all(),
+    env.DB.prepare('SELECT p.*, cp.name package_name FROM ems_receipts p LEFT JOIN ems_client_packages cp ON cp.id=p.client_package_id WHERE p.client_id=? ORDER BY p.paid_on DESC, p.id DESC').bind(id).all(),
     env.DB.prepare('SELECT * FROM ems_plans WHERE client_id=?').bind(id).first(),
     env.DB.prepare('SELECT * FROM ems_checkins WHERE client_id=? AND day >= ? ORDER BY day DESC').bind(id, addDays(today(), -60)).all(),
   ]);
@@ -838,6 +855,7 @@ async function clientView(env, id, staff) {
   const data = { client, packages: pkgs, appointments: appts.results || [], measurements: meas.results || [], payments: pays.results || [], plan: p, checkins: checks.results || [] };
   const { results: adms } = await env.DB.prepare('SELECT * FROM ems_admissions WHERE client_id=? ORDER BY id DESC').bind(id).all();
   data.admissions = (adms || []).map(a => publicAdmission(a, c, staff));
+  if (staff) data.clinic = await clinicForClient(env, c);
   data.admission = data.admissions[0] || null;
   data.screen_questions = SCREEN_QS;
   data.access = access(pkgs);
@@ -999,14 +1017,14 @@ async function dashboard(env, sc, admin) {
        (SELECT COUNT(*) FROM ems_clients WHERE status='active' AND IFNULL(home_unit_id,1) IN (${U})) active_clients,
        (SELECT COUNT(*) FROM ems_appointments WHERE status='attended' AND kind='session' AND unit_id IN (${U}) AND substr(start_at,1,10) BETWEEN ? AND ?) week_sessions,
        (SELECT COUNT(*) FROM ems_appointments WHERE status='booked' AND unit_id IN (${U}) AND start_at >= ?) upcoming,
-       (SELECT IFNULL(SUM(amount),0) FROM ems_payments WHERE IFNULL(unit_id,1) IN (${U}) AND paid_on >= ?) month_revenue,
+       (SELECT IFNULL(SUM(amount),0) FROM ems_receipts WHERE unit_id IN (${U}) AND paid_on >= ?) month_revenue,
        (SELECT COUNT(*) FROM ems_appointments WHERE status='no_show' AND unit_id IN (${U}) AND substr(start_at,1,10) >= ?) month_noshow,
        (SELECT COUNT(*) FROM ems_appointments WHERE status IN ('attended','no_show') AND unit_id IN (${U}) AND substr(start_at,1,10) >= ?) month_closed`,
       mon, t, nowLocal(), monthStart, monthStart, monthStart).first(),
     q(`SELECT substr(start_at,1,10) d, COUNT(*) n FROM ems_appointments WHERE status='attended' AND kind='session' AND unit_id IN (${U}) AND substr(start_at,1,10) >= ? GROUP BY d`, addDays(mon, -49)).all(),
-    q(`SELECT substr(paid_on,1,7) m, SUM(amount) n FROM ems_payments WHERE IFNULL(unit_id,1) IN (${U}) AND paid_on >= ? GROUP BY m`, addDays(monthStart, -160).slice(0, 8) + '01').all(),
+    q(`SELECT substr(paid_on,1,7) m, SUM(amount) n FROM ems_receipts WHERE unit_id IN (${U}) AND paid_on >= ? GROUP BY m`, addDays(monthStart, -160).slice(0, 8) + '01').all(),
     q(`SELECT COUNT(*) n FROM leads WHERE status='new' AND (interest LIKE '%EMS%' OR interest LIKE '%eight%' OR source='ems portal') AND (unit_id IS NULL OR unit_id IN (${U}))`).first(),
-    q(`SELECT IFNULL(SUM(cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_payments p WHERE p.client_package_id=cp.id),0)),0) due
+    q(`SELECT IFNULL(SUM(MAX(0, cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_receipts p WHERE p.client_package_id=cp.id),0) - 0.99)),0) due
        FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id WHERE cp.status != 'closed' AND IFNULL(cp.unit_id,1) IN (${U})`).first(),
   ]);
   const weeks = [];

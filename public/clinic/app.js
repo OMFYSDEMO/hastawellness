@@ -163,16 +163,18 @@ function beep() {
 async function checkAlerts() {
   const bar = app.querySelector('[data-alertbar]'); if (!bar) return;
   try { ALERTS = await api('/clinic/alerts'); } catch { return; }
-  const A = ALERTS, n = A.checkin.length + A.overrun.length + A.unbilled.length + A.unpaid.length;
+  const A = ALERTS; A.ems_unmarked ||= []; A.ems_unpaid ||= [];
+  const n = A.checkin.length + A.overrun.length + A.unbilled.length + A.unpaid.length + A.ems_unmarked.length + A.ems_unpaid.length;
   const parts = [A.checkin.length && `${A.checkin.length} not checked in`, A.overrun.length && `${A.overrun.length} still in treatment past time`,
-    A.unbilled.length && `${A.unbilled.length} finished but not billed`, A.unpaid.length && `${money(A.unpaid_total)} billed today not collected`].filter(Boolean);
+    A.unbilled.length && `${A.unbilled.length} finished but not billed`, A.unpaid.length && `${money(A.unpaid_total)} billed today not collected`,
+    A.ems_unmarked.length && `${A.ems_unmarked.length} EMS session${A.ems_unmarked.length === 1 ? '' : 's'} not marked`, A.ems_unpaid.length && `${A.ems_unpaid.length} EMS package${A.ems_unpaid.length === 1 ? '' : 's'} to collect`].filter(Boolean);
   const tb = app.querySelector('[data-tb]'); if (tb) { tb.hidden = !n; tb.textContent = n; }
   document.title = n ? `(${n}) Action needed · Hasta Clinic` : 'Hasta Clinic';
   if (n > ALERT_N && ALERT_N >= 0) beep();
   ALERT_N = n;
   bar.hidden = !n;
   if (!n) { bar.innerHTML = ''; return; }
-  bar.innerHTML = `${icon('alert-triangle', 22)}<div class="grow"><b>${n === 1 ? '1 visit needs' : n + ' visits need'} action at the front desk</b><span>${parts.join(' · ')}</span></div>
+  bar.innerHTML = `${icon('alert-triangle', 22)}<div class="grow"><b>${n === 1 ? '1 item needs' : n + ' items need'} action at the front desk</b><span>${parts.join(' · ')}</span></div>
     <button class="btn sm" data-ab-open>Review now</button><button class="ab-mute" data-ab-mute title="${muted() ? 'Turn the alert sound on' : 'Turn the alert sound off'}" aria-label="Alert sound">${icon(muted() ? 'bell-off' : 'bell', 18)}</button>`;
   bar.querySelector('[data-ab-open]').onclick = alertsModal;
   bar.querySelector('[data-ab-mute]').onclick = () => { try { localStorage.setItem('hw_alert_mute', muted() ? '0' : '1'); } catch {} checkAlerts(); };
@@ -188,7 +190,11 @@ function alertsModal() {
         <button class="btn sm gold" data-next="${a.id}" data-s="completed">Completed</button></div>`).join(''))
     + sec('Finished but not billed', 'Bill it, take it from a package, or mark it no charge.', A.unbilled.map(a => closeRow(a)).join(''))
     + sec('Billed today — payment not collected', 'Take the payment before the patient leaves.', A.unpaid.map(i => `<div class="row"><div class="grow"><b>${esc(i.patient_name)} <small class="muted">${esc(i.patient_no)}</small></b><span>${esc(i.invoice_no)} · total ${money(i.total)}${i.paid ? ' · paid ' + money(i.paid) : ''}</span></div>
-        <b class="money" style="color:var(--alert)">${money(i.balance)}</b><button class="btn sm gold" data-inv="${i.id}">${icon('wallet', 15)}Take payment</button></div>`).join(''));
+        <b class="money" style="color:var(--alert)">${money(i.balance)}</b><button class="btn sm gold" data-inv="${i.id}">${icon('wallet', 15)}Take payment</button></div>`).join(''))
+    + sec('EMS sessions not marked', 'The session time is over. Mark whether the client came.', A.ems_unmarked.map(e => `<div class="row"><div class="grow"><b>${esc(e.client_name)}${e.patient_no ? ` <small class="muted">${esc(e.patient_no)}</small>` : ''}</b><span>${esc(fTime(e.start_at))}${e.start_at.slice(0, 10) !== today() ? ' · ' + esc(fDay(e.start_at)) : ''} · <span class="dept" style="--c:${EMS_C}">EMS</span>${e.trainer_name ? ' · ' + esc(e.trainer_name) : ''}</span></div>
+        <button class="btn sm ghost" data-ems-mark="${e.id}" data-s="attended">Attended</button><button class="btn sm quiet" data-ems-mark="${e.id}" data-s="no_show">No-show</button></div>`).join(''))
+    + sec('EMS packages — payment to collect', 'Sold in the EMS app. Finalise the bill and take the payment here.', A.ems_unpaid.map(x => `<div class="row"><div class="grow"><b>${esc(x.patient_name || x.client_name)}${x.patient_no ? ` <small class="muted">${esc(x.patient_no)}</small>` : ''}</b><span>${esc(x.package_name)} · ${x.invoice_no ? esc(x.invoice_no) : x.invoice_id ? 'draft bill' : 'not billed'}${x.paid ? ' · paid ' + money(x.paid) : ''}</span></div>
+        <b class="money" style="color:var(--alert)">${money(x.balance)}</b>${x.invoice_id ? `<button class="btn sm gold" data-inv="${x.invoice_id}">${icon('wallet', 15)}Open bill</button>` : ''}</div>`).join(''));
   modal({ title: 'Front desk — action needed', body: `<div style="max-height:65vh;overflow:auto">${body || emptyState('check-circle', 'All clear.')}</div>`, actions: '<button class="btn ghost" data-close>Close</button>',
     onMount(el, close) {
       const after = () => { close(); checkAlerts(); if (!parseHash().parts[0]) route(); };
@@ -199,6 +205,7 @@ function alertsModal() {
       }).catch(() => {}));
       el.querySelectorAll('[data-ns]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/appointments/${b.dataset.ns}/status`, { method: 'POST', body: { status: 'no_show' } })).then(() => { toast('Marked no-show'); after(); }).catch(() => {}));
       el.querySelectorAll('[data-inv]').forEach(b => b.onclick = () => { close(); go('#/invoice/' + b.dataset.inv); });
+      el.querySelectorAll('[data-ems-mark]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/ems/appointments/${b.dataset.emsMark}/status`, { method: 'POST', body: { status: b.dataset.s } })).then(() => { toast('EMS session marked'); after(); }).catch(() => {}));
       wireApptRows(el, list, after);
       el.querySelectorAll('[data-bill]').forEach(b => { const f = b.onclick; b.onclick = () => { close(); f(); }; });
     } });
@@ -273,6 +280,58 @@ function noChargeModal(a, after) {
 
 /* ---------------- Appointments ---------------- */
 // Calendar: day (by clinician), week (by day, times down the side) or month (overview). The last view used is remembered.
+
+/* ---------------- EMS (one person, one record) ---------------- */
+const EMS_C = '#6b4fa0';
+const EMS_KIND = { session: 'EMS session', consultation: 'EMS consultation', review: 'EMS review' };
+const EMS_ST = { booked: 'Booked', attended: 'Attended', no_show: 'No-show', cancelled: 'Cancelled' };
+const emsCls = e => 'ems st-' + (e.status === 'attended' ? 'completed' : e.status);
+const EMS_APP = location.hostname.startsWith('clinicapp.') ? location.origin.replace('//clinicapp.', '//ems.') : location.origin + '/ems';
+const emsOut = (hash, label, cls = 'btn sm ghost') => `<a class="${cls}" href="${esc(EMS_APP + '/#/' + hash)}" target="_blank" rel="noopener">${icon('external-link', 15)}${label}</a>`;
+const showEms = deptId => !deptId || /ems|weight/i.test((dept(deptId) || {}).name || '');
+function emsDetail(e, after) {
+  const due = e.status === 'booked' && e.start_at <= nowLocal();
+  modal({ title: `${EMS_KIND[e.kind] || 'EMS'} · ${e.client_name}`, body: `<dl class="kv">
+      <dt>When</dt><dd>${esc(fDay(e.start_at))}, ${esc(fTime(e.start_at))} · ${e.minutes} min</dd>
+      <dt>Status</dt><dd>${esc(EMS_ST[e.status] || e.status)}</dd>
+      ${e.unit_name ? `<dt>Centre</dt><dd>${esc(e.unit_name)}</dd>` : ''}${e.trainer_name ? `<dt>Trainer</dt><dd>${esc(e.trainer_name)}</dd>` : ''}${e.device_name ? `<dt>Device</dt><dd>${esc(e.device_name)}</dd>` : ''}
+      ${e.package_name ? `<dt>Package</dt><dd>${esc(e.package_name)}</dd>` : ''}
+      <dt>Clinic record</dt><dd>${e.patient_id ? `<a href="#/patient/${e.patient_id}?tab=ems" data-close>${esc(e.patient_name)} · ${esc(e.patient_no)}</a>${e.ems_link_at ? '' : ' <span class="small" style="color:var(--alert)">(link not confirmed)</span>'}` : '<span class="muted">Not linked</span>'}</dd>
+      ${e.medical_alert ? `<dt>Alert</dt><dd style="color:var(--alert);font-weight:600">${esc(e.medical_alert)}</dd>` : ''}</dl>
+      <p class="small muted" style="margin-top:10px">EMS bookings are made and moved in the EMS app. The front desk can mark attendance here.</p>`,
+    actions: `${e.client_id ? emsOut('clients/' + e.client_id, 'Open in EMS app') : ''}${due ? `<button class="btn ghost" data-ems-s="no_show">No-show</button><button class="btn gold" data-ems-s="attended">Attended</button>` : '<button class="btn ghost" data-close>Close</button>'}`,
+    onMount(el, close) { el.querySelectorAll('[data-ems-s]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/ems/appointments/${e.id}/status`, { method: 'POST', body: { status: b.dataset.emsS } })).then(() => { close(); toast('Marked ' + EMS_ST[b.dataset.emsS].toLowerCase()); checkAlerts(); after && after(); }).catch(() => {})); } });
+}
+function emsRow(e) {
+  return `<div class="row"><div style="width:96px;font-weight:700;color:var(--teal-ink)">${esc(fDay(e.start_at))}<div class="small muted" style="font-weight:500">${esc(fTime(e.start_at))} · ${e.minutes || e.duration} min</div></div>
+    <div class="grow"><b>${esc(EMS_KIND[e.kind] || 'EMS')}</b><span><span class="dept" style="--c:${EMS_C}">EMS</span>${e.unit_name ? ' · ' + esc(e.unit_name) : ''}${e.trainer_name ? ' · ' + esc(e.trainer_name) : ''}</span></div>
+    ${st(e.status === 'attended' ? 'completed' : e.status, EMS_ST[e.status] || e.status)}</div>`;
+}
+
+function emsPanel(d) {
+  const k = d.ems || {}, c = k.client;
+  let html = '';
+  if (c && k.confirmed) html += `<div class="row" style="padding:0"><div class="grow"><b>${esc(c.name)}</b><span>EMS client · ${esc(prettyPhone(c.phone))}${k.phone_matches ? '' : ' · <b style="color:var(--alert)">mobile numbers differ</b>'}</span></div>${emsOut('clients/' + c.id, 'Open in EMS app')}<button class="btn sm quiet" data-ems-unlink>Unlink</button></div>`;
+  else if (c) html += `<div class="notice" style="margin:0 0 10px">${icon('info', 18)}<span>Linked to EMS client <b>${esc(c.name)}</b> (${esc(prettyPhone(c.phone))}) but not confirmed yet${k.shared_phone ? ' — <b>this mobile number is shared with another patient</b>' : ''}. Check it is the same person.</span></div>
+      <div style="display:flex;gap:8px"><button class="btn sm gold" data-ems-link="${c.id}">Confirm — same person</button><button class="btn sm ghost" data-ems-unlink>Not the same person</button></div>`;
+  if (!k.confirmed && k.suggestions.length) html += `<p class="small muted" style="margin:${c ? '14px' : '0'} 0 6px">EMS clients with this mobile${k.shared_phone ? ' (the number is shared by more than one patient — link only the right person)' : ''}:</p>
+    ${k.suggestions.map(x => `<div class="row" style="padding:4px 0"><div class="grow"><b>${esc(x.name)}</b><span>${esc(prettyPhone(x.phone))}${x.other_patient_id ? ` · linked to ${esc(x.other_patient_name)}` : ''}</span></div>${x.other_patient_id || c ? '' : `<button class="btn sm ghost" data-ems-link="${x.id}">${icon('link', 15)}Link</button>`}</div>`).join('')}`;
+  if (!c && !k.suggestions.length) html += `<p class="muted" style="margin:0">Not an EMS client. EMS clients are linked here when the mobile number matches, or from the client's page in the EMS app.</p>`;
+  const pk = k.packages || [];
+  return `<section class="panel" style="margin-bottom:14px"><div class="panel-h"><div class="t">${icon('link', 20)}<h3>EMS record</h3></div></div>${html}</section>
+    ${pk.length ? `<section class="panel flush" style="margin-bottom:14px"><div class="panel-h" style="padding:16px 20px 4px"><div class="t">${icon('package', 20)}<h3>EMS packages</h3></div><span class="small muted">Sold in the EMS app, billed and paid here</span></div>
+      <table class="t"><thead><tr><th>Package</th><th class="n">Sessions</th><th class="n">Price</th><th class="n">Paid</th><th class="n">Balance</th><th>Bill</th></tr></thead><tbody>${pk.map(x => `<tr><td><b>${esc(x.name)}</b><div class="small muted">${esc(fDate(x.start_date))}${x.expiry_date ? ' – ' + esc(fDate(x.expiry_date)) : ''}</div></td>
+        <td class="n">${x.sessions_total ? `${x.used}/${x.sessions_total}` : '—'}</td><td class="n money">${money(x.due)}</td><td class="n money">${money(x.paid)}</td><td class="n money" style="${x.balance > 0 ? 'color:var(--alert);font-weight:700' : ''}">${money(x.balance)}</td>
+        <td>${x.invoice_id && x.invoice_status !== 'cancelled' ? `<a href="#/invoice/${x.invoice_id}">${esc(x.invoice_no || 'Draft')}</a>` : x.balance > 0 && k.confirmed ? `<button class="btn sm ghost" data-ems-bill="${x.id}">Bill now</button>` : '<span class="small muted">EMS app (before)</span>'}</td></tr>`).join('')}</tbody></table></section>` : ''}
+    ${k.sessions.length ? `<section class="panel flush"><div class="panel-h" style="padding:16px 20px 4px"><div class="t">${icon('calendar-days', 20)}<h3>EMS sessions</h3></div><span class="small muted">${k.sessions.filter(x => x.status === 'attended').length} attended</span></div><div class="rows">${k.sessions.map(x => emsRow(x)).join('')}</div></section>` : ''}`;
+}
+function wireEmsPanel(el, d, after) {
+  const id = d.patient.id;
+  el.querySelectorAll('[data-ems-link]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/patients/${id}/ems-link`, { method: 'POST', body: { ems_client_id: +b.dataset.emsLink } })).then(() => { toast('EMS record linked'); after(); }).catch(() => {}));
+  el.querySelectorAll('[data-ems-unlink]').forEach(b => b.onclick = () => { if (confirm('Unlink the EMS record from this patient? Bills already made stay with this patient.')) busy(b, () => api(`/clinic/patients/${id}/ems-unlink`, { method: 'POST', body: {} })).then(() => { toast('Unlinked'); after(); }).catch(() => {}); });
+  el.querySelectorAll('[data-ems-bill]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/ems/packages/${b.dataset.emsBill}/bill`, { method: 'POST', body: {} })).then(r => go('#/invoice/' + r.invoice_id)).catch(() => {}));
+}
+
 const CAL_VIEWS = [['day', 'Day'], ['week', 'Week'], ['month', 'Month']];
 const weekStart = d => addDays(d, -((new Date(d + 'T00:00:00Z').getUTCDay() + 6) % 7));
 const monthStart = d => d.slice(0, 8) + '01';
@@ -304,9 +363,11 @@ async function viewAppointments(d, deptFilter, v) {
   if (view === 'week') return viewWeek(d, deptFilter);
   if (view === 'month') return viewMonth(d, deptFilter);
   const deptId = parseInt(deptFilter, 10) || null;
-  const { appointments } = await api(`/clinic/appointments?from=${d}&to=${d}`);
+  const { appointments, ems: emsAll = [] } = await api(`/clinic/appointments?from=${d}&to=${d}`);
+  const ems = showEms(deptId) ? emsAll : [];
   const dow = new Date(d + 'T00:00:00Z').getUTCDay(), [open, close] = B.hours[dow];
-  const startH = Math.min(+open.slice(0, 2), ...appointments.map(a => +a.start_at.slice(11, 13))), endH = Math.max(+close.slice(0, 2), ...appointments.map(a => Math.ceil((+a.start_at.slice(11, 13) * 60 + +a.start_at.slice(14, 16) + a.minutes) / 60)));
+  const both = appointments.concat(ems);
+  const startH = Math.min(+open.slice(0, 2), ...both.map(a => +a.start_at.slice(11, 13))), endH = Math.max(+close.slice(0, 2), ...both.map(a => Math.ceil((+a.start_at.slice(11, 13) * 60 + +a.start_at.slice(14, 16) + a.minutes) / 60)));
   let cols = clinicians(deptId);
   const extra = [...new Set(appointments.map(a => a.doctor_id).filter(id => id && !cols.some(c => c.id === id)))].map(id => B.team.find(t => t.id === id)).filter(Boolean);
   cols = cols.concat(extra).map(c => ({ id: c.id, name: c.name, sub: c.depts.map(x => (dept(x) || {}).name).filter(Boolean).join(', ') }));
@@ -315,16 +376,20 @@ async function viewAppointments(d, deptFilter, v) {
   const slotsPerH = 4, px = 22, rows = (endH - startH) * slotsPerH;
   const top = s => ((+s.slice(11, 13) - startH) * 60 + +s.slice(14, 16)) / 15 * px;
   MAIN.innerHTML = `${calHead('day', d, deptId, fLong(d))}
-    <div class="cal" style="grid-template-columns:58px repeat(${cols.length}, minmax(150px,1fr))">
-      <div class="cal-h time"></div>${cols.map(c => `<div class="cal-h">${esc(c.name)}<small>${esc(c.sub)}</small></div>`).join('')}
+    <div class="cal" style="grid-template-columns:58px repeat(${cols.length + (ems.length ? 1 : 0)}, minmax(150px,1fr))">
+      <div class="cal-h time"></div>${cols.map(c => `<div class="cal-h">${esc(c.name)}<small>${esc(c.sub)}</small></div>`).join('')}${ems.length ? `<div class="cal-h">EMS<small>${esc([...new Set(ems.map(e => e.unit_name).filter(Boolean))].join(', ') || 'sessions')}</small></div>` : ''}
       <div class="cal-t">${Array.from({ length: rows }, (_, i) => `<div style="height:${px}px;${i % 4 ? '' : 'transform:translateY(-6px)'}">${i % 4 ? '' : esc(fTime(`${String(startH + i / 4).padStart(2, '0')}:00`))}</div>`).join('')}</div>
       ${cols.map(c => `<div class="cal-col" data-col="${c.id}">${Array.from({ length: rows }, (_, i) => { const t = `${String(startH + Math.floor(i / 4)).padStart(2, '0')}:${String(i % 4 * 15).padStart(2, '0')}`; return `<div class="cal-slot${i % 4 ? '' : ' hr'}${t < open || t >= close ? ' closed' : ''}" data-t="${t}"></div>`; }).join('')}
         ${shown.filter(a => (a.doctor_id || 0) === c.id || (c.id === 0 && a.doctor_id && !cols.some(x => x.id === a.doctor_id))).map(a => `<div class="appt st-${a.status}" data-open="${a.id}" style="--c:${esc(a.dept_colour || '#34595e')};top:${top(a.start_at)}px;height:${Math.max(px - 2, a.minutes / 15 * px - 3)}px">
           <b>${esc(fTime(a.start_at))} ${esc(a.patient_name)}</b><span>${esc(a.reason || a.dept_name || '')}${a.room_name ? ' · ' + esc(a.room_name) : ''}</span><span>${esc(ST[a.status])}${a.closure ? ' · ' + esc(ST[a.closure]) : ''}</span></div>`).join('')}</div>`).join('')}
+      ${ems.length ? `<div class="cal-col">${Array.from({ length: rows }, (_, i) => `<div class="cal-slot closed${i % 4 ? '' : ' hr'}" style="cursor:default"></div>`).join('')}
+        ${lanes(ems).map(e => `<div class="appt ${emsCls(e)}" data-ems="${e.id}" style="--c:${EMS_C};top:${top(e.start_at)}px;height:${Math.max(px - 2, e.minutes / 15 * px - 3)}px;left:calc(${e._lane / e._lanes * 100}% + 3px);right:auto;width:calc(${100 / e._lanes}% - 6px)">
+          <b>${esc(fTime(e.start_at))} ${esc(e.client_name)}</b><span>${esc(EMS_KIND[e.kind] || 'EMS')}${e.trainer_name ? ' · ' + esc(e.trainer_name) : ''}</span><span>${esc(EMS_ST[e.status])}</span></div>`).join('')}</div>` : ''}
     </div><p class="small muted" style="margin-top:10px">Click an empty slot to book with that clinician. Clinicians appear here once they are given departments in Settings → Team.</p>`;
   wireCalHead('day', d, deptId);
   MAIN.querySelectorAll('.cal-slot:not(.closed)').forEach(s => s.onclick = () => { const col = +s.parentElement.dataset.col; const docDepts = col ? (B.team.find(t => t.id === col) || {}).depts || [] : []; apptModal({ start_at: `${d}T${s.dataset.t}`, doctor_id: col || null, dept_id: deptId || (docDepts.length === 1 ? docDepts[0] : null) }, () => route()); });
   MAIN.querySelectorAll('[data-open]').forEach(el => el.onclick = () => apptDetail(appointments.find(a => a.id === +el.dataset.open), () => route()));
+  MAIN.querySelectorAll('[data-ems]').forEach(el => el.onclick = () => emsDetail(ems.find(e => e.id === +el.dataset.ems), () => route()));
 }
 
 // Side-by-side lanes for overlapping appointments in one day column.
@@ -338,8 +403,9 @@ function lanes(list) {
 }
 async function viewWeek(d, deptFilter) {
   const deptId = parseInt(deptFilter, 10) || null, ws = weekStart(d), days = Array.from({ length: 7 }, (_, i) => addDays(ws, i));
-  const { appointments } = await api(`/clinic/appointments?from=${days[0]}&to=${days[6]}`);
-  const shown = appointments.filter(a => !deptId || a.dept_id === deptId);
+  const { appointments, ems: emsAll = [] } = await api(`/clinic/appointments?from=${days[0]}&to=${days[6]}`);
+  const ems = (showEms(deptId) ? emsAll : []).map(e => ({ ...e, _ems: true }));
+  const shown = appointments.filter(a => !deptId || a.dept_id === deptId).concat(ems);
   const hrs = days.map(x => B.hours[new Date(x + 'T00:00:00Z').getUTCDay()]);
   const startH = Math.min(...hrs.map(h => +h[0].slice(0, 2)), ...shown.map(a => +a.start_at.slice(11, 13)));
   const endH = Math.max(...hrs.map(h => Math.ceil(+h[1].slice(0, 2) + +h[1].slice(3, 5) / 60)), ...shown.map(a => Math.ceil((+a.start_at.slice(11, 13) * 60 + +a.start_at.slice(14, 16) + a.minutes) / 60)));
@@ -350,19 +416,22 @@ async function viewWeek(d, deptFilter) {
       <div class="cal-h time"></div>${days.map(x => { const n = shown.filter(a => a.start_at.startsWith(x) && a.status !== 'cancelled').length; return `<a class="cal-h${x === today() ? ' is-today' : ''}" href="#/appointments?v=day&d=${x}${deptId ? '&dept=' + deptId : ''}">${esc(D2(x, { weekday: 'short', day: 'numeric' }))}<small>${n ? n + ' booked' : '—'}</small></a>`; }).join('')}
       <div class="cal-t">${Array.from({ length: rows }, (_, i) => `<div style="height:${px}px;${i % 4 ? '' : 'transform:translateY(-6px)'}">${i % 4 ? '' : esc(fTime(`${String(startH + i / 4).padStart(2, '0')}:00`))}</div>`).join('')}</div>
       ${days.map((x, di) => { const [open, close] = hrs[di]; return `<div class="cal-col" data-day="${x}">${Array.from({ length: rows }, (_, i) => { const t = `${String(startH + Math.floor(i / 4)).padStart(2, '0')}:${String(i % 4 * 15).padStart(2, '0')}`; return `<div class="cal-slot${i % 4 ? '' : ' hr'}${t < open || t >= close ? ' closed' : ''}" data-t="${t}"></div>`; }).join('')}
-        ${lanes(shown.filter(a => a.start_at.startsWith(x))).map(a => `<div class="appt st-${a.status}" data-open="${a.id}" title="${esc(`${fTime(a.start_at)} ${a.patient_name} · ${a.doctor_name || 'no clinician'} · ${ST[a.status]}`)}" style="--c:${esc(a.dept_colour || '#34595e')};top:${top(a.start_at)}px;height:${Math.max(px - 2, a.minutes / 15 * px - 3)}px;left:calc(${a._lane / a._lanes * 100}% + 3px);right:auto;width:calc(${100 / a._lanes}% - 6px)">
+        ${lanes(shown.filter(a => a.start_at.startsWith(x))).map(a => a._ems ? `<div class="appt ${emsCls(a)}" data-ems="${a.id}" title="${esc(`${fTime(a.start_at)} ${a.client_name} · ${EMS_KIND[a.kind] || 'EMS'} · ${EMS_ST[a.status]}`)}" style="--c:${EMS_C};top:${top(a.start_at)}px;height:${Math.max(px - 2, a.minutes / 15 * px - 3)}px;left:calc(${a._lane / a._lanes * 100}% + 3px);right:auto;width:calc(${100 / a._lanes}% - 6px)">
+          <b>${esc(fTime(a.start_at))} ${esc(a.client_name)}</b><span>EMS${a.trainer_name ? ' · ' + esc(a.trainer_name) : ''}</span></div>` : `<div class="appt st-${a.status}" data-open="${a.id}" title="${esc(`${fTime(a.start_at)} ${a.patient_name} · ${a.doctor_name || 'no clinician'} · ${ST[a.status]}`)}" style="--c:${esc(a.dept_colour || '#34595e')};top:${top(a.start_at)}px;height:${Math.max(px - 2, a.minutes / 15 * px - 3)}px;left:calc(${a._lane / a._lanes * 100}% + 3px);right:auto;width:calc(${100 / a._lanes}% - 6px)">
           <b>${esc(fTime(a.start_at))} ${esc(a.patient_name)}</b><span>${esc(a.doctor_name || a.dept_name || '')}</span></div>`).join('')}</div>`; }).join('')}
     </div><p class="small muted" style="margin-top:10px">Click a day's heading to see it by clinician. Click an empty slot to book at that time.</p>`;
   wireCalHead('week', d, deptId);
   MAIN.querySelectorAll('.cal-slot:not(.closed)').forEach(s2 => s2.onclick = () => apptModal({ start_at: `${s2.parentElement.dataset.day}T${s2.dataset.t}`, dept_id: deptId }, () => route()));
   MAIN.querySelectorAll('[data-open]').forEach(el => el.onclick = () => apptDetail(appointments.find(a => a.id === +el.dataset.open), () => route()));
+  MAIN.querySelectorAll('[data-ems]').forEach(el => el.onclick = () => emsDetail(ems.find(e => e.id === +el.dataset.ems), () => route()));
 }
 async function viewMonth(d, deptFilter) {
   const deptId = parseInt(deptFilter, 10) || null, ms = monthStart(d), gs = weekStart(ms);
   const weeks = Math.ceil((((new Date(ms + 'T00:00:00Z').getUTCDay() + 6) % 7) + new Date(Date.UTC(+ms.slice(0, 4), +ms.slice(5, 7), 0)).getUTCDate()) / 7);
   const days = Array.from({ length: weeks * 7 }, (_, i) => addDays(gs, i));
-  const { appointments } = await api(`/clinic/appointments?from=${days[0]}&to=${days[days.length - 1]}`);
-  const shown = appointments.filter(a => !deptId || a.dept_id === deptId);
+  const { appointments, ems: emsAll = [] } = await api(`/clinic/appointments?from=${days[0]}&to=${days[days.length - 1]}`);
+  const ems = (showEms(deptId) ? emsAll : []).map(e => ({ ...e, _ems: true }));
+  const shown = appointments.filter(a => !deptId || a.dept_id === deptId).concat(ems);
   const by = {}; for (const a of shown) (by[a.start_at.slice(0, 10)] ||= []).push(a);
   const live = list => (list || []).filter(a => a.status !== 'cancelled');
   const total = days.filter(x => x.slice(0, 7) === ms.slice(0, 7)).reduce((n, x) => n + live(by[x]).length, 0);
@@ -371,11 +440,12 @@ async function viewMonth(d, deptFilter) {
       ${days.map(x => { const list = (by[x] || []).sort((a, b) => a.start_at.localeCompare(b.start_at)), n = live(list).length, more = list.length - 4;
         return `<div class="md${x.slice(0, 7) !== ms.slice(0, 7) ? ' out' : ''}${x === today() ? ' is-today' : ''}" data-day="${x}">
           <div class="mdh"><span>${+x.slice(8)}</span>${n ? `<b>${n}</b>` : ''}</div>
-          ${list.slice(0, 4).map(a => `<div class="mchip st-${a.status}" data-open="${a.id}" style="--c:${esc(a.dept_colour || '#34595e')}">${esc(fTime(a.start_at))} ${esc(a.patient_name)}</div>`).join('')}
+          ${list.slice(0, 4).map(a => a._ems ? `<div class="mchip ${emsCls(a)}" data-ems="${a.id}" style="--c:${EMS_C}">${esc(fTime(a.start_at))} EMS · ${esc(a.client_name)}</div>` : `<div class="mchip st-${a.status}" data-open="${a.id}" style="--c:${esc(a.dept_colour || '#34595e')}">${esc(fTime(a.start_at))} ${esc(a.patient_name)}</div>`).join('')}
           ${more > 0 ? `<div class="mmore">+${more} more</div>` : ''}</div>`; }).join('')}
     </div><p class="small muted" style="margin-top:10px">Click a day to open it. Numbers count bookings that are not cancelled.</p>`;
   wireCalHead('month', d, deptId);
-  MAIN.querySelectorAll('.md').forEach(c => c.onclick = e => { if (e.target.closest('[data-open]')) return; go(`#/appointments?v=day&d=${c.dataset.day}${deptId ? '&dept=' + deptId : ''}`); });
+  MAIN.querySelectorAll('.md').forEach(c => c.onclick = e => { if (e.target.closest('[data-open],[data-ems]')) return; go(`#/appointments?v=day&d=${c.dataset.day}${deptId ? '&dept=' + deptId : ''}`); });
+  MAIN.querySelectorAll('[data-ems]').forEach(el => el.onclick = () => emsDetail(ems.find(e => e.id === +el.dataset.ems), () => route()));
   MAIN.querySelectorAll('[data-open]').forEach(el => el.onclick = () => apptDetail(appointments.find(a => a.id === +el.dataset.open), () => route()));
 }
 
@@ -492,11 +562,11 @@ async function viewPatient(id, tab) {
   const d = await api('/clinic/patients/' + id);
   const p = d.patient;
   const TABS = [['visits', 'calendar-days', 'Visits'], ...(isClin() ? [['notes', 'file-text', 'Notes'], ['dental', 'stethoscope', 'Dental chart']] : []), ['plans', 'list-checks', 'Plans'], ...(isClin() ? [['photos', 'eye', 'Photos']] : []), ['followups', 'bell', 'Follow-ups'],
-    ['invoices', 'receipt', 'Invoices'], ['payments', 'wallet', 'Payments'], ['packages', 'package', 'Packages'], ['details', 'user', 'Details']];
+    ['invoices', 'receipt', 'Invoices'], ['payments', 'wallet', 'Payments'], ['packages', 'package', 'Packages'], ...(d.ems && (d.ems.client || d.ems.suggestions.length) ? [['ems', 'zap', 'EMS']] : []), ['details', 'user', 'Details']];
   const age = p.dob ? Math.floor((Date.now() - new Date(p.dob)) / 31557600000) : null;
   MAIN.innerHTML = `<a href="#/patients" class="crumb">${icon('arrow-left', 16)}Patients</a>
     <div class="head"><div style="display:flex;gap:16px;align-items:center"><span class="avatar" style="width:56px;height:56px;font-size:20px">${esc(initials(p.name))}</span><div><h1>${esc(p.name)}</h1>
-      <p>${esc(p.patient_no)} · <a href="tel:+91${esc(p.phone)}">${esc(prettyPhone(p.phone))}</a>${age != null ? ` · ${age} yrs` : ''}${p.gender ? ', ' + esc(p.gender) : ''}${d.ems_client ? ` · <span class="pill active">EMS client</span>` : ''}${d.lead ? ` · from website (${esc(d.lead.interest || '')})` : ''}</p></div></div>
+      <p>${esc(p.patient_no)} · <a href="tel:+91${esc(p.phone)}">${esc(prettyPhone(p.phone))}</a>${age != null ? ` · ${age} yrs` : ''}${p.gender ? ', ' + esc(p.gender) : ''}${d.ems_client ? ` · <a href="#/patient/${p.id}?tab=ems" class="pill active">EMS client</a>` : d.ems && (d.ems.client || d.ems.suggestions.length) ? ` · <a href="#/patient/${p.id}?tab=ems" class="pill draft">EMS: confirm link</a>` : ''}${d.lead ? ` · from website (${esc(d.lead.interest || '')})` : ''}</p></div></div>
       <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn ghost" href="${wa(p.phone, `Hello ${first(p.name)}, this is Hasta Wellness.`)}" target="_blank" rel="noopener">${icon('message-circle', 18)}WhatsApp</a>
         <button class="btn ghost" data-pay>${icon('wallet', 18)}Take payment</button><button class="btn ghost" data-pkgsell>${icon('package', 18)}Sell package</button><button class="btn ghost" data-inv>${icon('receipt', 18)}New bill</button><button class="btn gold" data-book>${icon('calendar-plus', 18)}Book</button></div></div>
     ${p.medical_alert ? `<div class="alertline" style="margin-bottom:14px">${icon('alert-triangle', 16)}${esc(p.medical_alert)}</div>` : ''}
@@ -512,8 +582,12 @@ async function viewPatient(id, tab) {
   MAIN.querySelector('[data-pkgsell]').onclick = () => sellPackageModal(p);
   const body = MAIN.querySelector('[data-body]');
   if (tab === 'visits') {
-    body.innerHTML = `<section class="panel flush"><div class="rows">${d.appointments.length ? d.appointments.map(a => apptRow(a)).join('') : emptyState('calendar-days', 'No visits yet.')}</div></section>`;
+    const emsS = d.ems_client ? d.ems.sessions : [];
+    const all = d.appointments.map(a => ({ at: a.start_at, h: apptRow(a) })).concat(emsS.map(e => ({ at: e.start_at, h: emsRow(e) }))).sort((a, b) => b.at.localeCompare(a.at));
+    body.innerHTML = `<section class="panel flush"><div class="rows">${all.length ? all.map(x => x.h).join('') : emptyState('calendar-days', 'No visits yet.')}</div></section>`;
     await catalogue(); wireApptRows(body, d.appointments, after);
+  } else if (tab === 'ems') {
+    body.innerHTML = emsPanel(d); wireEmsPanel(body, d, after);
   } else if (tab === 'invoices') {
     body.innerHTML = `<section class="panel flush">${invoiceTable(d.invoices, false)}</section>`; wireInvoiceTable(body);
   } else if (tab === 'payments') {
@@ -586,7 +660,7 @@ async function viewInvoice(id) {
   await catalogue();
   const d = await api('/clinic/invoices/' + id);
   const inv = d.invoice, draft = inv.status === 'draft';
-  let lines = d.lines.map(l => ({ item_id: l.item_id, package_def_id: l.package_def_id, qty: l.qty, unit_price: l.unit_price, discount: l.discount, discount_reason: l.discount_reason || '', doctor_id: l.doctor_id, name: l.name, _saved: l }));
+  let lines = d.lines.map(l => ({ item_id: l.item_id, package_def_id: l.package_def_id, qty: l.qty, unit_price: l.unit_price, discount: l.discount, discount_reason: l.discount_reason || '', doctor_id: l.doctor_id, name: l.name, label: l.name, _saved: l }));
   const limit = Number(B.settings.discount_limit_pct) || 0;
   const docs = B.team.filter(t => t.active && t.depts.length);
   MAIN.innerHTML = `<a href="#/patient/${inv.patient_id}?tab=invoices" class="crumb">${icon('arrow-left', 16)}${esc(inv.patient_name)}</a>
@@ -618,13 +692,13 @@ async function viewInvoice(id) {
     }
     tbody.innerHTML = lines.map((l, i) => {
       const it = l.item_id ? CAT.find(x => x.id === l.item_id) : null, pk = l.package_def_id ? B.packages.find(x => x.id === l.package_def_id) : null, c = lineCalc(l);
-      const variable = it && !(it.price > 0);
-      return `<tr data-i="${i}"><td><b>${esc(pk ? pk.name : it ? it.name : l.name)}</b><div class="small muted">${pk ? 'Package' : esc(it?.dept_name || '')}${it?.kind === 'passthrough' ? ' · partner charge' : ''}</div>
+      const ems = it && it.code === 'EMS-PKG', variable = it && !(it.price > 0) && !ems;
+      return `<tr data-i="${i}"><td><b>${esc(pk ? pk.name : it && !ems ? it.name : l.name)}</b><div class="small muted">${pk ? 'Package' : ems ? 'EMS package · price set in the EMS app' : esc(it?.dept_name || '')}${it?.kind === 'passthrough' ? ' · partner charge' : ''}</div>
           ${c.disc > 0 ? `<input class="in" data-k="discount_reason" value="${esc(l.discount_reason)}" placeholder="Reason for discount" maxlength="120" style="margin-top:6px;height:32px">${c.pct > limit + 1e-9 ? `<div class="small" style="color:var(--gold-ink);margin-top:4px">${c.pct.toFixed(0)}% — ${l._saved && l._saved.discount_by_name && l._saved.discount >= c.disc ? 'authorised by ' + esc(l._saved.discount_by_name) : 'needs ' + esc(approverText()) + ' to authorise'}</div>` : ''}` : ''}</td>
         <td>${pk ? '' : `<select class="in" data-k="doctor_id" style="min-width:130px"><option value="">—</option>${docs.map(t => `<option value="${t.id}"${t.id === l.doctor_id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select>`}</td>
-        <td class="n"><input class="in qty" type="number" min="1" max="999" data-k="qty" value="${l.qty}"></td>
+        <td class="n"><input class="in qty" type="number" min="1" max="999" data-k="qty" value="${l.qty}"${ems ? ' readonly title="Set in the EMS app"' : ''}></td>
         <td class="n">${variable ? `<input class="in amt" type="number" min="0" step="0.01" data-k="unit_price" value="${l.unit_price || ''}" placeholder="price">` : `<span class="money">${money(c.unit)}</span>`}</td>
-        <td class="n"><input class="in amt" type="number" min="0" step="0.01" data-k="discount" value="${l.discount || ''}" placeholder="0"></td>
+        <td class="n"><input class="in amt" type="number" min="0" step="0.01" data-k="discount" value="${l.discount || ''}" placeholder="0"${ems ? ' readonly title="EMS package price and discount are set in the EMS app"' : ''}></td>
         <td class="n small">${c.kind === 'passthrough' ? 'n/a' : pk ? 'split' : it?.gst_rate ? it.gst_rate + '%' : 'Exempt'}</td><td class="n money"><b>${money(c.total)}</b></td>
         <td><button class="btn quiet sm icon" data-rm aria-label="Remove">${icon('x', 16)}</button></td></tr>`;
     }).join('') || `<tr><td colspan="8">${emptyState('receipt', 'Add services, products or a package below.')}</td></tr>`;
@@ -699,6 +773,37 @@ async function viewBilling(f) {
     <section class="panel flush">${invoiceTable(list)}</section><p class="small muted" style="margin-top:10px">To bill, open the patient (or a completed visit) and choose New bill.</p>`;
   MAIN.querySelectorAll('[data-f]').forEach(b => b.onclick = () => go('#/billing?f=' + b.dataset.f));
   wireInvoiceTable(MAIN);
+  if (canManage()) emsLegacyPanel();
+}
+// Payments taken in the EMS app before EMS billing moved here: bring each across, or record that the
+// clinic bill already includes it, so the money is counted once.
+async function emsLegacyPanel() {
+  const { payments } = await api('/clinic/ems/payments').catch(() => ({ payments: [] }));
+  if (!payments.length || !location.hash.startsWith('#/billing')) return;
+  const box = document.createElement('section'); box.className = 'panel'; box.style.marginBottom = '14px';
+  box.innerHTML = `<div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>EMS app payments to bring across (${payments.length})</h3></div></div>
+    <p class="small muted" style="margin:0 0 10px">These were taken in the EMS app before EMS billing moved here. <b>Bring across</b> makes the package bill and records the payment on its original date. If the money is already inside a clinic bill (for example one UPI transfer for several things), choose <b>Already billed</b> so it is not counted twice.</p>
+    <div class="rows">${payments.map(e => `<div class="row"><div class="grow"><b>${esc(e.client_name)}${e.patient_no ? ` <small class="muted">${esc(e.patient_no)}${e.ems_link_at ? '' : ' · link not confirmed'}</small>` : ' <small style="color:var(--alert)">no clinic record linked</small>'}</b>
+        <span>${esc(fDate(e.paid_on))} · ${esc(e.method)}${e.reference ? ' ' + esc(e.reference) : ''} · ${esc(e.package_name || '')}</span>
+        ${e.same_ref_invoices ? `<div class="small" style="color:var(--alert);font-weight:600">${icon('alert-triangle', 13)} Same reference is on clinic bill${e.same_ref_invoices.includes(',') ? 's' : ''} ${esc(e.same_ref_invoices)} — check before bringing across</div>` : ''}</div>
+      <b class="money">${money(e.amount)}</b>${e.patient_id && e.ems_link_at ? `<button class="btn sm gold" data-mv="${e.id}">Bring across</button>` : e.patient_id ? `<a class="btn sm ghost" href="#/patient/${e.patient_id}?tab=ems">Confirm link</a>` : ''}<button class="btn sm ghost" data-rs="${e.id}">Already billed</button></div>`).join('')}</div>`;
+  MAIN.insertBefore(box, MAIN.querySelector('.seg'));
+  box.querySelectorAll('[data-mv]').forEach(b => b.onclick = () => {
+    const e = payments.find(x => x.id === +b.dataset.mv);
+    const send = confirm_different => api(`/clinic/ems/payments/${e.id}/move`, { method: 'POST', body: { confirm_different } });
+    busy(b, () => send(false).catch(err => {
+      if (err && err.data && err.data.code === 'same_ref' && confirm(err.message + '\n\nPress OK only if this is a different payment that is not in any clinic bill.')) return send(true);
+      throw err;
+    }), true).then(r => { if (r) { toast(`Brought across: ${money(e.amount)}`); route(); } }).catch(err => err && err.message && toast(err.message, true));
+  });
+  box.querySelectorAll('[data-rs]').forEach(b => b.onclick = () => {
+    const e = payments.find(x => x.id === +b.dataset.rs);
+    modal({ title: 'Already billed in the clinic', body: `<form data-f class="stack" style="gap:12px"><p class="small muted">${esc(e.client_name)} · ${money(e.amount)} ${esc(e.method)} on ${esc(fDate(e.paid_on))}${e.reference ? ' · ref ' + esc(e.reference) : ''}. The EMS app will stop counting it; the package's payments will come from the clinic bill.</p>
+        ${field('Clinic bill that includes it (optional)', inp('invoice_no', (e.same_ref_invoices || '').split(',')[0] || '', 'placeholder="HW/2026/00177"'))}
+        ${field('Note', inp('note', '', 'maxlength="200" placeholder="e.g. Paid with the Sculpt and Glow bill, one UPI transfer"'))}</form>`,
+      actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>',
+      onMount(el, close) { const sv = el.querySelector('[data-save]'); sv.onclick = () => busy(sv, () => api(`/clinic/ems/payments/${e.id}/resolve`, { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Recorded'); route(); }).catch(() => {}); } });
+  });
 }
 
 /* ---------------- Payments & cash ---------------- */

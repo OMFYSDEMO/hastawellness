@@ -20,6 +20,7 @@ import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlertStmts, s
 import { careRoute, uploadPhoto, recallStmt } from './care.js';
 import { hrRoute, kioskRoute, scanRoute } from './hr.js';
 import { docsRoute, uploadDocFile } from './docs.js';
+import { emsForPatient, link as emsLink, unlink as emsUnlink, recheck as emsRecheck, billPackage, legacyPayments, moveLegacyPayment, resolveLegacyPayment, emsAppointments, emsAlerts, markEmsAppt } from './emslink.js';
 
 /* ---------------- helpers ---------------- */
 const IST = 330 * 60000;
@@ -43,6 +44,7 @@ const done = ([status, error, extra]) => status === 200 ? api({ ok: true, ...(ex
 const R = (s, e, x) => [s, e, x];
 const OK = x => [200, null, x];
 
+export const EMS_ITEM = 'EMS-PKG';
 export const MODES = { cash: 'Cash', upi: 'UPI', card: 'Card (POS)', bank: 'Bank transfer', finance: 'Healthcare finance' };
 export const APPT_STATUS = ['booked', 'arrived', 'in_treatment', 'completed', 'no_show', 'cancelled'];
 const HOURS = { 0: ['10:00', '14:00'], 1: ['10:00', '20:00'], 2: ['10:00', '20:00'], 3: ['10:00', '20:00'], 4: ['10:00', '20:00'], 5: ['10:00', '20:00'], 6: ['10:00', '20:00'] };
@@ -115,9 +117,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=7">
-<link rel="modulepreload" href="/clinic/app.js?v=12"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="modulepreload" href="/clinic/app.js?v=13"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=12"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=13"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -200,12 +202,25 @@ async function route(request, env, url, p, base) {
   if (p === '/patients' && m === 'POST') return done(await savePatient(env, me, null, b));
   if ((r = p.match(/^\/patients\/(\d+)$/)) && m === 'GET') { const d = await patientDetail(env, +r[1]); return d ? api({ ok: true, ...d }) : api({ ok: false, error: 'Not found' }, 404); }
   if ((r = p.match(/^\/patients\/(\d+)$/)) && m === 'PUT') return done(await savePatient(env, me, +r[1], b));
+  // EMS link (one person, one record)
+  if ((r = p.match(/^\/patients\/(\d+)\/ems-link$/)) && m === 'POST') return done(await emsLink(env, me, +r[1], parseInt(b.ems_client_id, 10) || 0));
+  if ((r = p.match(/^\/patients\/(\d+)\/ems-unlink$/)) && m === 'POST') return done(await emsUnlink(env, me, +r[1]));
+  if ((r = p.match(/^\/ems\/packages\/(\d+)\/bill$/)) && m === 'POST') return done(await billPackage(env, me, +r[1]));
+  if ((r = p.match(/^\/ems\/appointments\/(\d+)\/status$/)) && m === 'POST') return done(await markEmsAppt(env, me, +r[1], b));
+  if (p === '/ems/payments' && m === 'GET') return api({ ok: true, payments: await legacyPayments(env, q('all') === '1') });
+  if ((r = p.match(/^\/ems\/payments\/(\d+)\/(move|resolve)$/)) && m === 'POST') {
+    if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403);
+    return done(await (r[2] === 'move' ? moveLegacyPayment : resolveLegacyPayment)(env, me, +r[1], b));
+  }
   if (p === '/leads' && m === 'GET') return api({ ok: true, leads: await leads(env, q('status') || 'open') });
   if ((r = p.match(/^\/leads\/(\d+)$/)) && m === 'PUT') return done(await updateLead(env, me, +r[1], b));
   if (p === '/leads' && m === 'POST') return done(await addLead(env, me, b));
 
   // Appointments
-  if (p === '/appointments' && m === 'GET') return api({ ok: true, appointments: await listAppointments(env, q('from'), q('to'), q('patient')) });
+  if (p === '/appointments' && m === 'GET') {
+    const [appointments, ems] = await Promise.all([listAppointments(env, q('from'), q('to'), q('patient')), q('patient') ? [] : emsAppointments(env, q('from'), q('to'))]);
+    return api({ ok: true, appointments, ems });
+  }
   if (p === '/appointments' && m === 'POST') return done(await saveAppointment(env, me, null, b));
   if ((r = p.match(/^\/appointments\/(\d+)$/)) && m === 'PUT') return done(await saveAppointment(env, me, +r[1], b));
   if ((r = p.match(/^\/appointments\/(\d+)\/status$/)) && m === 'POST') return done(await setStatus(env, me, +r[1], b));
@@ -514,10 +529,9 @@ async function savePatient(env, me, id, b) {
   if (!id) {
     const same = (await env.DB.prepare("SELECT id, name, patient_no FROM cl_patients WHERE phone=? AND status='active'").bind(f.phone).all()).results || [];
     if (same.length && !b.confirm_shared_phone) return R(409, 'This mobile number is already used.', { matches: same });
-    const ems = await env.DB.prepare("SELECT id FROM ems_clients WHERE substr(replace(phone,' ',''),-10)=? AND status != 'deleted'").bind(f.phone).first();
     const leadId = parseInt(b.lead_id, 10) || null;
     const res = await env.DB.prepare('INSERT INTO cl_patients (name, phone, alt_phone, email, gender, dob, address, medical_alert, notes, source, lead_id, ems_client_id, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)')
-      .bind(f.name, f.phone, f.alt_phone, f.email, f.gender, f.dob, f.address, f.medical_alert, f.notes, f.source || (leadId ? 'website' : 'walk-in'), leadId, ems ? ems.id : null, me.id).run();
+      .bind(f.name, f.phone, f.alt_phone, f.email, f.gender, f.dob, f.address, f.medical_alert, f.notes, f.source || (leadId ? 'website' : 'walk-in'), leadId, null, me.id).run();
     id = res.meta.last_row_id;
     await env.DB.prepare('UPDATE cl_patients SET patient_no=? WHERE id=?').bind(patientNo(id), id).run();
     if (leadId) await env.DB.prepare("UPDATE leads SET status='contacted' WHERE id=? AND status='new'").bind(leadId).run();
@@ -527,6 +541,7 @@ async function savePatient(env, me, id, b) {
   await env.DB.prepare('UPDATE cl_patients SET name=?, phone=?, alt_phone=?, email=?, gender=?, dob=?, address=?, medical_alert=?, notes=? WHERE id=?')
     .bind(f.name, f.phone, f.alt_phone, f.email, f.gender, f.dob, f.address, f.medical_alert, f.notes, id).run();
   await audit(env, me, 'patient.edit', 'patient', id, f.name);
+  await emsRecheck(env, me, { patientId: id });
   return OK({ id });
 }
 async function balances(env, patientId) {
@@ -548,10 +563,10 @@ async function patientDetail(env, id) {
     balances(env, id),
   ]);
   const [ems, lead] = await Promise.all([
-    p.ems_client_id ? env.DB.prepare('SELECT id, name, status FROM ems_clients WHERE id=?').bind(p.ems_client_id).first() : null,
+    emsForPatient(env, p),
     p.lead_id ? env.DB.prepare('SELECT id, interest, concern, created_at, source FROM leads WHERE id=?').bind(p.lead_id).first() : null,
   ]);
-  return { patient: p, appointments: appts, invoices: invs, payments: pays, packages: pkgs, ...bal, ems_client: ems, lead };
+  return { patient: p, appointments: appts, invoices: invs, payments: pays, packages: pkgs, ...bal, ems_client: ems.client && ems.confirmed ? ems.client : null, ems, lead };
 }
 async function leads(env, status) {
   const where = status === 'all' ? '' : status === 'open' ? "WHERE l.status IN ('new','contacted')" : 'WHERE l.status=?';
@@ -690,15 +705,16 @@ async function invoiceDetail(env, id) {
 }
 // Used by treatment plans: a draft bill with the given lines. Returns the invoice id, or the
 // error from saveInvoice (e.g. a discount needing authorisation), in which case the draft is removed.
-export async function createInvoiceWithLines(env, me, patientId, lines, authoriser) {
+// `trusted` ({id, name}) is for server-side callers whose own rules already approved any discount (EMS packages).
+export async function createInvoiceWithLines(env, me, patientId, lines, authoriser, trusted) {
   const id = (await env.DB.prepare('INSERT INTO cl_invoices (patient_id, invoice_date, created_by) VALUES (?,?,?)').bind(patientId, today(), me.id).run()).meta.last_row_id;
-  const r = await saveInvoice(env, me, id, { lines, authoriser });
+  const r = await saveInvoice(env, me, id, { lines, authoriser }, trusted);
   if (r[0] !== 200) {
     await env.DB.prepare('DELETE FROM cl_invoice_lines WHERE invoice_id=?').bind(id).run();
     await env.DB.prepare('DELETE FROM cl_invoices WHERE id=?').bind(id).run();
     return r;
   }
-  await audit(env, me, 'invoice.draft', 'invoice', id, 'from treatment plan');
+  await audit(env, me, 'invoice.draft', 'invoice', id, trusted ? 'EMS package' : 'from treatment plan');
   return OK({ id });
 }
 async function createInvoice(env, me, b) {
@@ -724,7 +740,7 @@ function computeLine(src, item, pkg) {
   const qty = src.qty;
   let unit, kind, name, hsn = null, rate = 0, partner = null, parts = null;
   if (pkg) { unit = pkg.price; kind = 'package'; name = pkg.name; }
-  else { kind = item.kind; name = item.name; hsn = item.hsn_sac; rate = kind === 'passthrough' ? 0 : item.gst_rate; partner = item.partner; unit = item.price > 0 ? item.price : r2(src.unit_price); }
+  else { kind = item.kind; name = item.code === EMS_ITEM && src.label ? src.label : item.name; hsn = item.hsn_sac; rate = kind === 'passthrough' ? 0 : item.gst_rate; partner = item.partner; unit = item.price > 0 ? item.price : r2(src.unit_price); }
   const gross = r2(unit * qty);
   const discount = Math.min(gross, Math.max(0, r2(src.discount)));
   const net = r2(gross - discount);
@@ -745,7 +761,7 @@ function computeLine(src, item, pkg) {
   return { item_id: item ? item.id : null, package_def_id: pkg ? pkg.id : null, kind, name, hsn_sac: hsn, qty, unit_price: unit, discount, gst_rate: rate, taxable, exempt, cgst, sgst, total: r2(net + cgst + sgst), tax_parts: parts ? JSON.stringify(parts) : null, doctor_id: src.doctor_id || null, partner, gross };
 }
 
-async function saveInvoice(env, me, id, b) {
+async function saveInvoice(env, me, id, b, trusted) {
   const inv = await env.DB.prepare('SELECT * FROM cl_invoices WHERE id=?').bind(id).first();
   if (!inv) return R(404, 'Not found.');
   if (inv.status !== 'draft') return R(400, 'Only draft invoices can be changed.');
@@ -753,6 +769,7 @@ async function saveInvoice(env, me, id, b) {
     item_id: parseInt(l.item_id, 10) || null, package_def_id: parseInt(l.package_def_id, 10) || null,
     qty: Math.max(1, Math.min(999, parseInt(l.qty, 10) || 1)), unit_price: Number(l.unit_price) || 0,
     discount: Number(l.discount) || 0, discount_reason: clean(l.discount_reason, 120) || null, doctor_id: parseInt(l.doctor_id, 10) || null,
+    label: clean(l.label, 120) || null,
   }));
   const items = await itemMap(env, src.filter(l => l.item_id).map(l => l.item_id));
   const defs = new Map((await packageDefs(env)).map(d => [d.id, d]));
@@ -760,16 +777,23 @@ async function saveInvoice(env, me, id, b) {
   const { results: prevLines } = await env.DB.prepare('SELECT * FROM cl_invoice_lines WHERE invoice_id=?').bind(id).all();
   // Authoriser, if any line goes over the discount limit and the user can't authorise.
   const sets = await settings(env);
-  let authoriser = canAuthorise(me, sets) ? { id: me.id, name: me.name } : null;
+  let authoriser = trusted || (canAuthorise(me, sets) ? { id: me.id, name: me.name } : null);
   let authChecked = false;
   const rows = [];
   for (const l of src) {
     const item = l.item_id ? items.get(l.item_id) : null, pkg = l.package_def_id ? defs.get(l.package_def_id) : null;
     if (!item && !pkg) return R(400, 'One of the lines has no catalogue item.');
     if (item && !item.active) return R(400, `${item.name} is no longer active in the catalogue.`);
-    if (item && !item.sellable) return R(400, `${item.name} is for internal use and cannot be billed.`);
+    // The EMS package item is billed only from the EMS app, which sends the package name as the label.
+    if (item && !item.sellable && !(item.code === EMS_ITEM && l.label)) return R(400, item.code === EMS_ITEM ? 'Sell EMS packages from the EMS app; the bill appears here.' : `${item.name} is for internal use and cannot be billed.`);
     if (pkg && !pkg.active) return R(400, `${pkg.name} is no longer on sale.`);
     if (item && item.price <= 0 && !(l.unit_price > 0)) return R(400, `Enter the price for ${item.name} (its price varies).`);
+    if (item && item.code === EMS_ITEM && !trusted) {
+      // An EMS package line keeps the price, discount and name the EMS app gave it.
+      const prev = (prevLines || []).find(x => x.item_id === item.id);
+      if (!prev) return R(400, 'Sell EMS packages from the EMS app; the bill appears here.');
+      Object.assign(l, { qty: 1, unit_price: prev.unit_price, discount: prev.discount, discount_reason: prev.discount_reason, label: prev.name });
+    }
     const row = computeLine(l, item, pkg);
     row.discount_reason = l.discount_reason; row.discount_by = null; row.discount_by_name = null;
     if (row.discount > 0) {
@@ -810,12 +834,13 @@ async function deleteDraft(env, me, id) {
   await env.DB.prepare('DELETE FROM cl_invoice_lines WHERE invoice_id=?').bind(id).run();
   await env.DB.prepare('DELETE FROM cl_invoices WHERE id=?').bind(id).run();
   await env.DB.prepare('UPDATE cl_appointments SET invoice_id=NULL WHERE invoice_id=?').bind(id).run();
+  await env.DB.prepare('UPDATE ems_client_packages SET invoice_id=NULL WHERE invoice_id=?').bind(id).run();
   await audit(env, me, 'invoice.delete_draft', 'invoice', id);
   return OK();
 }
 // Invoice numbers continue the previous system's series: HW/<year the financial year starts>/00001 (e.g. HW/2026/00180 for FY 2026-27).
 const fyOf = d => { const y = +d.slice(0, 4), m = +d.slice(5, 7); return String(m >= 4 ? y : y - 1); };
-async function finalise(env, me, id) {
+export async function finalise(env, me, id) {
   const inv = await env.DB.prepare('SELECT * FROM cl_invoices WHERE id=?').bind(id).first();
   if (!inv) return R(404, 'Not found.');
   if (inv.status !== 'draft') return R(400, 'This invoice is already final.');
@@ -1009,7 +1034,8 @@ async function visitAlerts(env) {
   ]);
   const tag = (rows, kind) => (rows.results || []).map(x => ({ ...x, kind }));
   const unpaid = (u.results || []).map(withBalance);
-  return { now, checkin: tag(a, 'checkin'), overrun: tag(b, 'overrun'), unbilled: tag(c, 'unbilled'), unpaid, unpaid_total: r2(unpaid.reduce((s2, x) => s2 + x.balance, 0)) };
+  const ems = await emsAlerts(env, now, GRACE_MIN);
+  return { now, ...ems, checkin: tag(a, 'checkin'), overrun: tag(b, 'overrun'), unbilled: tag(c, 'unbilled'), unpaid, unpaid_total: r2(unpaid.reduce((s2, x) => s2 + x.balance, 0)) };
 }
 async function dayBook(env, d) {
   const [invs, pays] = await Promise.all([

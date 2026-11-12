@@ -262,7 +262,7 @@ export async function unitStats(env, ids, mon, monthStart) {
       (SELECT COUNT(*) FROM ems_appointments WHERE unit_id=? AND kind='session' AND status IN ('booked','attended') AND substr(start_at,1,10) BETWEEN ? AND date(?, '+6 days')) week_booked,
       (SELECT COUNT(*) FROM ems_appointments WHERE unit_id=? AND kind='session' AND status='attended' AND substr(start_at,1,10) BETWEEN ? AND date(?, '+6 days')) week_attended,
       (SELECT COUNT(*) FROM ems_clients WHERE home_unit_id=? AND status='active') clients,
-      (SELECT IFNULL(SUM(amount),0) FROM ems_payments WHERE unit_id=? AND paid_on >= ?) revenue`).bind(u.id, mon, mon, u.id, mon, mon, u.id, u.id, monthStart).first();
+      (SELECT IFNULL(SUM(amount),0) FROM ems_receipts WHERE unit_id=? AND paid_on >= ?) revenue`).bind(u.id, mon, mon, u.id, mon, mon, u.id, u.id, monthStart).first();
     out.push({ id: u.id, name: u.name, code: u.code, ownership: u.ownership, devices: u.devices, capacity, ...r, utilisation: capacity ? Math.round(r.week_booked / capacity * 100) : 0 });
   }
   return out;
