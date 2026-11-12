@@ -47,7 +47,7 @@ const OK = x => [200, null, x];
 export const EMS_ITEM = 'EMS-PKG';
 export const MODES = { cash: 'Cash', upi: 'UPI', card: 'Card (POS)', bank: 'Bank transfer', finance: 'Healthcare finance' };
 export const APPT_STATUS = ['booked', 'arrived', 'in_treatment', 'completed', 'no_show', 'cancelled'];
-const HOURS = { 0: ['10:00', '14:00'], 1: ['10:00', '20:00'], 2: ['10:00', '20:00'], 3: ['10:00', '20:00'], 4: ['10:00', '20:00'], 5: ['10:00', '20:00'], 6: ['10:00', '20:00'] };
+const HOURS = { 0: ['10:00', '16:00'], 1: ['10:00', '20:30'], 2: ['10:00', '20:30'], 3: ['10:00', '20:30'], 4: ['10:00', '20:30'], 5: ['10:00', '20:30'], 6: ['10:00', '20:30'] };
 const DEFAULT_DEPTS = [['Dental', '#2f6f8f'], ['Skin & Aesthetics', '#b0607a'], ['Hair', '#8a6a2f'], ['Wellness', '#34595e'], ['Body Contouring', '#6b4a8f'], ['General / Clinic', '#5e6d6c']];
 const SETTING_KEYS = { legal_name: 'HASWEL CARE Private Limited', trade_name: 'Hasta Wellness', gstin: '', address: '1st floor, Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram, Kerala 695582', state: 'Kerala (32)', phone: '+91 97784 58883', email: 'hello@hastawellnessclinic.com', invoice_prefix: 'HW', discount_limit_pct: '10', discount_approvers: '', invoice_footer: 'Thank you for choosing Hasta Wellness.',
   // Attendance & leave (src/hr.js)

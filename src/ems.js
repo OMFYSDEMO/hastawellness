@@ -21,7 +21,7 @@ import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmis
 const STAFF_TTL_H = 12;
 const CLIENT_TTL_D = 30;
 const SLOT_MIN = 30;
-const HOURS = { 0: ['10:00', '14:00'], 1: ['10:00', '20:00'], 2: ['10:00', '20:00'], 3: ['10:00', '20:00'], 4: ['10:00', '20:00'], 5: ['10:00', '20:00'], 6: ['10:00', '20:00'] };
+const HOURS = { 0: ['10:00', '16:00'], 1: ['10:00', '20:30'], 2: ['10:00', '20:30'], 3: ['10:00', '20:30'], 4: ['10:00', '20:30'], 5: ['10:00', '20:30'], 6: ['10:00', '20:30'] };
 const APPT_STATUSES = ['booked', 'attended', 'no_show', 'cancelled'];
 const APPT_KINDS = ['session', 'consultation', 'review', 'wm_consult'];
 const PAY_METHODS = ['UPI', 'Cash', 'Card', 'Bank transfer'];

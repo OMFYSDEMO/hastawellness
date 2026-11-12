@@ -99,7 +99,7 @@ ${ld.map(x => `<script type="application/ld+json">${JSON.stringify(x).replace(/<
 <main>${body}</main>
 <footer class="site"><div class="wrap"><div class="row">
 <div><a href="/"><img src="/img/hasta-wellness-logo.webp" alt="Hasta Wellness" width="170" height="61" loading="lazy"></a>
-<p>Dental · Skin · Hair | Kazhakkoottam, Trivandrum<br>Mon – Sat 10 am – 8 pm · Sun 10 am – 2 pm<br><a href="tel:${PHONE_TEL}">${PHONE_DISPLAY}</a></p>
+<p>Dental · Skin · Hair | Kazhakkoottam, Trivandrum<br>Mon – Sat 10 am – 8:30 pm · Sun 10 am – 4 pm<br><a href="tel:${PHONE_TEL}">${PHONE_DISPLAY}</a></p>
 <a class="social" href="https://www.instagram.com/hasta_wellness/" target="_blank" rel="noopener" aria-label="Hasta Wellness on Instagram (opens in a new tab)">${ig}<span>@hasta_wellness</span></a></div>
 <nav aria-label="Site">${nav}</nav></div>
 <div class="fine"><span>© ${new Date().getFullYear()} Hasta Wellness. All rights reserved. A venture of HASWEL CARE Private Limited.</span><span>Equal-opportunity employer.</span></div></div></footer>
@@ -196,7 +196,7 @@ ${j.responsibilities ? `<h2>What you’ll do</h2>${ul(j.responsibilities)}` : ''
 ${j.qualifications ? `<h2>Qualifications</h2>${ul(j.qualifications)}` : ''}
 ${j.requirements ? `<h2>What we’re looking for</h2>${ul(j.requirements)}` : ''}
 ${j.benefits ? `<h2>What we offer</h2>${ul(j.benefits)}` : ''}
-<h2>Where you’ll work</h2><p>Hasta Wellness, 1st floor, Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram 695582. Clinic hours: Monday–Saturday 10 am–8 pm, Sunday 10 am–2 pm (shifts on a rota).</p>
+<h2>Where you’ll work</h2><p>Hasta Wellness, 1st floor, Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram 695582. Clinic hours: Monday–Saturday 10 am–8:30 pm, Sunday 10 am–4 pm (shifts on a rota).</p>
 </div><div class="apply" id="apply"><div class="eyebrow">APPLY</div><h2 style="margin-top:12px">Apply for this role</h2>${form}</div></div></section>`;
   const ld = open ? [jobPostingLd(j, url.origin)] : [];
   return htmlResponse(url, chrome(url.origin, `${j.title} – Job in Kazhakkoottam, Trivandrum | Hasta Wellness`, `${j.title} vacancy at Hasta Wellness near Technopark, Kazhakkoottam. ${(j.summary || '').slice(0, 100)}`, `/careers/${j.slug}/`, body, ld));
