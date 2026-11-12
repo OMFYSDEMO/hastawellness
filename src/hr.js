@@ -123,7 +123,8 @@ export async function scanRoute(request, env, url, base, me, b) {
   const dist = Math.round(distanceM(clinic, { lat, lng }));
   if (acc > 250) return api({ ok: false, error: `Your phone's location is not precise enough (±${Math.round(acc)} m). Turn on precise location / GPS and try again.`, code: 'location' }, 400);
   if (dist > radius + Math.min(acc, 75)) return api({ ok: false, error: `You appear to be ${dist} m from the clinic. Clock-in only works at the clinic.`, code: 'far' }, 400);
-  const geo = JSON.stringify({ lat: r2(lat * 1e4) / 1e4, lng: r2(lng * 1e4) / 1e4, acc: Math.round(acc), dist });
+  // Only the distance from the clinic is kept — not the phone's coordinates.
+  const geo = JSON.stringify({ acc: Math.round(acc), dist });
   // 3. Toggle: open entry today → clock out; otherwise clock in. Ignore double scans within 2 minutes.
   const d = today(), now = nowSec();
   const open = await env.DB.prepare('SELECT * FROM cl_attendance WHERE staff_id=? AND day=? AND out_at IS NULL ORDER BY id DESC LIMIT 1').bind(staffId, d).first();

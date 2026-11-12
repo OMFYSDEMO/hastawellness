@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS cl_attendance (
   day TEXT NOT NULL,
   in_at TEXT NOT NULL,                          -- local (IST) YYYY-MM-DDTHH:MM:SS
   out_at TEXT,
-  in_geo TEXT, out_geo TEXT,                    -- JSON {lat,lng,acc,dist}
+  in_geo TEXT, out_geo TEXT,                    -- JSON {acc,dist}: distance from the clinic only
   source TEXT NOT NULL DEFAULT 'qr',            -- qr | manual
   note TEXT,
   edited_by INTEGER, edited_by_name TEXT, edited_reason TEXT,
