@@ -15,7 +15,7 @@ import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify, leadCha
 import * as AC from './academy.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED } from './packages.js';
-import { clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, createPatientFor } from './emslink.js';
+import { EMS_DUE, clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, createPatientFor } from './emslink.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
 
 const STAFF_TTL_H = 12;
@@ -474,7 +474,7 @@ async function packagesFor(env, clientId) {
     (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='attended') used,
     (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='booked') booked,
     (SELECT IFNULL(SUM(amount),0) FROM ems_receipts r WHERE r.client_package_id=cp.id) paid,
-    i.invoice_no, i.status invoice_status
+    i.invoice_no, i.status invoice_status, ${EMS_DUE} bill_due
     FROM ems_client_packages cp LEFT JOIN cl_invoices i ON i.id=cp.invoice_id WHERE cp.client_id=? ORDER BY cp.start_date, cp.id`).bind(clientId).all();
   const t = today();
   const use = await usage(env, (results || []).map(p => p.id));
@@ -486,7 +486,7 @@ async function packagesFor(env, clientId) {
     const reviews = u.review || 0, wm = u.wm_consult || 0;
     const usedS = Math.max(0, sessUsed), bookedS = Math.max(0, sessBooked);
     const remaining = Math.max(0, p.sessions_total - usedS);
-    const due = Math.max(0, p.price - p.discount);
+    const due = Math.max(0, p.bill_due); // with GST once billed in the clinic
     const reviews_left = Math.max(0, ent.reviews - reviews), wm_left = Math.max(0, ent.wm_consults - wm);
     let state = p.status;
     if (state === 'active') {
@@ -816,7 +816,7 @@ async function listPayments(env, url, sc) {
   const { results } = await env.DB.prepare(`SELECT p.*, c.name client_name, cp.name package_name, (SELECT name FROM ems_units u WHERE u.id=p.unit_id) unit_name FROM ems_receipts p
     LEFT JOIN ems_clients c ON c.id=p.client_id LEFT JOIN ems_client_packages cp ON cp.id=p.client_package_id
     WHERE p.paid_on BETWEEN ? AND ? AND p.unit_id IN (${sc.sql}) ORDER BY p.paid_on DESC, p.id DESC`).bind(from, to).all();
-  const out = await env.DB.prepare(`SELECT IFNULL(SUM(MAX(0, cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_receipts p WHERE p.client_package_id=cp.id),0) - 0.99)),0) due
+  const out = await env.DB.prepare(`SELECT IFNULL(SUM(CASE WHEN ${EMS_DUE} - IFNULL((SELECT SUM(amount) FROM ems_receipts p WHERE p.client_package_id=cp.id),0) >= 1 THEN ${EMS_DUE} - IFNULL((SELECT SUM(amount) FROM ems_receipts p WHERE p.client_package_id=cp.id),0) ELSE 0 END),0) due
     FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id WHERE c.status != 'deleted' AND cp.status != 'closed' AND IFNULL(cp.unit_id,1) IN (${sc.sql})`).first();
   return api({ ok: true, payments: results, from, to, outstanding: out ? out.due : 0 });
 }
@@ -1024,7 +1024,7 @@ async function dashboard(env, sc, admin) {
     q(`SELECT substr(start_at,1,10) d, COUNT(*) n FROM ems_appointments WHERE status='attended' AND kind='session' AND unit_id IN (${U}) AND substr(start_at,1,10) >= ? GROUP BY d`, addDays(mon, -49)).all(),
     q(`SELECT substr(paid_on,1,7) m, SUM(amount) n FROM ems_receipts WHERE unit_id IN (${U}) AND paid_on >= ? GROUP BY m`, addDays(monthStart, -160).slice(0, 8) + '01').all(),
     q(`SELECT COUNT(*) n FROM leads WHERE status='new' AND (interest LIKE '%EMS%' OR interest LIKE '%eight%' OR source='ems portal') AND (unit_id IS NULL OR unit_id IN (${U}))`).first(),
-    q(`SELECT IFNULL(SUM(MAX(0, cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_receipts p WHERE p.client_package_id=cp.id),0) - 0.99)),0) due
+    q(`SELECT IFNULL(SUM(CASE WHEN ${EMS_DUE} - IFNULL((SELECT SUM(amount) FROM ems_receipts p WHERE p.client_package_id=cp.id),0) >= 1 THEN ${EMS_DUE} - IFNULL((SELECT SUM(amount) FROM ems_receipts p WHERE p.client_package_id=cp.id),0) ELSE 0 END),0) due
        FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id WHERE cp.status != 'closed' AND IFNULL(cp.unit_id,1) IN (${U})`).first(),
   ]);
   const weeks = [];

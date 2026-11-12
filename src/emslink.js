@@ -25,6 +25,11 @@ const OK = x => [200, null, x];
 const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 const MODE_OF = { UPI: 'upi', Cash: 'cash', Card: 'card', 'Bank transfer': 'bank' };
 
+// What the client owes for an EMS package (alias cp): once billed, the clinic bill's EMS amount (with GST); before that, the EMS price.
+export const EMS_DUE = `(CASE WHEN cp.invoice_id IS NOT NULL AND IFNULL((SELECT status FROM cl_invoices WHERE id=cp.invoice_id), 'cancelled') <> 'cancelled'
+  THEN IFNULL((SELECT SUM(l.total) FROM cl_invoice_lines l JOIN cl_items it ON it.id=l.item_id AND it.code='EMS-PKG' WHERE l.invoice_id=cp.invoice_id), (SELECT total FROM cl_invoices WHERE id=cp.invoice_id))
+  ELSE cp.price - cp.discount END)`;
+
 const phonesOf = p => [last10(p.phone), last10(p.alt_phone)].filter(x => x.length === 10);
 const linkOk = (p, c) => !!(p && c && phonesOf(p).includes(last10(c.phone)));
 
@@ -59,14 +64,14 @@ export async function emsForPatient(env, p) {
   const out = { client, confirmed: !!(client && p.ems_link_at), phone_matches: linkOk(p, client), shared_phone: shared > 1, suggestions, packages: [], sessions: [] };
   if (client) {
     const [pk, se] = await env.DB.batch([
-      env.DB.prepare(`SELECT cp.id, cp.name, cp.sessions_total, cp.price, cp.discount, cp.start_date, cp.expiry_date, cp.status, cp.invoice_id, i.invoice_no, i.status invoice_status,
+      env.DB.prepare(`SELECT cp.id, cp.name, cp.sessions_total, cp.price, cp.discount, cp.start_date, cp.expiry_date, cp.status, cp.invoice_id, i.invoice_no, i.status invoice_status, ${EMS_DUE} due,
           (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='attended') used,
           (SELECT IFNULL(SUM(amount),0) FROM ems_receipts r WHERE r.client_package_id=cp.id) paid
         FROM ems_client_packages cp LEFT JOIN cl_invoices i ON i.id=cp.invoice_id WHERE cp.client_id=? ORDER BY cp.id DESC`).bind(client.id),
       env.DB.prepare(`SELECT a.id, a.kind, a.start_at, a.duration, a.status, u.name unit_name, s.name trainer_name FROM ems_appointments a
           LEFT JOIN ems_units u ON u.id=a.unit_id LEFT JOIN ems_staff s ON s.id=a.trainer_id WHERE a.client_id=? ORDER BY a.start_at DESC LIMIT 60`).bind(client.id),
     ]);
-    out.packages = (pk.results || []).map(x => { const due = x.price - x.discount; const bal = r2(due - x.paid); return { ...x, due, balance: bal < 1 ? 0 : bal }; });
+    out.packages = (pk.results || []).map(x => { const bal = r2(x.due - x.paid); return { ...x, paid: bal < 1 ? x.due : x.paid, balance: bal < 1 ? 0 : bal }; });
     out.sessions = se.results || [];
   }
   return out;
@@ -275,13 +280,13 @@ export async function emsAlerts(env, now, graceMin) {
   const stmts = [
     env.DB.prepare(`SELECT * FROM (${EMS_APPT} WHERE a.unit_id IN (${u.join(',') || 0}) AND a.status='booked' AND a.start_at >= ?) x
       WHERE strftime('%Y-%m-%dT%H:%M', x.start_at, '+' || (x.minutes + ?) || ' minutes') <= ? ORDER BY x.start_at`).bind(from, graceMin, now),
-    env.DB.prepare(`SELECT cp.id package_id, cp.name package_name, cp.price - cp.discount due, c.name client_name, i.id invoice_id, i.invoice_no, i.status invoice_status, i.total,
+    env.DB.prepare(`SELECT cp.id package_id, cp.name package_name, ${EMS_DUE} due, c.name client_name, i.id invoice_id, i.invoice_no, i.status invoice_status, i.total,
         p.name patient_name, p.patient_no,
         IFNULL((SELECT SUM(amount) FROM ems_receipts r WHERE r.client_package_id=cp.id),0) paid
       FROM ems_client_packages cp JOIN ems_clients c ON c.id=cp.client_id LEFT JOIN cl_invoices i ON i.id=cp.invoice_id
       LEFT JOIN cl_patients p ON p.ems_client_id=cp.client_id AND p.status='active'
       WHERE cp.status != 'closed' AND cp.price - cp.discount > 0 AND IFNULL(cp.unit_id,1) IN (${u.join(',') || 0}) AND cp.created_at >= ?
-        AND (i.id IS NULL OR i.status='draft' OR (i.status='final' AND cp.price - cp.discount - IFNULL((SELECT SUM(amount) FROM ems_receipts r WHERE r.client_package_id=cp.id),0) >= 1))
+        AND (i.id IS NULL OR i.status='draft' OR (i.status='final' AND ${EMS_DUE} - IFNULL((SELECT SUM(amount) FROM ems_receipts r WHERE r.client_package_id=cp.id),0) >= 1))
       ORDER BY cp.id`).bind(s.ems_billing_from || '2026-11-12'),
   ];
   const [a, b] = await env.DB.batch(stmts);
