@@ -914,7 +914,8 @@ async function recordPayment(env, me, b) {
   const amount = r2(b.amount), mode = MODES[b.mode] ? b.mode : null;
   if (!(amount > 0 && amount < 10000000)) return R(400, 'Enter the amount received.');
   if (!mode) return R(400, 'Choose how it was paid.');
-  const reference = clean(b.reference, 80), lender = clean(b.lender, 60);
+  // The finance company only applies to finance payments (the form's hidden field defaults to Fibe).
+  const reference = clean(b.reference, 80), lender = b.mode === 'finance' ? clean(b.lender, 60) : '';
   if (mode !== 'cash' && reference.length < 4) return R(400, mode === 'card' ? 'Enter the POS slip / approval number.' : mode === 'upi' ? 'Enter the UPI transaction reference (UTR).' : mode === 'finance' ? 'Enter the loan or disbursement reference.' : 'Enter the bank transfer reference.');
   if (mode === 'finance' && !lender) return R(400, 'Enter the finance company (for example, Fibe).');
   const paidOn = isDate(b.paid_on) && b.paid_on <= today() ? b.paid_on : today();
