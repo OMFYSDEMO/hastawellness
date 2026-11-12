@@ -1550,6 +1550,78 @@ function stockTabs(tab) {
   const T = [['stock', 'Stock'], ['orders', 'Purchase orders'], ['grn', 'Goods received'], ['suppliers', 'Suppliers'], ['purchases', 'Purchase report']];
   return `<nav class="tabs">${T.map(([k, l]) => `<a href="#/stock?tab=${k}" class="${k === tab ? 'on' : ''}" style="text-decoration:none">${l}</a>`).join('')}</nav>`;
 }
+
+/* ---------------- New product & batches ---------------- */
+const UNITS = ['piece', 'tube', 'bottle', 'jar', 'strip', 'tablet', 'capsule', 'box', 'pack', 'sachet', 'vial', 'ampoule', 'kit', 'ml', 'gm'];
+const lastDay = ym => { const [y, m] = ym.split('-').map(Number); return new Date(Date.UTC(y, m, 0)).toISOString().slice(0, 10); };
+const expState = d => !d ? '' : d < today() ? 'expired' : d <= addDays(today(), 60) ? 'soon' : d <= addDays(today(), 180) ? 'six' : 'ok';
+// Batch rows: batch number, expiry (month & year as printed on the pack), quantity, cost per unit.
+function batchEditor(host, o = {}) {
+  let rows = o.rows || [{ batch_no: '', exp: '', qty: '', unit_cost: o.cost ?? '' }];
+  const need = () => o.needBatch ? o.needBatch() : true;
+  const draw = () => {
+    const tot = rows.reduce((n, r) => n + (Number(r.qty) || 0), 0), val = rows.reduce((n, r) => n + (Number(r.qty) || 0) * (Number(r.unit_cost) || 0), 0);
+    host.innerHTML = `<table class="t batch-ed"><thead><tr><th>Batch no.${need() ? ' *' : ''}</th><th>Expiry (month / year)${need() ? ' *' : ''}</th><th class="n">Quantity *</th><th class="n">Cost / unit (₹)</th><th></th></tr></thead><tbody>
+      ${rows.map((r, i) => { const st = expState(r.exp ? lastDay(r.exp) : ''); return `<tr data-i="${i}">
+        <td><input class="in" data-k="batch_no" value="${esc(r.batch_no)}" maxlength="40" placeholder="e.g. B24K113" autocomplete="off" style="text-transform:uppercase"></td>
+        <td><input class="in" type="month" data-k="exp" value="${esc(r.exp)}" min="${today().slice(0, 7)}">${st === 'expired' ? '<div class="exp bad">Expired — do not add</div>' : st === 'soon' ? '<div class="exp warn">Expires within 60 days</div>' : st === 'six' ? '<div class="exp note">Expires within 6 months</div>' : ''}</td>
+        <td class="n"><input class="in" type="number" data-k="qty" value="${esc(r.qty)}" min="0" step="any" style="width:90px;text-align:right"></td>
+        <td class="n"><input class="in" type="number" data-k="unit_cost" value="${esc(r.unit_cost)}" min="0" step="0.01" style="width:110px;text-align:right" placeholder="excl. GST"></td>
+        <td class="n">${rows.length > 1 ? `<button type="button" class="btn sm quiet icon" data-rm="${i}" aria-label="Remove batch">${icon('x', 16)}</button>` : ''}</td></tr>`; }).join('')}</tbody></table>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-top:8px;flex-wrap:wrap"><button type="button" class="btn sm ghost" data-addb>${icon('plus', 15)}Add another batch</button>
+      <span class="small muted">${tot ? `Total <b>${qtyf(tot)}</b>${o.unit ? ' ' + esc(o.unit()) : ''}${val ? ` · value <b>${money(val)}</b>` : ''}` : 'Leave empty if there is no stock yet.'}</span></div>`;
+    host.querySelectorAll('[data-k]').forEach(x => { x.oninput = () => { rows[+x.closest('tr').dataset.i][x.dataset.k] = x.dataset.k === 'batch_no' ? x.value.toUpperCase() : x.value; }; x.onchange = draw; });
+    host.querySelectorAll('[data-rm]').forEach(b => b.onclick = () => { rows.splice(+b.dataset.rm, 1); draw(); });
+    host.querySelector('[data-addb]').onclick = () => { const last = rows[rows.length - 1] || {}; rows.push({ batch_no: '', exp: '', qty: '', unit_cost: last.unit_cost ?? o.cost ?? '' }); draw(); host.querySelector('tbody tr:last-child [data-k=batch_no]').focus(); };
+  };
+  draw();
+  return { rows: () => rows.filter(r => r.batch_no || r.exp || r.qty).map(r => ({ batch_no: r.batch_no.trim(), expiry: r.exp ? lastDay(r.exp) : '', qty: r.qty, unit_cost: r.unit_cost })), redraw: draw, setCost: c => { rows.forEach(r => { if (r.unit_cost === '' || r.unit_cost == null) r.unit_cost = c; }); } };
+}
+async function productModal(after) {
+  const [sups] = await Promise.all([suppliersList(), catalogue()]);
+  modal({ title: 'New product', wide: true,
+    body: `<form data-f class="stack" style="gap:16px">
+      <fieldset class="ffs wide"><legend>Product</legend>
+        <div class="grid2">${field('Product name *', inp('name', '', 'maxlength="160" placeholder="e.g. Cetaphil Gentle Skin Cleanser 125 ml"'))}${field('Code / SKU', inp('code', '', 'maxlength="40" placeholder="optional"'))}</div>
+        <div class="grid3">${field('Department', sel('dept_id', [['', '—'], ...B.departments.map(d => [d.id, d.name])], ''))}${field('Category', inp('category', '', 'maxlength="80" list="pcat" placeholder="e.g. Skin care retail"'))}${field('Sold by (unit)', inp('unit', '', 'maxlength="20" list="punits" placeholder="e.g. tube"'))}</div>
+        <datalist id="punits">${UNITS.map(u => `<option value="${u}">`).join('')}</datalist><datalist id="pcat">${[...new Set((CAT || []).filter(i => i.kind === 'product' && i.category).map(i => i.category))].slice(0, 60).map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+      </fieldset>
+      <fieldset class="ffs wide"><legend>Price and GST</legend>
+        <div class="grid3">${field('HSN code', inp('hsn_sac', '', 'maxlength="12" placeholder="e.g. 3304"'))}${field('GST rate', sel('gst_rate', [[0, '0% / exempt'], [5, '5%'], [12, '12%'], [18, '18%'], [28, '28%']], 18))}${field('MRP incl. GST (₹)', inp('mrp', '', 'type="number" min="0" step="0.01"'))}</div>
+        <div class="grid3">${field('Selling price excl. GST (₹) *', inp('price', '', 'type="number" min="0" step="0.01"'))}${field('Purchase cost per unit, excl. GST (₹)', inp('cost', '', 'type="number" min="0" step="0.01"'))}<div class="f"><span>&nbsp;</span><button type="button" class="btn sm ghost" data-frommrp>Work out price from MRP</button></div></div>
+        <p class="small" data-pricing style="margin:0"></p>
+        <div style="display:flex;gap:18px;flex-wrap:wrap"><label><input type="radio" name="sellable" value="1" checked> Sold to patients</label><label><input type="radio" name="sellable" value="0"> Internal use only (used in treatments, not billed)</label></div>
+      </fieldset>
+      <fieldset class="ffs wide"><legend>Stock control</legend>
+        <div class="chips"><label class="chip"><input type="checkbox" name="track_stock" checked>Keep stock</label><label class="chip"><input type="checkbox" name="track_batch" checked>Batch number &amp; expiry</label></div>
+        <div class="grid3">${field('Alert when stock falls to', inp('reorder_level', '', 'type="number" min="0" step="any" placeholder="e.g. 3"'))}${field('Usual order quantity', inp('reorder_qty', '', 'type="number" min="0" step="any"'))}${field('Usual supplier', sel('supplier_id', [['', '—'], ...sups.filter(x => x.active).map(x => [x.id, x.name])], ''))}</div>
+      </fieldset>
+      <fieldset class="ffs wide" data-openfs><legend>Opening stock on the shelf now</legend><p class="small muted" style="margin:0 0 8px">One row per batch — copy the batch number and expiry from the pack. New deliveries from a supplier go through <b>Receive goods</b> instead.</p><div data-batches></div></fieldset>
+    </form>`,
+    actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>Add product</button>',
+    onMount(el, close) {
+      const f = el.querySelector('[data-f]');
+      const ed = batchEditor(el.querySelector('[data-batches]'), { needBatch: () => f.track_batch.checked, unit: () => f.unit.value, cost: '' });
+      const pricing = () => {
+        const pr = Number(f.price.value), g = Number(f.gst_rate.value), c = Number(f.cost.value), mrp = Number(f.mrp.value);
+        const incl = pr ? pr * (1 + g / 100) : 0;
+        f.querySelector('[data-pricing]').innerHTML = pr ? `Patient pays <b>${money(incl)}</b> incl. ${g}% GST${mrp && incl > mrp + 0.5 ? ` — <b style="color:var(--alert)">more than the MRP ${money(mrp)}; this is not allowed</b>` : ''}${c ? ` · margin <b>${money(pr - c)}</b> per unit (${Math.round((pr - c) / pr * 100)}%)` : ''}` : '';
+      };
+      ['price', 'gst_rate', 'cost', 'mrp'].forEach(k => f[k].addEventListener('input', pricing));
+      f.cost.addEventListener('change', () => { ed.setCost(f.cost.value); ed.redraw(); });
+      f.querySelector('[data-frommrp]').onclick = () => { const mrp = Number(f.mrp.value); if (!mrp) return toast('Enter the MRP first.', true); f.price.value = (Math.floor(mrp / (1 + Number(f.gst_rate.value) / 100) * 100) / 100).toFixed(2); pricing(); };
+      const sync = () => { f.track_batch.disabled = !f.track_stock.checked; el.querySelector('[data-openfs]').hidden = !f.track_stock.checked; ed.redraw(); };
+      f.track_stock.onchange = sync; f.track_batch.onchange = () => ed.redraw();
+      const save = (btn, allow) => {
+        const v = formData(f);
+        const body = { ...v, sellable: v.sellable === '1', track_stock: f.track_stock.checked, track_batch: f.track_batch.checked, batches: f.track_stock.checked ? ed.rows() : [], allow_same_name: !!allow };
+        return busy(btn, () => api('/clinic/stock/products', { method: 'POST', body }), true).then(r => { close(); toast('Product added'); CAT = null; after && after(r.id); })
+          .catch(e => { if (e.data && e.data.code === 'same_name') { if (confirm(e.message + '\n\nAdd it as a separate product anyway?')) save(btn, true); } else toast(e.message, true); });
+      };
+      el.querySelector('[data-save]').onclick = e => save(e.currentTarget, false);
+    } });
+}
+
 async function viewStock(tab, q) {
   if (tab === 'orders') return viewPOList(q.get('s') || 'open');
   if (tab === 'grn') return viewGRNList();
@@ -1559,7 +1631,7 @@ async function viewStock(tab, q) {
   const d60 = addDays(today(), 60);
   let f = q.get('f') || 'all', s = '';
   MAIN.innerHTML = `<div class="head"><div><h1>Stock</h1><p>${items.filter(i => i.on_hand > 0).length} products in stock · value ${money(items.reduce((a, i) => a + i.value, 0))}</p></div>
-      <div class="acts" style="display:flex;gap:8px"><a class="btn ghost" href="#/grn/new">${icon('package', 18)}Receive goods</a><a class="btn gold" href="#/po/new">${icon('plus', 18)}New order</a></div></div>${stockTabs('stock')}
+      <div class="acts" style="display:flex;gap:8px">${canMgr() ? `<button class="btn ghost" data-newprod>${icon('plus', 18)}New product</button>` : ''}<a class="btn ghost" href="#/grn/new">${icon('package', 18)}Receive goods</a><a class="btn gold" href="#/po/new">${icon('plus', 18)}New order</a></div></div>${stockTabs('stock')}
     <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px"><input class="in" data-q placeholder="Search product or code" style="max-width:300px">
       <div class="seg">${[['all', 'All'], ['low', `Low / out (${alerts.low})`], ['exp', `Expiring ≤ 60 days (${alerts.expiring})`], ['neg', 'Below zero']].map(([k, l]) => `<button data-f="${k}" class="${k === f ? 'on' : ''}">${l}</button>`).join('')}</div></div>
     <section class="panel flush" data-list></section>`;
@@ -1576,6 +1648,7 @@ async function viewStock(tab, q) {
     MAIN.querySelectorAll('[data-id]').forEach(r => r.onclick = () => stockItemModal(+r.dataset.id, () => route()));
   };
   MAIN.querySelector('[data-q]').oninput = e => { s = e.target.value; draw(); };
+  const np = MAIN.querySelector('[data-newprod]'); if (np) np.onclick = () => productModal(id => { route(); setTimeout(() => stockItemModal(id, () => route()), 400); });
   MAIN.querySelectorAll('[data-f]').forEach(b => b.onclick = () => { f = b.dataset.f; MAIN.querySelectorAll('[data-f]').forEach(x => x.classList.toggle('on', x === b)); draw(); });
   draw();
 }
@@ -1584,8 +1657,8 @@ async function stockItemModal(id, after) {
   const sups = await suppliersList();
   const KIND = { opening: 'Opening stock', grn: 'Received', sale: 'Sold', sale_cancel: 'Sale cancelled', use: 'Used in treatment', adjust: 'Adjustment' };
   modal({ title: it.name, wide: true, body: `<div class="kpis" style="margin-bottom:14px"><div class="kpi"><div class="l">On hand</div><div class="v">${qtyf(it.on_hand)}</div><div class="s">${esc(it.unit || '')}</div></div><div class="kpi"><div class="l">Average cost</div><div class="v money" style="font-size:20px">${money(it.avg_cost ?? it.cost ?? 0)}</div><div class="s">last purchase ${money(it.cost || 0)}</div></div><div class="kpi"><div class="l">Selling price</div><div class="v money" style="font-size:20px">${it.sellable ? money(it.price) : '—'}</div><div class="s">${it.sellable ? `+ ${it.gst_rate}% GST` : 'internal use'}</div></div></div>
-      ${d.batches.length ? `<h4 style="margin:6px 0 8px">Batches</h4><table class="t" style="margin-bottom:14px"><thead><tr><th>Batch</th><th>Expiry</th><th class="n">Left</th></tr></thead><tbody>${d.batches.map(b => `<tr><td>${esc(b.batch_no || '—')}</td><td${b.expiry && b.expiry <= addDays(today(), 60) ? ' style="color:var(--alert);font-weight:600"' : ''}>${b.expiry ? esc(fDate(b.expiry)) : '—'}</td><td class="n">${qtyf(b.qty_left)}</td></tr>`).join('')}</tbody></table>` : ''}
-      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><button class="btn sm ghost" data-use>${icon('stethoscope', 15)}Use in treatment</button>${canMgr() ? `<button class="btn sm ghost" data-adj>${icon('pencil', 15)}Adjust stock</button><button class="btn sm quiet" data-set>${icon('settings', 15)}Stock settings</button>` : ''}</div>
+      ${d.batches.length ? `<h4 style="margin:6px 0 8px">Batches</h4><table class="t" style="margin-bottom:14px"><thead><tr><th>Batch</th><th>Expiry</th><th class="n">Left</th></tr></thead><tbody>${d.batches.map(b => { const st = expState(b.expiry); return `<tr><td><b>${esc(b.batch_no || '—')}</b></td><td${st === 'expired' || st === 'soon' ? ' style="color:var(--alert);font-weight:600"' : ''}>${b.expiry ? esc(fDate(b.expiry)) : '—'}${st === 'expired' ? ' · expired' : st === 'soon' ? ' · within 60 days' : ''}</td><td class="n">${qtyf(b.qty_left)}</td></tr>`; }).join('')}</tbody></table>` : ''}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px"><button class="btn sm ghost" data-use>${icon('stethoscope', 15)}Use in treatment</button>${canMgr() ? `<button class="btn sm gold" data-addstock>${icon('plus', 15)}Add stock (batch &amp; expiry)</button><button class="btn sm ghost" data-adj>${icon('pencil', 15)}Adjust stock</button><button class="btn sm quiet" data-set>${icon('settings', 15)}Stock settings</button>` : ''}</div>
       <div data-form></div>
       <h4 style="margin:10px 0 8px">Movements</h4>${d.moves.length ? `<table class="t"><thead><tr><th>Date</th><th>What</th><th class="n">Qty</th><th>Batch</th><th>By</th></tr></thead><tbody>${d.moves.map(m => `<tr><td class="small">${esc(fDate(m.created_at.slice(0, 10)))}</td><td class="small">${esc(KIND[m.kind] || m.kind)}${m.ref_no ? ' · ' + esc(m.ref_no) : ''}${m.reason ? `<div class="muted">${esc(m.reason)}</div>` : ''}</td><td class="n" style="font-weight:700;color:${m.qty < 0 ? 'var(--alert)' : 'var(--teal-ink)'}">${m.qty > 0 ? '+' : ''}${qtyf(m.qty)}</td><td class="small">${esc(m.batch_no || '')}</td><td class="small">${esc(m.staff_name || '')}</td></tr>`).join('')}</tbody></table>` : '<p class="small muted">No movements yet.</p>'}`,
     actions: '<button class="btn ghost" data-close>Close</button>',
@@ -1598,6 +1671,12 @@ async function stockItemModal(id, after) {
         form.querySelector('[data-go]').onclick = e => { const v = formData(form.querySelector('[data-f]')); submit(e.target, { kind: 'use', qty: -Math.abs(Number(v.qty)), batch_id: v.batch_id, reason: v.reason }); };
       };
       if (canMgr()) {
+        el.querySelector('[data-addstock]').onclick = () => {
+          form.innerHTML = `<section class="panel" style="margin-bottom:12px"><form data-f class="stack" style="gap:10px"><div class="grid2">${field('Where is it from?', sel('why', [['opening', 'Opening stock (already on the shelf)'], ['count', 'Found in a physical count'], ['sample', 'Free sample / bonus from supplier'], ['return', 'Returned by a patient, unopened'], ['other', 'Other']], 'opening'))}${field('Note', inp('note', '', 'maxlength="150"'))}</div><div data-batches></div></form>
+            <p class="small muted" style="margin:8px 0 0">Bought from a supplier? Use <a href="#/grn/new">Receive goods</a> so the purchase is recorded.</p><button class="btn sm gold" data-go style="margin-top:10px">Add to stock</button></section>`;
+          const ed = batchEditor(form.querySelector('[data-batches]'), { needBatch: () => !!it.track_batch, unit: () => it.unit || '', cost: it.avg_cost ?? it.cost ?? '' });
+          form.querySelector('[data-go]').onclick = e => { const v = formData(form.querySelector('[data-f]')); busy(e.target, () => api(`/clinic/stock/${id}/batches`, { method: 'POST', body: { why: v.why, note: v.note, batches: ed.rows() } }), true).then(() => { close(); toast('Stock added'); after && after(); }).catch(er => toast(er.message, true)); };
+        };
         el.querySelector('[data-adj]').onclick = () => {
           form.innerHTML = `<section class="panel" style="margin-bottom:12px"><form data-f class="stack" style="gap:10px"><div class="grid2">${field('Change', sel('dir', [['-', 'Remove stock'], ['+', 'Add stock']], '-'))}${field('Quantity', inp('qty', '', 'type="number" min="0" step="any"'))}</div>${bsel}
             ${field('Reason', sel('why', [['Physical count correction', 'Physical count correction'], ['Damaged', 'Damaged'], ['Expired', 'Expired'], ['Sample / free issue', 'Sample / free issue'], ['Other', 'Other']], 'Physical count correction'))}${field('Note', inp('note', '', 'maxlength="150"'))}</form><button class="btn sm" data-go style="margin-top:10px">Save adjustment</button></section>`;

@@ -116,17 +116,17 @@ function shell(base) {
 <title>Hasta Clinic</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=8">
-<link rel="modulepreload" href="/clinic/app.js?v=14"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
+<link rel="modulepreload" href="/clinic/app.js?v=15"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=14"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=15"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
 function kioskShell(base) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><meta name="ems-base" content="${h(base)}"><title>Staff attendance · Hasta</title>
-<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=8">
+<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
 </head><body class="kiosk-body"><div id="kiosk" class="kiosk"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
 <script type="module" src="/clinic/kiosk.js?v=1"></script></body></html>`;
 }
@@ -357,7 +357,7 @@ async function catalogue(env, all) {
   const { results } = await env.DB.prepare(`SELECT i.*, d.name dept_name FROM cl_items i LEFT JOIN cl_departments d ON d.id=i.dept_id ${all ? '' : 'WHERE i.active=1'} ORDER BY d.id, i.category, i.name`).all();
   return results || [];
 }
-function itemFields(b) {
+export function itemFields(b) {
   const f = {
     code: clean(b.code, 40) || null, name: clean(b.name, 160), dept_id: parseInt(b.dept_id, 10) || null, category: clean(b.category, 80) || null,
     kind: KINDS.includes(b.kind) ? b.kind : 'service', price: Number(b.price), gst_rate: Number(b.gst_rate),

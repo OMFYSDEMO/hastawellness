@@ -5,7 +5,7 @@
 // Stock on hand = SUM(cl_stock_moves.qty). Batches are used first-expiry-first-out when stock goes out.
 import { PDFDocument, StandardFonts, rgb } from './vendor/pdf-lib.esm.min.js';
 import { json, clean, nz } from './util.js';
-import { settings } from './clinic.js';
+import { settings, itemFields } from './clinic.js';
 
 const IST = 330 * 60000;
 const today = () => new Date(Date.now() + IST).toISOString().slice(0, 10);
@@ -46,6 +46,8 @@ export async function stockRoute(request, env, me, p, m, b, q) {
   if (p === '/stock' && m === 'GET') { const [items, alerts] = await Promise.all([stockList(env), stockAlerts(env)]); return api({ ok: true, items, alerts }); }
   if ((r = p.match(/^\/stock\/(\d+)$/)) && m === 'GET') { const d = await itemStock(env, +r[1]); return d ? api({ ok: true, ...d }) : api({ ok: false, error: 'Not found' }, 404); }
   if ((r = p.match(/^\/stock\/(\d+)\/settings$/)) && m === 'PUT') { if (!canManage(me)) return deny(); return done(await saveStockSettings(env, me, +r[1], b)); }
+  if (p === '/stock/products' && m === 'POST') { if (!canManage(me)) return deny(); return done(await newProduct(env, me, b)); }
+  if ((r = p.match(/^\/stock\/(\d+)\/batches$/)) && m === 'POST') { if (!canManage(me)) return deny(); return done(await addBatches(env, me, +r[1], b)); }
   if (p === '/stock/move' && m === 'POST') { if (b.kind !== 'use' && !canManage(me)) return deny(); return done(await manualMove(env, me, b)); }
 
   if (p === '/pos' && m === 'GET') return api({ ok: true, pos: await listPOs(env, q('status')) });
@@ -197,6 +199,59 @@ async function putIn(env, me, itemId, qty, unitCost, kind, refType, refId, reaso
   await env.DB.prepare('UPDATE cl_items SET avg_cost=?, track_stock=1 WHERE id=?').bind(avg == null ? null : Math.round(avg * 10000) / 10000, itemId).run();
   return batchId;
 }
+// Batch rows from the UI: [{batch_no, expiry, qty, unit_cost}]. Products that track batches need a batch number
+// and expiry on every row; an expired batch is refused (it should not go into saleable stock).
+function readBatches(rows, needBatch) {
+  const list = (Array.isArray(rows) ? rows : []).slice(0, 30).map(x => ({ batch_no: clean(x.batch_no, 40).toUpperCase(), expiry: isDate(x.expiry) ? x.expiry : null, qty: r3(x.qty), unit_cost: x.unit_cost === '' || x.unit_cost == null ? null : r2(x.unit_cost) }))
+    .filter(x => x.batch_no || x.expiry || x.qty);
+  for (const [i, x] of list.entries()) {
+    const n = list.length > 1 ? ` (row ${i + 1})` : '';
+    if (!(x.qty > 0)) return [`Enter the quantity${n}.`];
+    if (needBatch && !x.batch_no) return [`Enter the batch number${n} — it is printed on the pack.`];
+    if (needBatch && !x.expiry) return [`Enter the expiry date${n}.`];
+    if (x.expiry && x.expiry < today()) return [`Batch ${x.batch_no || ''}${n} has already expired (${x.expiry}). Do not add expired stock.`];
+    if (x.unit_cost != null && !(x.unit_cost >= 0)) return [`Check the cost${n}.`];
+  }
+  return [null, list];
+}
+
+// A new product with its stock settings and opening batches, in one step.
+async function newProduct(env, me, b) {
+  const [f, err] = itemFields({ ...b, kind: 'product', active: 1 });
+  if (err) return R(400, err);
+  if (f.code && await env.DB.prepare('SELECT 1 FROM cl_items WHERE code=?').bind(f.code).first()) return R(400, 'Another item already uses that code.');
+  const dup = await env.DB.prepare("SELECT code FROM cl_items WHERE lower(name)=lower(?) AND kind='product' AND active=1").bind(f.name).first();
+  if (dup && !b.allow_same_name) return R(409, `A product called "${f.name}" already exists${dup.code ? ` (${dup.code})` : ''}. Add stock to it from the Stock list instead.`, { code: 'same_name' });
+  const trackBatch = b.track_batch === false ? 0 : 1, trackStock = b.track_stock === false ? 0 : 1;
+  const [berr, batches] = readBatches(b.batches, trackBatch && trackStock);
+  if (berr) return R(400, berr);
+  const lvl = b.reorder_level === '' || b.reorder_level == null ? null : num(b.reorder_level), rq = b.reorder_qty === '' || b.reorder_qty == null ? null : num(b.reorder_qty);
+  if ((lvl != null && !(lvl >= 0)) || (rq != null && !(rq >= 0))) return R(400, 'Reorder level and quantity must be 0 or more.');
+  const res = await env.DB.prepare(`INSERT INTO cl_items (code, name, dept_id, category, kind, price, gst_rate, hsn_sac, cost, active, notes, sellable, unit, mrp, track_stock, track_batch, reorder_level, reorder_qty, supplier_id)
+      VALUES (?,?,?,?, 'product', ?,?,?,?,1,?,?,?,?,?,?,?,?,?)`)
+    .bind(f.code, f.name, f.dept_id, f.category, f.price, f.gst_rate, f.hsn_sac, f.cost, f.notes, f.sellable, f.unit, f.mrp, trackStock, trackBatch, lvl, rq, parseInt(b.supplier_id, 10) || null).run();
+  const id = res.meta.last_row_id;
+  for (const x of batches) await putIn(env, me, id, x.qty, x.unit_cost ?? f.cost ?? null, 'opening', null, null, 'Opening stock (new product)', x);
+  await audit(env, me, 'item.add', 'item', id, `${f.name} (product) ₹${f.price} GST ${f.gst_rate}%${batches.length ? ` · opening ${batches.reduce((n, x) => n + x.qty, 0)} in ${batches.length} batch(es)` : ''}`);
+  return OK({ id });
+}
+
+// Stock coming in outside a purchase (opening stock, found in a count, free samples): one or more batches.
+async function addBatches(env, me, itemId, b) {
+  const item = await env.DB.prepare("SELECT id, name, kind, track_batch, cost, avg_cost FROM cl_items WHERE id=?").bind(itemId).first();
+  if (!item || item.kind !== 'product') return R(404, 'Product not found.');
+  const [berr, batches] = readBatches(b.batches, !!item.track_batch);
+  if (berr) return R(400, berr);
+  if (!batches.length) return R(400, 'Add at least one batch with a quantity.');
+  const why = ['opening', 'count', 'sample', 'return', 'other'].includes(b.why) ? b.why : 'other';
+  const label = { opening: 'Opening stock', count: 'Found in physical count', sample: 'Free sample / bonus received', return: 'Returned by patient (unopened)', other: 'Other' }[why];
+  const reason = [label, clean(b.note, 150)].filter(Boolean).join(' — ');
+  if (why === 'other' && clean(b.note, 150).length < 4) return R(400, 'Say where this stock came from.');
+  for (const x of batches) await putIn(env, me, itemId, x.qty, x.unit_cost ?? item.avg_cost ?? item.cost ?? null, why === 'opening' ? 'opening' : 'adjust', null, null, reason, x);
+  await audit(env, me, 'stock.add', 'item', itemId, `${batches.reduce((n, x) => n + x.qty, 0)} in ${batches.length} batch(es) · ${reason}`);
+  return OK();
+}
+
 async function manualMove(env, me, b) {
   const itemId = parseInt(b.item_id, 10), qty = r3(b.qty), kind = b.kind === 'use' ? 'use' : 'adjust';
   const item = await env.DB.prepare("SELECT id, name, kind FROM cl_items WHERE id=?").bind(itemId).first();
