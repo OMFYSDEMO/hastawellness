@@ -17,6 +17,7 @@ import { PDFDocument, StandardFonts, rgb } from './vendor/pdf-lib.esm.min.js';
 import qrcode from './vendor/qrcode.js';
 import { json, clean, nz, sha256 } from './util.js';
 import { settings } from './clinic.js';
+import { signerFor, issueGenerated } from './docs.js';
 
 const IST = 330 * 60000;
 const today = () => new Date(Date.now() + IST).toISOString().slice(0, 10);
@@ -296,9 +297,11 @@ async function saveEntry(env, me, id, b) {
 }
 
 /* ---------------- absences → warning letter ---------------- */
-async function confirmAbsences(env, me, b) {
+async function confirmAbsences(env, me, b, request) {
   const staffId = Number(b.staff_id), days = [...new Set((b.days || []).filter(isDate))].sort();
   if (!staffId || !days.length) return R(400, 'Choose the absent days.');
+  const [sst, serr, sig] = await signerFor(env, me, request, b.sign);
+  if (sst !== 200) return R(sst, serr);
   const months = [...new Set(days.map(d => d.slice(0, 7)))];
   for (const m of months) {
     const { rows } = await monthData(env, m, [staffId]);
@@ -312,12 +315,19 @@ async function confirmAbsences(env, me, b) {
   const lid = r.meta.last_row_id;
   await env.DB.batch(days.map(d => env.DB.prepare('INSERT INTO cl_absences (staff_id, day, letter_id, confirmed_by, confirmed_by_name, confirmed_at, note) VALUES (?,?,?,?,?,?,?) ON CONFLICT(staff_id, day) DO UPDATE SET letter_id=excluded.letter_id, confirmed_by=excluded.confirmed_by, confirmed_by_name=excluded.confirmed_by_name, confirmed_at=excluded.confirmed_at').bind(staffId, d, lid, me.id, me.name, nowIso(), nz(clean(b.note, 300)))));
   await audit(env, me, 'absence.warning', 'warning', lid, `${no} staff ${staffId}: ${days.join(', ')}`);
-  return OK({ id: lid, letter_no: no });
+  // The letter goes to the staff member's documents to acknowledge within 3 days (or dispute).
+  const bytes = await warningBytes(env, lid, sig);
+  const doc = await issueGenerated(env, me, { kind: 'warning', ref_no: no, title: `Warning letter — unauthorised absence (${days.map(fd).join(', ')})`, body: null, bytes, file_name: `${no.replace(/\//g, '-')}.pdf`,
+    staff_ids: [staffId], due_date: addDays(today(), 3), source: 'warning', source_id: lid, sig });
+  await env.DB.prepare('UPDATE cl_warnings SET doc_id=? WHERE id=?').bind(doc.id, lid).run();
+  return OK({ id: lid, letter_no: no, doc_id: doc.id });
 }
 
 /* ---------------- payroll ---------------- */
-async function finalisePayroll(env, me, month) {
+async function finalisePayroll(env, me, month, sign, request) {
   if (!isMonth(month)) return R(400, 'Choose the month.');
+  const [sst, serr, sig] = await signerFor(env, me, request, sign);
+  if (sst !== 200) return R(sst, serr);
   if (month >= today().slice(0, 7)) return R(400, 'A month can be finalised once it has ended.');
   const done1 = await env.DB.prepare('SELECT COUNT(*) n FROM cl_payroll WHERE month=?').bind(month).first();
   if (done1.n) return R(400, 'This month is already finalised.');
@@ -326,7 +336,16 @@ async function finalisePayroll(env, me, month) {
   if (issues.length) return R(400, 'Sort these out first: ' + issues.join('; ') + '.', { issues });
   await env.DB.batch(rows.map(r => env.DB.prepare('INSERT INTO cl_payroll (month, staff_id, data, net, finalised_by, finalised_by_name) VALUES (?,?,?,?,?,?)').bind(month, r.staff_id, JSON.stringify({ name: r.name, ...r.pay, days: r.days.map(d => ({ day: d.day, status: d.status, kind: d.kind, minutes: d.minutes, first_in: d.first_in, late: d.late })) }), r.pay.net, me.id, me.name)));
   await audit(env, me, 'payroll.finalise', 'payroll', null, `${month}: ${rows.length} staff, ₹${rows.reduce((n, r) => n + r.pay.net, 0)}`);
-  return OK();
+  // Each payslip goes to the staff member's documents to acknowledge (or dispute) within 7 days.
+  const { results: fin } = await env.DB.prepare('SELECT p.id, p.staff_id, s.name FROM cl_payroll p JOIN ems_staff s ON s.id=p.staff_id WHERE p.month=?').bind(month).all();
+  let sent = 0;
+  for (const r of fin || []) {
+    const bytes = await payslipBytes(env, month, r.staff_id, sig);
+    if (!bytes) continue;
+    await issueGenerated(env, me, { kind: 'payslip', title: `Payslip — ${fm(month)} — ${r.name}`, body: null, bytes, file_name: `payslip-${month}.pdf`, staff_ids: [r.staff_id], due_date: addDays(today(), 7), source: 'payroll', source_id: r.id, sig });
+    sent++;
+  }
+  return OK({ payslips: sent });
 }
 
 /* ---------------- PDFs ---------------- */
@@ -350,6 +369,18 @@ export async function pdfKit(s) {
 export const pdfResponse = (bytes, name) => new Response(bytes, { headers: { ...HEADERS, 'content-type': 'application/pdf', 'content-disposition': `inline; filename="${name}"` } });
 
 async function warningPdf(env, id) {
+  const w = await env.DB.prepare('SELECT doc_id, letter_no FROM cl_warnings WHERE id=?').bind(id).first();
+  if (!w) return null;
+  // Letters issued as signed documents: serve exactly the PDF that was signed.
+  if (w.doc_id && env.CVS) {
+    const d = await env.DB.prepare('SELECT file_key FROM cl_docs WHERE id=?').bind(w.doc_id).first();
+    const obj = d && d.file_key ? await env.CVS.get(d.file_key) : null;
+    if (obj) return pdfResponse(await obj.arrayBuffer(), `${w.letter_no.replace(/\//g, '-')}.pdf`);
+  }
+  return pdfResponse(await warningBytes(env, id, null), `${w.letter_no.replace(/\//g, '-')}.pdf`);
+}
+const fdt = iso => new Date(Date.parse(iso) + IST).toISOString().replace('T', ' ').slice(0, 16) + ' IST';
+async function warningBytes(env, id, sig) {
   const w = await env.DB.prepare('SELECT w.*, s.name staff_name FROM cl_warnings w JOIN ems_staff s ON s.id=w.staff_id WHERE w.id=?').bind(id).first();
   if (!w) return null;
   const s = await settings(env), k = await pdfKit(s), days = parse(w.days, []);
@@ -366,13 +397,23 @@ async function warningPdf(env, id) {
   if (w.body) { k.y -= 6; k.wrap(w.body); }
   k.y -= 6;
   k.wrap('If you believe this record is wrong, please speak to the Operations Head within 3 working days of receiving this letter.');
-  k.y -= 30; k.text(`For ${s.legal_name || 'HASWEL CARE Private Limited'}`, k.L, 10); k.y -= 44;
-  k.text('Authorised signatory', k.L, 10, k.bold); k.y -= 13; k.text(`Issued by ${w.issued_by_name}`, k.L, 8.5, k.reg, k.muted);
-  k.y -= 60; k.text('Received by (employee signature and date): ____________________________', k.L, 9.5);
-  return pdfResponse(await k.pdf.save(), `${w.letter_no.replace(/\//g, '-')}.pdf`);
+  k.y -= 30; k.text(`For ${s.legal_name || 'HASWEL CARE Private Limited'}`, k.L, 10);
+  if (sig) {
+    k.y -= 20; k.text(sig.name, k.L, 12, k.bold); k.y -= 13; k.text(sig.title || 'Authorised signatory', k.L, 9.5); k.y -= 12;
+    k.text(`Electronically signed in the Hasta Clinic app on ${fdt(sig.at)}`, k.L, 8, k.reg, k.muted);
+    k.y -= 36; k.wrap('Employee acknowledgement: this letter is sent to you in the Hasta Clinic app (My documents). Please read it and acknowledge it there within 3 days. If you disagree with it, choose "I disagree" and give your reasons; your response is kept with this letter.', 8.5, k.reg, k.L, k.W, 11);
+  } else {
+    k.y -= 44; k.text('Authorised signatory', k.L, 10, k.bold); k.y -= 13; k.text(`Issued by ${w.issued_by_name}`, k.L, 8.5, k.reg, k.muted);
+    k.y -= 60; k.text('Received by (employee signature and date): ____________________________', k.L, 9.5);
+  }
+  return await k.pdf.save();
 }
 
-async function payrollPdf(env, month, staffId) {
+async function payslipBytes(env, month, staffId, sig) {
+  const res = await payrollPdf(env, month, staffId, sig);
+  return res ? new Uint8Array(await res.arrayBuffer()) : null;
+}
+async function payrollPdf(env, month, staffId, sig) {
   const fin = await env.DB.prepare('SELECT * FROM cl_payroll WHERE month=? ORDER BY net DESC').bind(month).all();
   let rows = (fin.results || []).map(r => ({ staff_id: r.staff_id, ...parse(r.data, {}), final: true, finalised_by_name: r.finalised_by_name }));
   if (!rows.length) rows = (await monthData(env, month)).rows.map(r => ({ staff_id: r.staff_id, name: r.name, ...r.pay, final: false }));
@@ -400,6 +441,7 @@ async function payrollPdf(env, month, staffId) {
     k.y -= 6; k.page.drawLine({ start: { x: k.L, y: k.y + 10 }, end: { x: k.L + k.W, y: k.y + 10 }, thickness: 0.5, color: k.muted });
     line('Net pay (before PF / ESI / TDS, if any)', rs(r.net), k.bold);
     k.y -= 30; k.wrap('Pay is pro-rata: hourly rate = monthly salary ÷ contract hours. Weekly off and clinic holidays are paid. Hours beyond contract are not paid as overtime.', 8.5, k.reg);
+    if (sig) { k.y -= 16; k.text(`Approved and electronically signed by ${sig.name}${sig.title ? ', ' + sig.title : ''} on ${fdt(sig.at)}`, k.L, 8.5, k.reg, k.muted); k.y -= 12; k.wrap('Please acknowledge this payslip in the Hasta Clinic app (My documents) within 7 days. If something is wrong, choose "I disagree" and say what.', 8.5, k.reg); }
     return pdfResponse(await k.pdf.save(), `payslip-${month}-${r.name.replace(/\W+/g, '-')}.pdf`);
   }
   k.text(`Staff pay — ${fm(month)}`, k.L, 15, k.bold); k.y -= 16; k.text(rows[0].final ? `Finalised by ${rows[0].finalised_by_name}` : 'DRAFT — month not finalised; figures may change', k.L, 9, k.reg, k.muted); k.y -= 26;
@@ -426,7 +468,7 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
     const prof = await env.DB.prepare('SELECT * FROM cl_staff_pay WHERE staff_id=?').bind(me.id).first();
     const [lv, wr] = await env.DB.batch([
       env.DB.prepare('SELECT * FROM cl_leave WHERE staff_id=? ORDER BY from_date DESC LIMIT 40').bind(me.id),
-      env.DB.prepare('SELECT id, letter_no, days, issued_at FROM cl_warnings WHERE staff_id=? ORDER BY id DESC').bind(me.id),
+      env.DB.prepare('SELECT id, letter_no, days, issued_at, doc_id FROM cl_warnings WHERE staff_id=? ORDER BY id DESC').bind(me.id),
     ]);
     let days = null, summary = null;
     if (prof) { const { rows } = await monthData(env, month, [me.id]); if (rows[0]) { days = rows[0].days; const pay = rows[0].pay; summary = { contract_hours: pay.contract_hours, worked_hours: pay.worked_hours, late_days: pay.late_days, absent_days: pay.absent_days, paid_leave_days: pay.paid_leave_days, unpaid_leave_days: pay.unpaid_leave_days }; } }
@@ -483,7 +525,7 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
     return api({ ok: true, leave: results || [], balances: bal, can_decide: appr });
   }
   if ((mm = p.match(/^\/hr\/leave\/(\d+)\/decide$/)) && m === 'POST') { if (!appr) return deny('Only the leave approver can approve or reject leave.'); return done(await decideLeave(env, me, +mm[1], b)); }
-  if (p === '/hr/absences/confirm' && m === 'POST') return done(await confirmAbsences(env, me, b));
+  if (p === '/hr/absences/confirm' && m === 'POST') return done(await confirmAbsences(env, me, b, request));
   if (p === '/hr/warnings' && m === 'GET') {
     const { results } = await env.DB.prepare('SELECT w.*, s.name staff_name FROM cl_warnings w JOIN ems_staff s ON s.id=w.staff_id ORDER BY w.id DESC LIMIT 200').all();
     return api({ ok: true, warnings: results || [] });
@@ -506,7 +548,7 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
     const { rows } = await monthData(env, month);
     return api({ ok: true, month, finalised: false, rows: rows.map(r => ({ staff_id: r.staff_id, name: r.name, ...r.pay })) });
   }
-  if (p === '/hr/payroll/finalise' && m === 'POST') return done(await finalisePayroll(env, me, b.month));
+  if (p === '/hr/payroll/finalise' && m === 'POST') return done(await finalisePayroll(env, me, b.month, b.sign, request));
   if ((mm = p.match(/^\/hr\/payroll\/(\d{4}-\d{2})\.pdf$/)) && m === 'GET') return (await payrollPdf(env, mm[1], q('staff') ? +q('staff') : null)) || api({ ok: false, error: 'Nothing to show for that month.' }, 404);
   if (p === '/hr/setup' && m === 'GET') {
     const [staff, hol, kio, dev] = await env.DB.batch([
@@ -522,9 +564,9 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
     if (!(sal >= 0) || !(dh > 0 && dh <= 16) || !(wo >= 0 && wo <= 6) || !isTime(b.shift_start)) return done(R(400, 'Check salary, daily hours (1–16), weekly off and shift start.'));
     for (const k of ['joined_on', 'left_on']) if (b[k] && !isDate(b[k])) return done(R(400, 'Dates must be valid.'));
     if (b.leave_from && !isMonth(String(b.leave_from).slice(0, 7))) return done(R(400, 'Leave accrual start must be a month.'));
-    await env.DB.prepare(`INSERT INTO cl_staff_pay (staff_id, monthly_salary, daily_hours, weekly_off, shift_start, joined_on, left_on, leave_opening, leave_from, attendance_required, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)
-      ON CONFLICT(staff_id) DO UPDATE SET monthly_salary=excluded.monthly_salary, daily_hours=excluded.daily_hours, weekly_off=excluded.weekly_off, shift_start=excluded.shift_start, joined_on=excluded.joined_on, left_on=excluded.left_on, leave_opening=excluded.leave_opening, leave_from=excluded.leave_from, attendance_required=excluded.attendance_required, updated_at=excluded.updated_at`)
-      .bind(id, r2(sal), dh, wo, b.shift_start, nz(b.joined_on), nz(b.left_on), Number(b.leave_opening) || 0, b.leave_from ? String(b.leave_from).slice(0, 7) + '-01' : null, b.attendance_required === false ? 0 : 1, nowIso()).run();
+    await env.DB.prepare(`INSERT INTO cl_staff_pay (staff_id, monthly_salary, daily_hours, weekly_off, shift_start, joined_on, left_on, leave_opening, leave_from, attendance_required, designation, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+      ON CONFLICT(staff_id) DO UPDATE SET monthly_salary=excluded.monthly_salary, daily_hours=excluded.daily_hours, weekly_off=excluded.weekly_off, shift_start=excluded.shift_start, joined_on=excluded.joined_on, left_on=excluded.left_on, leave_opening=excluded.leave_opening, leave_from=excluded.leave_from, attendance_required=excluded.attendance_required, designation=excluded.designation, updated_at=excluded.updated_at`)
+      .bind(id, r2(sal), dh, wo, b.shift_start, nz(b.joined_on), nz(b.left_on), Number(b.leave_opening) || 0, b.leave_from ? String(b.leave_from).slice(0, 7) + '-01' : null, b.attendance_required === false ? 0 : 1, nz(clean(b.designation, 80)), nowIso()).run();
     await audit(env, me, 'pay.profile', 'staff', id, 'updated');
     return api({ ok: true });
   }

@@ -132,3 +132,9 @@ table.attgrid td[data-cell]{cursor:pointer}table.attgrid td[data-cell]:hover{bac
 .filelist{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--r-lg);padding:6px;position:sticky;top:70px}
 .filelist a{padding:9px 12px;border-radius:8px;text-decoration:none;color:var(--teal-ink);font-weight:500}.filelist a.on{background:var(--teal-mist);font-weight:700}.filelist a:hover{background:#f4f7f6}
 @media (max-width:800px){.files{grid-template-columns:1fr}.filelist{position:static;flex-direction:row;overflow-x:auto}.filelist a{white-space:nowrap}.doc-frame{height:60vh}}
+/* e-signature & forms */
+.signer{border:1px dashed var(--line);border-radius:10px;padding:10px 12px;background:#fbfaf6;display:grid;gap:8px}
+.ffs{border:1px solid var(--line-soft,#e4e9e8);border-radius:10px;padding:10px 14px 4px;margin:0 0 10px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:4px 16px}
+.ffs legend{font-weight:700;font-size:13px;padding:0 6px;color:var(--teal-ink)}
+.ff{margin-bottom:8px}.ff .checks{display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:4px}
+.ffv{padding:7px 0 2px;font-weight:600;color:var(--teal-ink);white-space:normal}

@@ -1008,14 +1008,14 @@ async function viewStaff(tab, q) {
       ${Object.values(by).map(arr => `<div class="absgroup"><b>${esc(arr[0].name)}</b><div class="rows">${arr.map(x => `<div class="row"><label class="grow" style="display:flex;gap:10px;align-items:center"><input type="checkbox" data-pick="${x.staff_id}" value="${x.day}" checked> ${esc(fLong(x.day))}</label>${isMgr() ? `<button class="btn sm ghost" data-was="${x.staff_id}|${x.day}">Was at work</button>` : ''}</div>`).join('')}</div>
         <button class="btn sm" data-warn="${arr[0].staff_id}" style="margin-top:8px">${icon('file-text', 15)}Confirm absence & issue warning</button></div>`).join('') || emptyState('check-circle', 'Nothing to review.')}</section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('file-text', 20)}<h3>Warning letters</h3></div></div>
-      ${w.warnings.length ? `<div class="rows">${w.warnings.map(x => `<div class="row"><div class="grow"><b>${esc(x.letter_no)} · ${esc(x.staff_name)}</b><span>Absent ${JSON.parse(x.days).map(fDay).join(', ')} · issued ${esc(fDate(x.issued_at.slice(0, 10)))} by ${esc(x.issued_by_name)}</span></div>${pdfLink(`/hr/warnings/${x.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">None issued.</p>'}</section>`;
+      ${w.warnings.length ? `<div class="rows">${w.warnings.map(x => `<div class="row"><div class="grow"><b>${esc(x.letter_no)} · ${esc(x.staff_name)}</b><span>Absent ${JSON.parse(x.days).map(fDay).join(', ')} · issued ${esc(fDate(x.issued_at.slice(0, 10)))} by ${esc(x.issued_by_name)}</span></div>${x.doc_id ? `<a class="btn sm ghost" href="#/doc/${x.doc_id}">Acknowledgement</a>` : ''}${pdfLink(`/hr/warnings/${x.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">None issued.</p>'}</section>`;
     MAIN.querySelectorAll('[data-was]').forEach(b => b.onclick = () => { const [sid, day] = b.dataset.was.split('|'); entryModal(null, { staff: bb.staff, staff_id: +sid, day }, () => route()); });
     MAIN.querySelectorAll('[data-warn]').forEach(b => b.onclick = () => {
       const sid = +b.dataset.warn, days = [...MAIN.querySelectorAll(`[data-pick="${sid}"]:checked`)].map(x => x.value);
       if (!days.length) return toast('Tick the days first');
-      modal({ title: 'Issue warning letter', body: `<p>${esc(by[sid][0].name)} · absent ${days.map(fDay).join(', ')}</p><form data-f>${field('Extra note on the letter (optional)', `<textarea class="in" name="note" rows="3" maxlength="600"></textarea>`)}</form><p class="small muted">The day's pay is deducted. The letter is saved as a PDF to print and hand over for signature.</p>`,
-        actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Issue letter</button>',
-        onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api('/clinic/hr/absences/confirm', { method: 'POST', body: { staff_id: sid, days, ...formData(el.querySelector('[data-f]')) } })).then(r => { close(); toast('Warning ' + r.letter_no + ' issued'); window.open(`${BASE}/api/clinic/hr/warnings/${r.id}/pdf`, '_blank'); route(); }).catch(() => {}); } });
+      modal({ title: 'Issue warning letter', body: `<p>${esc(by[sid][0].name)} · absent ${days.map(fDay).join(', ')}</p><form data-f class="stack" style="gap:12px">${field('Extra note on the letter (optional)', `<textarea class="in" name="note" rows="3" maxlength="600"></textarea>`)}${signerBlock('this warning letter')}</form><p class="small muted">The day's pay is deducted. The letter carries your e-signature and goes to ${esc(by[sid][0].name)}'s documents to acknowledge within 3 days — no printing needed.</p>`,
+        actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Sign and issue letter</button>',
+        onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api('/clinic/hr/absences/confirm', { method: 'POST', body: { staff_id: sid, days, note: el.querySelector('[name=note]').value, sign: readSigner(el) } })).then(r => { close(); toast('Warning ' + r.letter_no + ' issued and sent for acknowledgement'); go('#/doc/' + r.doc_id); }).catch(() => {}); } });
     });
     return;
   }
@@ -1034,7 +1034,9 @@ async function viewStaff(tab, q) {
       <p class="small muted">Rate = salary ÷ contract hours (working days × daily hours; weekly off and holidays are paid). Pay = rate × paid hours, where paid hours = hours worked + paid leave, capped at contract hours less absent and unpaid-leave days. No overtime. PF, ESI and TDS are not included.</p>`;
     MAIN.querySelector('[data-pm]').onclick = () => go('#/staff?tab=pay&m=' + prevMonth(month));
     MAIN.querySelector('[data-nm]').onclick = () => go('#/staff?tab=pay&m=' + nextMonth(month));
-    const f = MAIN.querySelector('[data-fin]'); if (f) f.onclick = () => { if (confirm(`Finalise pay for ${fMonth(month)}? Figures are then locked and payslips appear for staff.`)) busy(f, () => api('/clinic/hr/payroll/finalise', { method: 'POST', body: { month } })).then(() => { toast('Pay finalised'); route(); }).catch(() => {}); };
+    const f = MAIN.querySelector('[data-fin]'); if (f) f.onclick = () => modal({ title: `Finalise pay for ${fMonth(month)}`, body: `<p>Figures are then locked. Each person's payslip carries your e-signature and goes to their documents to acknowledge within 7 days.</p><form data-f class="stack" style="gap:12px">${signerBlock('this month\'s pay')}</form>`,
+      actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>Sign and finalise</button>',
+      onMount(el, close) { const sv = el.querySelector('[data-save]'); sv.onclick = () => busy(sv, () => api('/clinic/hr/payroll/finalise', { method: 'POST', body: { month, sign: readSigner(el) } })).then(r => { close(); toast(`Pay finalised · ${r.payslips} payslip${r.payslips === 1 ? '' : 's'} sent for acknowledgement`); route(); }).catch(() => {}); } });
     return;
   }
   if (tab === 'setup' && isMgr()) {
@@ -1095,6 +1097,7 @@ function staffPayModal(s, after) {
       <div class="grid2">${field('Weekly off', sel('weekly_off', DOW.map((d, i) => [i, d]), p.weekly_off))}${field('Shift starts', inp('shift_start', p.shift_start, 'type="time"'))}</div>
       <div class="grid2">${field('Joined on', inp('joined_on', p.joined_on || '', 'type="date"'))}${field('Left on', inp('left_on', p.left_on || '', 'type="date"'), 'leave blank')}</div>
       <div class="grid2">${field('Annual leave balance brought in', inp('leave_opening', p.leave_opening || 0, 'type="number" step="0.5" min="0"'))}${field('Monthly accrual starts', inp('leave_from', (p.leave_from || today()).slice(0, 7), 'type="month"'))}</div>
+      ${field('Designation (shown with their e-signature)', inp('designation', p.designation || '', 'maxlength="80" placeholder="e.g. Operations Head, Staff Nurse, Office Manager"'))}
       <label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="attendance_required" ${p.attendance_required ? 'checked' : ''}> Must clock in (uncheck for visiting consultants)</label></form>`,
     actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>',
     onMount(el, close) { const sv = el.querySelector('[data-save]'); sv.onclick = () => { const f = el.querySelector('[data-f]'), body = formData(f); body.attendance_required = f.attendance_required.checked; busy(sv, () => api('/clinic/hr/pay/' + s.id, { method: 'PUT', body })).then(() => { close(); toast('Saved'); after(); }).catch(() => {}); }; } });
@@ -1128,9 +1131,43 @@ function entryModal(e, ctx, after) {
 /* ---------------- Staff documents ----------------
    Everyone: My documents (read and sign memos, notices, policies, training records; see own records).
    Managers: Staff → Documents (issue, track signatures, withdraw, record PDF) and Staff → Staff files. */
-const DOCK = { memo: 'Memo', notice: 'Notice', policy: 'Policy', training: 'Training record', record: 'Staff record' };
+const DOCK = { memo: 'Memo', notice: 'Notice', policy: 'Policy', training: 'Training record', form: 'Form', warning: 'Warning letter', payslip: 'Payslip', record: 'Staff record' };
+// Issuer e-signature block, used wherever a manager issues something to staff.
+const signerBlock = (what = 'this document') => `<div class="signer"><label class="agree"><input type="checkbox" name="sign_agree"> I approve ${what} and sign it as the issuer.</label>
+  ${field('Type your full name to sign', inp('sign_name', '', `autocomplete="off" placeholder="${esc(ME.name)}"`))}</div>`;
+const readSigner = el => ({ agree: !!(el.querySelector('[name=sign_agree]') || {}).checked, name: (el.querySelector('[name=sign_name]') || {}).value || '' });
+let FORMDEFS = null;
+async function formDefs() { if (!FORMDEFS) FORMDEFS = (await api('/clinic/hr/docs/forms')).forms; return FORMDEFS; }
+// Inputs for one side of a form ('issuer' or 'staff'); values shown read-only for the other side.
+function formFields(def, side, values = {}, readonly = false) {
+  const val = f => values[f.k];
+  const control = f => {
+    const v = val(f), nm = `ff_${f.k}`;
+    if (readonly || (f.by || 'staff') !== side) {
+      const shown = f.type === 'check' ? (v ? 'Yes' : '—') : f.type === 'checks' ? ((v || []).join(', ') || '—') : (v || '—');
+      return `<div class="ffv">${esc(shown).replace(/\n/g, '<br>')}</div>`;
+    }
+    if (f.type === 'textarea') return `<textarea class="in" name="${nm}" rows="3" maxlength="2000">${esc(v || '')}</textarea>`;
+    if (f.type === 'select') return sel(nm, [['', 'Choose…'], ...f.options.map(o => [o, o])], v || '');
+    if (f.type === 'check') return `<label class="agree" style="margin:0"><input type="checkbox" name="${nm}"${v ? ' checked' : ''}> Yes</label>`;
+    if (f.type === 'checks') return `<div class="checks">${f.options.map(o => `<label><input type="checkbox" name="${nm}" value="${esc(o)}"${(v || []).includes(o) ? ' checked' : ''}> ${esc(o)}</label>`).join('')}</div>`;
+    return inp(nm, v || '', `type="${f.type === 'tel' ? 'tel' : f.type === 'email' ? 'email' : f.type === 'date' ? 'date' : 'text'}" maxlength="200"${f.hint ? ` placeholder="${esc(f.hint)}"` : ''}`);
+  };
+  return (def.sections || []).filter(sx => sx.fields.some(f => readonly || (f.by || 'staff') === side || val(f) != null)).map(sx => `<fieldset class="ffs"><legend>${esc(sx.title)}</legend>
+    ${sx.fields.map(f => `<label class="f ff">${esc(f.label)}${f.req && !readonly && (f.by || 'staff') === side ? ' <small>required</small>' : ''}${control(f)}</label>`).join('')}</fieldset>`).join('');
+}
+function readFormFields(el, def, side) {
+  const out = {};
+  for (const f of (def.sections || []).flatMap(x => x.fields)) {
+    if ((f.by || 'staff') !== side) continue;
+    const els = [...el.querySelectorAll(`[name="ff_${f.k}"]`)];
+    if (!els.length) continue;
+    out[f.k] = f.type === 'check' ? els[0].checked : f.type === 'checks' ? els.filter(x => x.checked).map(x => x.value) : els[0].value;
+  }
+  return out;
+}
 const fSize = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
-const docState = d => !d.requires_ack ? pill('no_charge', 'For information') : d.ack_at ? pill('final', 'Signed') : d.status === 'withdrawn' ? pill('cancelled', 'Withdrawn') : pill('no_show', 'To sign');
+const docState = d => !d.requires_ack ? pill('no_charge', 'For information') : d.ack_at ? (d.response === 'disputed' ? pill('no_show', 'Signed — disputed') : pill('final', d.kind === 'form' ? 'Completed' : 'Signed')) : d.status === 'withdrawn' ? pill('cancelled', 'Withdrawn') : d.refused_at ? pill('cancelled', 'Refused') : d.overdue ? pill('no_show', 'Overdue') : pill('no_show', d.kind === 'form' ? 'To fill in' : 'To sign');
 async function refreshDocBadge() {
   try {
     const r = await api('/clinic/hr/docs/pending'), n = r.pending;
@@ -1144,12 +1181,12 @@ async function refreshDocBadge() {
 async function viewMyDocuments() {
   const d = await api('/clinic/hr/docs/mine');
   const todo = d.docs.filter(x => x.requires_ack && !x.ack_at && x.status === 'issued');
-  const row = x => `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.ref_no)} · ${esc(x.kind === 'record' ? x.record_label || 'Staff record' : x.kind_label)} · issued ${esc(fDate(x.issued_at.slice(0, 10)))} by ${esc(x.issued_by_name)}${x.due_date && !x.ack_at ? ` · <b>sign by ${esc(fDate(x.due_date))}</b>` : ''}</span></div>${docState(x)}</a>`;
-  MAIN.innerHTML = `<div class="head"><div><h1>My documents</h1><p>Memos, notices, policies and training records issued to you, and your staff records.</p></div></div>
+  const row = x => `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.ref_no)} · ${esc(x.kind === 'record' ? x.record_label || 'Staff record' : x.kind_label)} · issued ${esc(fDate(x.issued_at.slice(0, 10)))} by ${esc(x.issued_by_name)}${x.due_date && !x.ack_at ? ` · <b>${x.kind === 'form' ? 'complete' : 'sign'} by ${esc(fDate(x.due_date))}</b>` : ''}</span></div>${docState(x)}</a>`;
+  MAIN.innerHTML = `<div class="head"><div><h1>My documents</h1><p>Memos, notices, policies, forms, payslips and letters issued to you, and your staff records. Everything is signed here — no paper.</p></div></div>
     ${todo.length ? `<section class="panel" style="border:2px solid var(--alert)"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3 style="color:var(--alert)">To read and sign (${todo.length})</h3></div></div><div class="rows">${todo.map(row).join('')}</div></section>` : ''}
     <section class="panel"><div class="panel-h"><div class="t">${icon('file-text', 20)}<h3>All documents</h3></div></div>
       ${d.docs.filter(x => !todo.includes(x)).length ? `<div class="rows">${d.docs.filter(x => !todo.includes(x)).map(row).join('')}</div>` : '<p class="muted">Nothing yet.</p>'}</section>
-    ${d.warnings.length ? `<section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>Warning letters</h3></div></div><div class="rows">${d.warnings.map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')}</span></div>${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div></section>` : ''}`;
+    ${d.warnings.filter(w => !w.doc_id).length ? `<section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>Earlier warning letters (on paper)</h3></div></div><div class="rows">${d.warnings.filter(w => !w.doc_id).map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')}</span></div>${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div></section>` : ''}`;
   refreshDocBadge();
 }
 async function viewDoc(id) {
@@ -1157,31 +1194,49 @@ async function viewDoc(id) {
   const fileUrl = `${BASE}/api/clinic/hr/docs/${id}/file`;
   const isImg = d.file_type && d.file_type.startsWith('image/');
   const meta = [`${esc(d.ref_no)}`, esc(d.kind === 'record' ? d.record_label || 'Staff record' : d.kind_label), `issued ${esc(fUtc(d.issued_at))} by ${esc(d.issued_by_name)}`].join(' · ');
-  const signBox = !mine ? '' : mine.ack_at ? `<div class="notice good">${icon('check-circle', 18)}<div>You signed this on <b>${esc(fUtc(mine.ack_at))}</b> as “${esc(mine.ack_name)}”. ${pdfLink(`/hr/docs/${id}/signed.pdf`, 'My signed copy')}</div></div>`
+  const isForm = d.kind === 'form' && d.form;
+  const formView = !isForm ? '' : mine && !mine.ack_at && d.status === 'issued' ? `<section class="panel"><div class="panel-h"><div class="t">${icon('list-checks', 20)}<h3>Fill in the form</h3></div></div><form data-ff class="stack" style="gap:10px">${formFields(d.form, 'staff', d.prefill || {})}</form>${d.form.declaration ? `<p class="small" style="margin-top:10px"><b>Declaration.</b> ${esc(d.form.declaration)}</p>` : ''}</section>`
+    : `<section class="panel"><div class="panel-h"><div class="t">${icon('list-checks', 20)}<h3>${mine && mine.ack_at ? 'Your answers' : 'Form'}</h3></div></div>${formFields(d.form, 'staff', { ...(d.prefill || {}), ...((mine && mine.form_data) || {}) }, true)}${d.form.declaration ? `<p class="small" style="margin-top:10px"><b>Declaration.</b> ${esc(d.form.declaration)}</p>` : ''}</section>`;
+  const signBox = !mine ? '' : mine.ack_at ? `<div class="notice good">${icon('check-circle', 18)}<div>You signed this on <b>${esc(fUtc(mine.ack_at))}</b> as “${esc(mine.ack_name)}”${mine.response === 'disputed' ? ', <b>with a dispute</b>: ' + esc(mine.ack_comment || '') : ''}. ${pdfLink(`/hr/docs/${id}/signed.pdf`, 'My signed copy')}</div></div>`
     : d.status !== 'issued' ? `<div class="notice">${icon('info', 18)}<div>This document was withdrawn: ${esc(d.withdraw_reason || '')}</div></div>`
     : !d.requires_ack ? '' : `<section class="panel signbox"><div class="panel-h"><div class="t">${icon('pencil', 20)}<h3>Sign this document</h3></div></div>
       <form data-sign class="stack" style="gap:12px">
-        <label class="agree"><input type="checkbox" name="agree"> I have read and understood this document${d.kind === 'training' ? ' and attended this training' : ''}, and I agree to follow it.</label>
+        ${d.disputable ? `<div style="display:flex;gap:16px;flex-wrap:wrap"><label><input type="radio" name="response" value="accepted" checked> I accept this ${esc(d.kind_label.toLowerCase())}</label><label><input type="radio" name="response" value="disputed"> I have received it but I disagree</label></div>
+        <label class="agree"><input type="checkbox" name="agree"> I confirm I have received and read this ${esc(d.kind_label.toLowerCase())}.</label>`
+        : `<label class="agree"><input type="checkbox" name="agree"> ${isForm ? 'The information I have given is true and complete, and I agree to the declaration above.' : `I have read and understood this document${d.kind === 'training' ? ' and attended this training' : ''}, and I agree to follow it.`}</label>`}
         ${field('Type your full name as your signature', inp('name', '', `autocomplete="off" placeholder="${esc(ME.name)}"`))}
-        ${field('Comment (optional)', inp('comment', '', 'maxlength="500"'))}
+        ${field(d.disputable ? 'Comment (required if you disagree — say what is wrong)' : 'Comment (optional)', inp('comment', '', 'maxlength="500"'))}
         <div style="display:flex;justify-content:flex-end"><button class="btn gold" data-go>${icon('check', 18)}Sign</button></div></form>
       <p class="small muted">Your signature is recorded with the date, time and this device, together with a fingerprint of the exact document you signed.</p></section>`;
   MAIN.innerHTML = `<div class="head"><div><a class="small muted" href="${mine && !canMgr() ? '#/documents' : (d.kind === 'record' ? `#/staff?tab=files&s=${d.staff_id}` : '#/staff?tab=docs')}" style="text-decoration:none">← Back</a><h1>${esc(d.title)}</h1><p>${meta}</p></div>
       <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${canMgr() ? pdfLink(`/hr/docs/${id}/record.pdf`, 'Acknowledgement record') : ''}${canMgr() && d.status === 'issued' ? `<button class="btn quiet" data-wd>Withdraw</button>` : ''}</div></div>
     ${d.status === 'withdrawn' ? `<div class="notice">${icon('info', 18)}<div>Withdrawn ${esc(fUtc(d.withdrawn_at))}: ${esc(d.withdraw_reason)}</div></div>` : ''}
     ${d.kind === 'training' ? `<div class="notice">${icon('calendar-check', 18)}<div>Training on <b>${esc(fDate(d.training_date))}</b>${d.trainer ? ` · trainer <b>${esc(d.trainer)}</b>` : ''}${d.training_hours ? ` · ${d.training_hours} h` : ''}</div></div>` : ''}
-    ${mine && !mine.ack_at && d.due_date && d.requires_ack ? `<div class="notice">${icon('clock', 18)}<div>Please sign by <b>${esc(fDate(d.due_date))}</b>.</div></div>` : ''}
-    <section class="panel doc-body">
+    ${mine && !mine.ack_at && d.due_date && d.requires_ack ? `<div class="notice">${icon('clock', 18)}<div>Please ${isForm ? 'complete and sign' : 'sign'} by <b>${esc(fDate(d.due_date))}</b>${d.overdue ? ' — <b style="color:var(--alert)">this is now overdue</b>' : ''}.</div></div>` : ''}
+    ${d.issuer_sig ? `<div class="notice">${icon('pencil', 18)}<div>Issued and e-signed by <b>${esc(d.issuer_sig.name)}</b>${d.issuer_sig.title ? ', ' + esc(d.issuer_sig.title) : ''} on ${esc(fUtc(d.issuer_sig.at))}.</div></div>` : ''}
+    ${isForm ? '' : `<section class="panel doc-body">
       ${d.body ? `<div class="doc-text">${esc(d.body).replace(/\n/g, '<br>')}</div>` : ''}
       ${d.has_file ? `<div class="doc-file"><div class="row"><div class="grow"><b>${icon('file-text', 16)} ${esc(d.file_name || 'Attached file')}</b><span>${d.file_size ? fSize(d.file_size) : ''}</span></div><a class="btn sm ghost" href="${fileUrl}" target="_blank" rel="noopener">${icon('external-link', 15)}Open full screen</a></div>
         ${isImg ? `<img src="${fileUrl}" alt="" style="width:100%;border-radius:8px;margin-top:8px">` : `<iframe src="${fileUrl}" title="Document" class="doc-frame"></iframe>`}</div>` : ''}
-    </section>
+    </section>`}
+    ${isForm && d.body ? `<p class="muted" style="margin:0 0 12px">${esc(d.body)}</p>` : ''}${formView}
     ${signBox}
     ${r.recipients ? `<section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('users', 20)}<h3>Signatures · ${r.recipients.filter(x => x.ack_at).length} of ${r.recipients.length}</h3></div></div>
-      <div class="table-wrap"><table class="t"><thead><tr><th>Staff</th><th>Opened</th><th>Signed</th><th>Signed as</th><th>Comment</th></tr></thead><tbody>
-      ${r.recipients.map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${x.viewed_at ? esc(fUtc(x.viewed_at)) : '<span class="muted">not opened</span>'}</td><td>${x.ack_at ? esc(fUtc(x.ack_at)) : d.requires_ack ? '<b style="color:var(--alert)">Not signed</b>' : '—'}</td><td>${esc(x.ack_name || '')}</td><td class="small">${esc(x.ack_comment || '')}${x.ack_at ? ` ${pdfLink(`/hr/docs/${id}/signed.pdf?staff=${x.staff_id}`, 'Copy')}` : ''}</td></tr>`).join('')}</tbody></table></div></section>` : ''}`;
+      <div class="table-wrap"><table class="t"><thead><tr><th>Staff</th><th>Opened</th><th>Signed</th><th>Signed as</th><th>Comment</th><th></th></tr></thead><tbody>
+      ${r.recipients.map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${x.viewed_at ? esc(fUtc(x.viewed_at)) : '<span class="muted">not opened</span>'}</td>
+        <td>${x.ack_at ? esc(fUtc(x.ack_at)) + (x.response === 'disputed' ? '<div><b style="color:var(--alert)">Disputed</b></div>' : '') : x.refused_at ? `<b style="color:var(--alert)">Refused</b><div class="small">${esc(fUtc(x.refused_at))} · ${esc(x.refused_note || '')}</div>` : d.requires_ack ? `<b style="color:var(--alert)">${d.overdue ? 'Overdue' : 'Not signed'}</b>` : '—'}</td>
+        <td>${esc(x.ack_name || '')}</td><td class="small">${esc(x.ack_comment || '')}</td>
+        <td style="white-space:nowrap">${x.ack_at ? pdfLink(`/hr/docs/${id}/signed.pdf?staff=${x.staff_id}`, isForm ? 'Completed form' : 'Signed copy') : d.requires_ack && d.status === 'issued' && !x.refused_at ? `<button class="btn sm quiet" data-refused="${x.staff_id}">Record refusal</button>` : ''}</td></tr>`).join('')}</tbody></table></div></section>` : ''}`;
   const f = MAIN.querySelector('[data-sign]');
-  if (f) MAIN.querySelector('[data-go]').onclick = e => { e.preventDefault(); const v = formData(f); busy(e.currentTarget, () => api(`/clinic/hr/docs/${id}/ack`, { method: 'POST', body: { agree: f.agree.checked, name: v.name, comment: v.comment } })).then(() => { toast('Signed — thank you'); refreshDocBadge(); route(); }).catch(() => {}); };
+  if (f) MAIN.querySelector('[data-go]').onclick = e => {
+    e.preventDefault(); const v = formData(f), ff = MAIN.querySelector('[data-ff]');
+    const body = { agree: f.agree.checked, name: v.name, comment: v.comment, response: (f.querySelector('[name=response]:checked') || {}).value || 'accepted' };
+    if (ff) body.form = readFormFields(ff, d.form, 'staff');
+    busy(e.currentTarget, () => api(`/clinic/hr/docs/${id}/ack`, { method: 'POST', body })).then(() => { toast(isForm ? 'Form completed and signed — thank you' : 'Signed — thank you'); refreshDocBadge(); route(); }).catch(() => {});
+  };
+  MAIN.querySelectorAll('[data-refused]').forEach(b => b.onclick = () => modal({ title: 'Record a refusal to sign', body: `<p>Use this if ${esc((r.recipients.find(x => x.staff_id === +b.dataset.refused) || {}).name || 'the staff member')} was asked to sign and refused. It is kept on the acknowledgement record.</p><form data-f>${field('What happened', inp('note', '', 'maxlength="300" placeholder="e.g. Asked on 12 Nov in front of Sherly; refused to sign"'))}</form>`,
+    actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Record</button>',
+    onMount(el, close) { const sv = el.querySelector('[data-save]'); sv.onclick = () => busy(sv, () => api(`/clinic/hr/docs/${id}/refused`, { method: 'POST', body: { staff_id: +b.dataset.refused, ...formData(el.querySelector('[data-f]')) } })).then(() => { close(); toast('Refusal recorded'); route(); }).catch(() => {}); } }));
   const wd = MAIN.querySelector('[data-wd]');
   if (wd) wd.onclick = () => modal({ title: 'Withdraw document', body: `<p>Staff will no longer be asked to sign it. Signatures already given stay on record. To correct a document, withdraw it and issue a new one.</p><form data-f>${field('Reason', inp('reason', '', 'maxlength="300"'))}</form>`, actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Withdraw</button>',
     onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api(`/clinic/hr/docs/${id}/withdraw`, { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Withdrawn'); route(); }).catch(() => {}); } });
@@ -1195,28 +1250,42 @@ async function uploadFile(input) {
 }
 async function issueDocModal(opts = {}, after) {
   const team = B.team.filter(t => t.active && t.username !== 'hasta');
+  const forms = opts.kind === 'record' ? [] : await formDefs();
   const isRec = opts.kind === 'record';
   modal({ title: isRec ? `Add to ${opts.staff_name}'s file` : 'Issue a document', wide: true,
     body: `<form data-f class="stack" style="gap:12px">
       ${isRec ? `<div class="grid2">${field('Record type', sel('record_type', Object.entries(opts.record_types || {}), 'contract'))}${field('Title', inp('title', '', 'maxlength="160" placeholder="e.g. Appointment letter — Staff Nurse"'))}</div>`
-      : `<div class="grid2">${field('Type', sel('kind', [['memo', 'Memo'], ['notice', 'Notice'], ['policy', 'Policy'], ['training', 'Training record']], opts.kind || 'memo'))}${field('Title', inp('title', '', 'maxlength="160" placeholder="e.g. Use of the clinic official phone"'))}</div>
+      : `<div class="grid2">${field('Type', sel('kind', [['memo', 'Memo'], ['notice', 'Notice'], ['policy', 'Policy'], ['training', 'Training record'], ['form', 'Form to fill in and sign']], opts.kind || 'memo'))}${field('Title', inp('title', '', 'maxlength="160" placeholder="e.g. Use of the clinic official phone"'))}</div>
+        <div data-formpick hidden>${field('Form', sel('form_key', forms.map(x => [x.key, x.title]), opts.form_key || 'joining'))}<div data-issuerf></div></div>
         <div class="grid3" data-train hidden>${field('Training date', inp('training_date', today(), 'type="date"'))}${field('Trainer', inp('trainer', '', 'maxlength="80"'))}${field('Hours', inp('training_hours', '', 'type="number" step="0.5" min="0"'))}</div>`}
-      ${field(isRec ? 'Notes (optional)' : 'Text (optional if you attach a file)', `<textarea class="in" name="body" rows="${isRec ? 2 : 6}" maxlength="20000"></textarea>`)}
-      ${field('Attach file (PDF or image, up to 10 MB)', '<input class="in" type="file" name="file" accept="application/pdf,image/jpeg,image/png,image/webp" style="padding:8px">')}
+      <div data-plain>${field(isRec ? 'Notes (optional)' : 'Text (optional if you attach a file)', `<textarea class="in" name="body" rows="${isRec ? 2 : 6}" maxlength="20000"></textarea>`)}
+      ${field('Attach file (PDF or image, up to 10 MB)', '<input class="in" type="file" name="file" accept="application/pdf,image/jpeg,image/png,image/webp" style="padding:8px">')}</div>
       ${isRec ? `<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="requires_ack"> Ask ${esc(opts.staff_name)} to sign it (e.g. appointment letter)</label>`
-      : `<div><b class="small">Send to</b><div style="display:flex;gap:16px;margin:6px 0"><label><input type="radio" name="audience" value="all" checked> All staff</label><label><input type="radio" name="audience" value="selected"> Chosen staff</label></div>
-        <div class="checks" data-who hidden>${team.map(t => `<label><input type="checkbox" name="who" value="${t.id}"> ${esc(t.name)}</label>`).join('')}</div></div>
+      : `<div><b class="small">Send to</b><div style="display:flex;gap:16px;margin:6px 0"><label><input type="radio" name="audience" value="all"${opts.only ? '' : ' checked'}> All staff</label><label><input type="radio" name="audience" value="selected"${opts.only ? ' checked' : ''}> Chosen staff</label></div>
+        <div class="checks" data-who hidden>${team.map(t => `<label><input type="checkbox" name="who" value="${t.id}"${opts.only === t.id ? ' checked' : ''}> ${esc(t.name)}</label>`).join('')}</div></div>
         <div class="grid2">${field('Sign by (optional)', inp('due_date', '', 'type="date"'))}<label style="display:flex;gap:8px;align-items:center;margin-top:22px"><input type="checkbox" name="requires_ack" checked> Recipients must sign</label></div>`}
-    </form><p class="small muted">${isRec ? 'Kept in the staff file; the staff member can see it in My documents.' : 'Once issued, a document cannot be edited — only withdrawn. Each recipient sees it in My documents and is reminded until they sign.'}</p>`,
+      <div data-signer>${signerBlock()}</div>
+    </form><p class="small muted">${isRec ? 'Kept in the staff file; the staff member can see it in My documents.' : 'Once issued, a document cannot be edited — only withdrawn. Each recipient sees it in My documents and is reminded until they sign. Your e-signature as the issuer is recorded with it.'}</p>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>${isRec ? 'Save' : 'Issue'}</button>`,
     onMount(el, close) {
       const f = el.querySelector('[data-f]');
-      const sync = () => { const t = el.querySelector('[data-train]'); if (t) t.hidden = f.kind.value !== 'training'; const w = el.querySelector('[data-who]'); if (w) w.hidden = f.querySelector('[name=audience]:checked').value !== 'selected'; };
+      let lastForm = null;
+      const sync = () => {
+        const t = el.querySelector('[data-train]'); if (t) t.hidden = f.kind.value !== 'training';
+        const w = el.querySelector('[data-who]'); if (w) w.hidden = f.querySelector('[name=audience]:checked').value !== 'selected';
+        const isF = !isRec && f.kind.value === 'form';
+        el.querySelector('[data-plain]').hidden = isF;
+        const fp = el.querySelector('[data-formpick]'); if (fp) fp.hidden = !isF;
+        if (isF && f.form_key.value !== lastForm) { lastForm = f.form_key.value; const def = forms.find(x => x.key === lastForm); el.querySelector('[data-issuerf]').innerHTML = formFields(def, 'issuer', {}); if (!f.title.value || forms.some(x => x.title === f.title.value)) f.title.value = def.title; }
+        if (isF && f.requires_ack) f.requires_ack.checked = true;
+        el.querySelector('[data-signer]').hidden = isRec && !f.requires_ack.checked;
+      };
       f.addEventListener('change', sync); sync();
       const s = el.querySelector('[data-save]');
       s.onclick = () => busy(s, async () => {
-        const v = formData(f), file = await uploadFile(f.file);
-        const body = { kind: isRec ? 'record' : v.kind, title: v.title, body: v.body, file, requires_ack: f.requires_ack.checked };
+        const v = formData(f), isF = !isRec && v.kind === 'form', file = isF ? null : await uploadFile(f.file);
+        const body = { kind: isRec ? 'record' : v.kind, title: v.title, body: isF ? '' : v.body, file, requires_ack: f.requires_ack.checked, sign: readSigner(el) };
+        if (isF) Object.assign(body, { form_key: v.form_key, prefill: readFormFields(el.querySelector('[data-issuerf]'), forms.find(x => x.key === v.form_key), 'issuer') });
         if (isRec) Object.assign(body, { staff_id: opts.staff_id, record_type: v.record_type });
         else Object.assign(body, { audience: f.querySelector('[name=audience]:checked').value, staff_ids: [...f.querySelectorAll('[name=who]:checked')].map(x => +x.value), due_date: v.due_date, training_date: v.training_date, trainer: v.trainer, training_hours: v.training_hours });
         return api('/clinic/hr/docs', { method: 'POST', body });
@@ -1225,11 +1294,13 @@ async function issueDocModal(opts = {}, after) {
 }
 async function staffDocsTab(head, q) {
   const kind = q.get('k') || '', d = await api('/clinic/hr/docs' + (kind ? '?kind=' + kind : ''));
-  MAIN.innerHTML = head('Memos, notices, policies and training records — issued and signed in the app', `<button class="btn gold" data-issue>${icon('plus', 18)}Issue document</button>`) +
-    `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${[['', 'All'], ['memo', 'Memos'], ['notice', 'Notices'], ['policy', 'Policies'], ['training', 'Training']].map(([k, l]) => `<a class="btn sm ${k === kind ? '' : 'ghost'}" href="#/staff?tab=docs${k ? '&k=' + k : ''}">${l}</a>`).join('')}</div>
+  MAIN.innerHTML = head('Memos, notices, policies, training, forms, warning letters and payslips — issued and signed in the app', `<button class="btn ghost" data-issueform>${icon('list-checks', 18)}Send a form</button><button class="btn gold" data-issue>${icon('plus', 18)}Issue document</button>`) +
+    `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${[['', 'All'], ['memo', 'Memos'], ['notice', 'Notices'], ['policy', 'Policies'], ['training', 'Training'], ['form', 'Forms'], ['warning', 'Warning letters'], ['payslip', 'Payslips']].map(([k, l]) => `<a class="btn sm ${k === kind ? '' : 'ghost'}" href="#/staff?tab=docs${k ? '&k=' + k : ''}">${l}</a>`).join('')}</div>
     <section class="panel flush"><div class="rows">${d.docs.map(x => { const pct = x.recipients ? Math.round(x.signed / x.recipients * 100) : 0; return `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.ref_no)} · ${esc(x.kind_label)} · ${esc(fDate(x.issued_at.slice(0, 10)))} · ${esc(x.issued_by_name)}${x.due_date ? ' · sign by ' + esc(fDate(x.due_date)) : ''}</span></div>
+      ${x.disputed ? pill('no_show', `${x.disputed} disputed`) : ''}${x.refused ? pill('cancelled', `${x.refused} refused`) : ''}${x.overdue && x.requires_ack && x.signed < x.recipients && x.status !== 'withdrawn' ? pill('no_show', 'Overdue') : ''}
       ${x.status === 'withdrawn' ? pill('cancelled', 'Withdrawn') : x.requires_ack ? `<div class="sigbar" title="${x.signed} of ${x.recipients} signed"><i style="width:${pct}%"></i><span>${x.signed}/${x.recipients} signed</span></div>` : pill('no_charge', 'Information')}</a>`; }).join('') || emptyState('file-text', 'No documents issued yet.')}</div></section>`;
   MAIN.querySelector('[data-issue]').onclick = () => issueDocModal({}, r => go('#/doc/' + r.id));
+  MAIN.querySelector('[data-issueform]').onclick = () => issueDocModal({ kind: 'form' }, r => go('#/doc/' + r.id));
 }
 async function staffFilesTab(head, q) {
   const team = B.team.filter(t => t.username !== 'hasta').sort((a, b) => a.name.localeCompare(b.name));
@@ -1237,14 +1308,16 @@ async function staffFilesTab(head, q) {
   const f = sid ? await api('/clinic/hr/staff-file/' + sid) : null;
   MAIN.innerHTML = head('Each person\'s records, the documents issued to them, and warning letters') + `<div class="files">
     <nav class="filelist">${team.map(t => `<a href="#/staff?tab=files&s=${t.id}" class="${t.id === sid ? 'on' : ''}">${esc(t.name)}${t.active ? '' : ' <small>(left)</small>'}</a>`).join('')}</nav>
-    <div>${f ? `<section class="panel"><div class="panel-h"><div class="t">${icon('user', 20)}<h3>${esc(f.staff.name)} · records</h3></div><button class="btn sm gold" data-add>${icon('plus', 15)}Add record</button></div>
+    <div>${f ? `<section class="panel"><div class="panel-h"><div class="t">${icon('user', 20)}<h3>${esc(f.staff.name)} · records</h3></div><div style="display:flex;gap:8px"><button class="btn sm ghost" data-addform>${icon('list-checks', 15)}Send a form</button><button class="btn sm gold" data-add>${icon('plus', 15)}Add record</button></div></div>
       ${f.records.length ? `<div class="rows">${f.records.map(x => `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.record_label)} · ${esc(x.ref_no)} · added ${esc(fDate(x.issued_at.slice(0, 10)))} by ${esc(x.issued_by_name)}${x.file_name ? ' · ' + esc(x.file_name) : ''}</span></div>${x.status === 'withdrawn' ? pill('cancelled', 'Removed') : x.requires_ack ? '' : ''}</a>`).join('')}</div>` : '<p class="muted">No records yet — add the appointment letter, ID proof, certificates and registration.</p>'}</section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('file-text', 20)}<h3>Documents issued</h3></div></div>
       ${f.issued.length ? `<div class="rows">${f.issued.map(x => `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.ref_no)} · ${esc(x.kind_label)} · ${esc(fDate(x.issued_at.slice(0, 10)))}${x.ack_at ? ' · signed ' + esc(fUtc(x.ack_at)) : x.viewed_at ? ' · opened, not signed' : ' · not opened'}</span></div>${docState(x)}</a>`).join('')}</div>` : '<p class="muted">None.</p>'}</section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>Warning letters</h3></div></div>
-      ${f.warnings.length ? `<div class="rows">${f.warnings.map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')} · by ${esc(w.issued_by_name)}</span></div>${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">None.</p>'}</section>` : emptyState('users', 'No staff.')}</div></div>`;
+      ${f.warnings.length ? `<div class="rows">${f.warnings.map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')} · by ${esc(w.issued_by_name)}</span></div>${w.doc_id ? `<a class="btn sm ghost" href="#/doc/${w.doc_id}">Acknowledgement</a>` : ''}${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">None.</p>'}</section>` : emptyState('users', 'No staff.')}</div></div>`;
   const add = MAIN.querySelector('[data-add]');
   if (add) add.onclick = () => issueDocModal({ kind: 'record', staff_id: sid, staff_name: f.staff.name, record_types: f.record_types }, () => route());
+  const addf = MAIN.querySelector('[data-addform]');
+  if (addf) addf.onclick = () => issueDocModal({ kind: 'form', only: sid }, () => route());
 }
 
 /* ---------------- Reports ---------------- */
