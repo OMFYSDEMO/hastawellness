@@ -183,10 +183,12 @@ function payFor(prof, month, days) {
   const paidLeave = days.filter(d => d.working && d.status === 'leave' && PAID_KINDS.includes(d.kind)).length;
   const unpaidLeave = days.filter(d => d.working && d.status === 'leave' && d.kind === 'unpaid').length;
   const absent = n('absent'), pending = n('pending');
-  const workedH = r2(days.reduce((x, d) => x + d.minutes, 0) / 60);
+  // Today is still in progress: count it as a full expected day rather than the hours so far.
+  const t = today(), todayRow = days.find(d => d.day === t && d.working && ['in', 'present', 'upcoming'].includes(d.status));
+  const workedH = r2(days.reduce((x, d) => x + (d === todayRow ? 0 : d.minutes), 0) / 60);
   const capH = Math.max(0, empWorking * dh - (absent + unpaidLeave + pending) * dh);
   // Days still to come this month are assumed worked in full, so a part-month shows the expected pay.
-  const upcomingH = days.filter(d => d.working && d.status === 'upcoming').length * dh;
+  const upcomingH = days.filter(d => d.working && (d.status === 'upcoming' || d === todayRow)).length * dh;
   const paidH = Math.min(capH, workedH + paidLeave * dh + upcomingH);
   const shortH = r2(Math.max(0, capH - (workedH + paidLeave * dh + upcomingH)));
   const ded = { not_employed: r2((fullWorking - empWorking) * dh * rate), absence: r2(absent * dh * rate), unpaid_leave: r2((unpaidLeave + pending) * dh * rate), short_hours: r2(shortH * rate) };
