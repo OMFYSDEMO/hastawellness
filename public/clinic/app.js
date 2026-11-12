@@ -64,11 +64,11 @@ function login(note) {
 function mount() {
   app.innerHTML = `<div class="shell"><aside class="side">
     <div class="brand"><img src="/img/hasta-emblem.webp" alt="" width="34" height="34"><div><b>Hasta Clinic</b><span>${esc(B.settings.trade_name)}</span></div></div>
-    <nav class="nav" aria-label="Main">${(ME.limited ? [['attendance', 'clock', 'My attendance']] : NAV.concat([['attendance', 'clock', 'My attendance']], hrUser() ? [['staff', 'calendar-check', 'Staff']] : [])).map(([k, ic, l]) => `<a href="#/${k}" data-k="${k}">${icon(ic, 20)}<span>${l}</span>${k === 'leads' ? '<i class="badge" data-b hidden></i>' : k === '' ? '<i class="badge alert" data-tb hidden></i>' : ''}</a>`).join('')}
+    <nav class="nav" aria-label="Main">${(ME.limited ? [['attendance', 'clock', 'My attendance'], ['documents', 'file-text', 'My documents']] : NAV.concat([['attendance', 'clock', 'My attendance'], ['documents', 'file-text', 'My documents']], hrUser() ? [['staff', 'calendar-check', 'Staff']] : [])).map(([k, ic, l]) => `<a href="#/${k}" data-k="${k}">${icon(ic, 20)}<span>${l}</span>${k === 'leads' ? '<i class="badge" data-b hidden></i>' : k === '' ? '<i class="badge alert" data-tb hidden></i>' : k === 'documents' ? '<i class="badge alert" data-db hidden></i>' : ''}</a>`).join('')}
       ${ME.limited ? '' : `<div class="nav-sep"></div><a href="#/settings" data-k="settings">${icon('settings', 20)}<span>Settings</span></a>`}</nav>
     <div class="me"><span class="avatar">${esc(initials(ME.name))}</span><div><b>${esc(ME.name)}</b><span>${ME.admin ? 'Admin' : ME.role === 'manager' ? 'Manager' : 'Team'}</span></div>
       <button data-logout aria-label="Sign out" title="Sign out">${icon('log-out', 18)}</button></div>
-  </aside><div class="mainwrap"><div class="alertbar" data-alertbar hidden role="alert"></div><main class="main" id="main"></main></div></div>`;
+  </aside><div class="mainwrap"><div class="alertbar" data-alertbar hidden role="alert"></div><div class="docbar" data-docbar hidden role="status"></div><main class="main" id="main"></main></div></div>`;
   MAIN = app.querySelector('#main');
   app.querySelector('[data-logout]').onclick = signOut;
   window.addEventListener('hashchange', route);
@@ -88,6 +88,8 @@ async function route() {
     if (!top) await viewToday();
     else if (top === 'attendance') await viewMyAttendance(q.get('m') || today().slice(0, 7));
     else if (top === 'staff') await viewStaff(q.get('tab') || 'today', q);
+    else if (top === 'documents') await viewMyDocuments();
+    else if (top === 'doc') await viewDoc(+parts[1]);
     else if (top === 'appointments') await viewAppointments(q.get('d') || today(), q.get('dept'), q.get('v'));
     else if (top === 'patients') await viewPatients(q.get('q') || '');
     else if (top === 'patient') await viewPatient(+parts[1], q.get('tab') || 'visits');
@@ -102,6 +104,7 @@ async function route() {
     else if (top === 'settings') await viewSettings(q.get('tab') || (isAdmin() ? 'clinic' : 'account'));
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
   } catch (e) { MAIN.innerHTML = `<section class="panel">${emptyState('alert-triangle', e.message)}</section>`; }
+  refreshDocBadge();
   if (ME.limited) return;
   checkAlerts();
   api('/clinic/leads?status=new').then(r => { const b = app.querySelector('[data-b]'); if (b) { b.hidden = !r.leads.length; b.textContent = r.leads.length; } }).catch(() => {});
@@ -759,6 +762,8 @@ async function viewLeads(s, ch) {
 /* ---------------- Staff attendance, leave & pay ----------------
    Everyone: My attendance (today, month, leave balance, apply for leave, warnings, payslips).
    Managers and the leave approver: Staff (today, month grid, leave, absences, pay, setup). */
+// Times stored by the server in UTC (…Z) shown in clinic time.
+const fUtc = s => s ? fWhen(new Date(Date.parse(/Z$/.test(s) ? s : s + 'Z') + 330 * 60000).toISOString().slice(0, 16)) : '';
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAYST = { present: ['P', 'Present'], in: ['IN', 'Clocked in'], leave: ['L', 'Leave'], pending: ['?', 'Leave awaiting approval'], absent: ['A', 'Absent — no approved leave'], off: ['W', 'Weekly off'], holiday: ['H', 'Holiday'], upcoming: ['', ''], na: ['', 'Not employed'] };
 const LEAVE_KIND = { annual: 'Annual leave', sick: 'Sick leave', casual: 'Casual leave', unpaid: 'Unpaid leave' };
@@ -845,7 +850,7 @@ function leaveModal(d, staff, after) {
 
 // ---- Staff (managers & leave approver) ----
 function staffTabs(tab) {
-  const T = [['today', 'Today'], ['month', 'Attendance'], ['leave', 'Leave'], ['absences', 'Absences & warnings'], ...(isMgr() ? [['pay', 'Pay'], ['setup', 'Setup']] : [])];
+  const T = [['today', 'Today'], ['month', 'Attendance'], ['leave', 'Leave'], ['absences', 'Absences & warnings'], ...(isMgr() ? [['docs', 'Documents'], ['files', 'Staff files'], ['pay', 'Pay'], ['setup', 'Setup']] : [])];
   return `<nav class="tabs">${T.map(([k, l]) => `<a href="#/staff?tab=${k}" class="${k === tab ? 'on' : ''}" style="text-decoration:none">${l}</a>`).join('')}</nav>`;
 }
 async function viewStaff(tab, q) {
@@ -877,7 +882,7 @@ async function viewStaff(tab, q) {
     const d = await api('/clinic/hr/leave' + (q.get('s') ? '?status=' + q.get('s') : ''));
     MAIN.innerHTML = head(d.can_decide ? 'You approve leave.' : 'Leave is approved by the leave approver.', `<button class="btn gold" data-onb>${icon('plus', 18)}Record leave for staff</button>`) +
       `<section class="panel flush"><div class="rows">${d.leave.map(l => { const bal = d.balances[l.staff_id]; return `<div class="row"><div class="grow"><b>${esc(l.staff_name)} · ${esc(LEAVE_KIND[l.kind])}</b><span>${esc(fDay(l.from_date))}${l.to_date !== l.from_date ? ' – ' + esc(fDay(l.to_date)) : ''} · ${l.days} day(s) · ${esc(l.reason || '')}</span>
-        <span class="small muted">Applied ${esc(fWhen(l.applied_at))}${bal && l.status === 'pending' ? ` · balance: annual ${bal.annual}${bal.sick ? ', sick ' + bal.sick : ''}${bal.casual ? ', casual ' + bal.casual : ''}` : ''}${l.decided_by_name ? ` · ${esc(l.status)} by ${esc(l.decided_by_name)}${l.decision_note ? ': ' + esc(l.decision_note) : ''}` : ''}</span></div>
+        <span class="small muted">Applied ${esc(fUtc(l.applied_at))}${bal && l.status === 'pending' ? ` · balance: annual ${bal.annual}${bal.sick ? ', sick ' + bal.sick : ''}${bal.casual ? ', casual ' + bal.casual : ''}` : ''}${l.decided_by_name ? ` · ${esc(l.status)} by ${esc(l.decided_by_name)}${l.decision_note ? ': ' + esc(l.decision_note) : ''}` : ''}</span></div>
         ${l.status === 'pending' && d.can_decide ? `<button class="btn sm quiet" data-rej="${l.id}">Reject</button><button class="btn sm" data-ok="${l.id}">${icon('check', 15)}Approve</button>` : pill(l.status === 'approved' ? 'final' : l.status === 'pending' ? 'draft' : 'cancelled', l.status[0].toUpperCase() + l.status.slice(1))}
         ${l.status === 'approved' && d.can_decide && l.from_date >= today() ? `<button class="btn sm quiet" data-cx="${l.id}">Cancel</button>` : ''}</div>`; }).join('') || emptyState('calendar-check', 'No leave applications.')}</div></section>`;
     MAIN.querySelector('[data-onb]').onclick = async () => { const setup = await api('/clinic/hr/month?month=' + today().slice(0, 7)); pickStaff(setup.staff, s => leaveModal(null, s, async r => { if (d.can_decide && confirm('Approve this leave now?')) await api(`/clinic/hr/leave/${r.id}/decide`, { method: 'POST', body: { status: 'approved', note: 'Recorded by ' + ME.name } }); route(); })); };
@@ -909,6 +914,8 @@ async function viewStaff(tab, q) {
     });
     return;
   }
+  if (tab === 'docs' && isMgr()) return staffDocsTab(head, q);
+  if (tab === 'files' && isMgr()) return staffFilesTab(head, q);
   if (tab === 'pay' && isMgr()) {
     const month = q.get('m') || prevMonth(today().slice(0, 7)), d = await api('/clinic/hr/payroll?month=' + month);
     const sum = k => d.rows.reduce((n, r) => n + (r[k] || 0), 0);
@@ -952,7 +959,7 @@ async function viewStaff(tab, q) {
       <section class="panel"><div class="panel-h"><div class="t">${icon('layout-dashboard', 20)}<h3>Attendance screen (clinic desktop)</h3></div></div>
         <p>Open this page on the clinic desktop and press the button there. The desktop then shows a QR code that changes every 30 seconds; staff scan it with their phones.</p>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin:10px 0"><button class="btn gold" data-kiosk>${icon('layout-dashboard', 18)}Make this computer the attendance screen</button><a class="btn ghost" href="${BASE}/kiosk" target="_blank" rel="noopener">${icon('external-link', 18)}Open attendance screen</a></div>
-        <div class="rows">${d.kiosks.filter(k => k.active).map(k => `<div class="row"><div class="grow"><b>${esc(k.name)}</b><span>Set up ${esc(fDate(k.created_at.slice(0, 10)))}${k.last_seen ? ' · last on ' + esc(fWhen(k.last_seen)) : ''}</span></div><button class="btn sm quiet" data-rk="${k.id}">Remove</button></div>`).join('')}</div>
+        <div class="rows">${d.kiosks.filter(k => k.active).map(k => `<div class="row"><div class="grow"><b>${esc(k.name)}</b><span>Set up ${esc(fDate(k.created_at.slice(0, 10)))}${k.last_seen ? ' · last on ' + esc(fUtc(k.last_seen)) : ''}</span></div><button class="btn sm quiet" data-rk="${k.id}">Remove</button></div>`).join('')}</div>
         <h4 style="margin:16px 0 6px">Remembered phones</h4>
         <div class="rows">${d.devices.map(x => `<div class="row"><div class="grow"><b>${esc(x.name)}</b><span class="small muted">${esc((x.agent || '').slice(0, 70))} · since ${esc(fDate(x.created_at.slice(0, 10)))}</span></div><button class="btn sm quiet" data-rd="${x.id}">Forget</button></div>`).join('') || '<p class="muted small">None yet. A phone is remembered after its first signed-in scan.</p>'}</div></section>
       </div>`;
@@ -1011,6 +1018,128 @@ function entryModal(e, ctx, after) {
       s.onclick = () => busy(s, () => api('/clinic/hr/attendance' + (e ? '/' + e.id : ''), { method: e ? 'PUT' : 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Saved'); after(); }).catch(() => {});
       const d = el.querySelector('[data-del]'); if (d) d.onclick = () => confirm('Delete this entry?') && busy(d, () => api('/clinic/hr/attendance/' + e.id, { method: 'DELETE' })).then(() => { close(); after(); }).catch(() => {});
     } });
+}
+
+/* ---------------- Staff documents ----------------
+   Everyone: My documents (read and sign memos, notices, policies, training records; see own records).
+   Managers: Staff → Documents (issue, track signatures, withdraw, record PDF) and Staff → Staff files. */
+const DOCK = { memo: 'Memo', notice: 'Notice', policy: 'Policy', training: 'Training record', record: 'Staff record' };
+const fSize = n => n > 1048576 ? (n / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' KB';
+const docState = d => !d.requires_ack ? pill('no_charge', 'For information') : d.ack_at ? pill('final', 'Signed') : d.status === 'withdrawn' ? pill('cancelled', 'Withdrawn') : pill('no_show', 'To sign');
+async function refreshDocBadge() {
+  try {
+    const r = await api('/clinic/hr/docs/pending'), n = r.pending;
+    const bdg = app.querySelector('[data-db]'); if (bdg) { bdg.hidden = !n; bdg.textContent = n; }
+    const bar = app.querySelector('[data-docbar]'); if (!bar) return;
+    const onDocs = ['documents', 'doc'].includes(parseHash().parts[0]);
+    bar.hidden = !n || onDocs;
+    bar.innerHTML = n ? `${icon('file-text', 20)}<div class="grow"><b>${n === 1 ? '1 document' : n + ' documents'} to read and sign</b><span>Issued to you by the clinic management — please read and sign today.</span></div><a class="btn sm" href="#/documents">Open</a>` : '';
+  } catch {}
+}
+async function viewMyDocuments() {
+  const d = await api('/clinic/hr/docs/mine');
+  const todo = d.docs.filter(x => x.requires_ack && !x.ack_at && x.status === 'issued');
+  const row = x => `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.ref_no)} · ${esc(x.kind === 'record' ? x.record_label || 'Staff record' : x.kind_label)} · issued ${esc(fDate(x.issued_at.slice(0, 10)))} by ${esc(x.issued_by_name)}${x.due_date && !x.ack_at ? ` · <b>sign by ${esc(fDate(x.due_date))}</b>` : ''}</span></div>${docState(x)}</a>`;
+  MAIN.innerHTML = `<div class="head"><div><h1>My documents</h1><p>Memos, notices, policies and training records issued to you, and your staff records.</p></div></div>
+    ${todo.length ? `<section class="panel" style="border:2px solid var(--alert)"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3 style="color:var(--alert)">To read and sign (${todo.length})</h3></div></div><div class="rows">${todo.map(row).join('')}</div></section>` : ''}
+    <section class="panel"><div class="panel-h"><div class="t">${icon('file-text', 20)}<h3>All documents</h3></div></div>
+      ${d.docs.filter(x => !todo.includes(x)).length ? `<div class="rows">${d.docs.filter(x => !todo.includes(x)).map(row).join('')}</div>` : '<p class="muted">Nothing yet.</p>'}</section>
+    ${d.warnings.length ? `<section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>Warning letters</h3></div></div><div class="rows">${d.warnings.map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')}</span></div>${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div></section>` : ''}`;
+  refreshDocBadge();
+}
+async function viewDoc(id) {
+  const r = await api('/clinic/hr/docs/' + id), d = r.doc, mine = r.mine;
+  const fileUrl = `${BASE}/api/clinic/hr/docs/${id}/file`;
+  const isImg = d.file_type && d.file_type.startsWith('image/');
+  const meta = [`${esc(d.ref_no)}`, esc(d.kind === 'record' ? d.record_label || 'Staff record' : d.kind_label), `issued ${esc(fUtc(d.issued_at))} by ${esc(d.issued_by_name)}`].join(' · ');
+  const signBox = !mine ? '' : mine.ack_at ? `<div class="notice good">${icon('check-circle', 18)}<div>You signed this on <b>${esc(fUtc(mine.ack_at))}</b> as “${esc(mine.ack_name)}”. ${pdfLink(`/hr/docs/${id}/signed.pdf`, 'My signed copy')}</div></div>`
+    : d.status !== 'issued' ? `<div class="notice">${icon('info', 18)}<div>This document was withdrawn: ${esc(d.withdraw_reason || '')}</div></div>`
+    : !d.requires_ack ? '' : `<section class="panel signbox"><div class="panel-h"><div class="t">${icon('pencil', 20)}<h3>Sign this document</h3></div></div>
+      <form data-sign class="stack" style="gap:12px">
+        <label class="agree"><input type="checkbox" name="agree"> I have read and understood this document${d.kind === 'training' ? ' and attended this training' : ''}, and I agree to follow it.</label>
+        ${field('Type your full name as your signature', inp('name', '', `autocomplete="off" placeholder="${esc(ME.name)}"`))}
+        ${field('Comment (optional)', inp('comment', '', 'maxlength="500"'))}
+        <div style="display:flex;justify-content:flex-end"><button class="btn gold" data-go>${icon('check', 18)}Sign</button></div></form>
+      <p class="small muted">Your signature is recorded with the date, time and this device, together with a fingerprint of the exact document you signed.</p></section>`;
+  MAIN.innerHTML = `<div class="head"><div><a class="small muted" href="${mine && !canMgr() ? '#/documents' : (d.kind === 'record' ? `#/staff?tab=files&s=${d.staff_id}` : '#/staff?tab=docs')}" style="text-decoration:none">← Back</a><h1>${esc(d.title)}</h1><p>${meta}</p></div>
+      <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${canMgr() ? pdfLink(`/hr/docs/${id}/record.pdf`, 'Acknowledgement record') : ''}${canMgr() && d.status === 'issued' ? `<button class="btn quiet" data-wd>Withdraw</button>` : ''}</div></div>
+    ${d.status === 'withdrawn' ? `<div class="notice">${icon('info', 18)}<div>Withdrawn ${esc(fUtc(d.withdrawn_at))}: ${esc(d.withdraw_reason)}</div></div>` : ''}
+    ${d.kind === 'training' ? `<div class="notice">${icon('calendar-check', 18)}<div>Training on <b>${esc(fDate(d.training_date))}</b>${d.trainer ? ` · trainer <b>${esc(d.trainer)}</b>` : ''}${d.training_hours ? ` · ${d.training_hours} h` : ''}</div></div>` : ''}
+    ${mine && !mine.ack_at && d.due_date && d.requires_ack ? `<div class="notice">${icon('clock', 18)}<div>Please sign by <b>${esc(fDate(d.due_date))}</b>.</div></div>` : ''}
+    <section class="panel doc-body">
+      ${d.body ? `<div class="doc-text">${esc(d.body).replace(/\n/g, '<br>')}</div>` : ''}
+      ${d.has_file ? `<div class="doc-file"><div class="row"><div class="grow"><b>${icon('file-text', 16)} ${esc(d.file_name || 'Attached file')}</b><span>${d.file_size ? fSize(d.file_size) : ''}</span></div><a class="btn sm ghost" href="${fileUrl}" target="_blank" rel="noopener">${icon('external-link', 15)}Open full screen</a></div>
+        ${isImg ? `<img src="${fileUrl}" alt="" style="width:100%;border-radius:8px;margin-top:8px">` : `<iframe src="${fileUrl}" title="Document" class="doc-frame"></iframe>`}</div>` : ''}
+    </section>
+    ${signBox}
+    ${r.recipients ? `<section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('users', 20)}<h3>Signatures · ${r.recipients.filter(x => x.ack_at).length} of ${r.recipients.length}</h3></div></div>
+      <div class="table-wrap"><table class="t"><thead><tr><th>Staff</th><th>Opened</th><th>Signed</th><th>Signed as</th><th>Comment</th></tr></thead><tbody>
+      ${r.recipients.map(x => `<tr><td><b>${esc(x.name)}</b></td><td>${x.viewed_at ? esc(fUtc(x.viewed_at)) : '<span class="muted">not opened</span>'}</td><td>${x.ack_at ? esc(fUtc(x.ack_at)) : d.requires_ack ? '<b style="color:var(--alert)">Not signed</b>' : '—'}</td><td>${esc(x.ack_name || '')}</td><td class="small">${esc(x.ack_comment || '')}${x.ack_at ? ` ${pdfLink(`/hr/docs/${id}/signed.pdf?staff=${x.staff_id}`, 'Copy')}` : ''}</td></tr>`).join('')}</tbody></table></div></section>` : ''}`;
+  const f = MAIN.querySelector('[data-sign]');
+  if (f) MAIN.querySelector('[data-go]').onclick = e => { e.preventDefault(); const v = formData(f); busy(e.currentTarget, () => api(`/clinic/hr/docs/${id}/ack`, { method: 'POST', body: { agree: f.agree.checked, name: v.name, comment: v.comment } })).then(() => { toast('Signed — thank you'); refreshDocBadge(); route(); }).catch(() => {}); };
+  const wd = MAIN.querySelector('[data-wd]');
+  if (wd) wd.onclick = () => modal({ title: 'Withdraw document', body: `<p>Staff will no longer be asked to sign it. Signatures already given stay on record. To correct a document, withdraw it and issue a new one.</p><form data-f>${field('Reason', inp('reason', '', 'maxlength="300"'))}</form>`, actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Withdraw</button>',
+    onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api(`/clinic/hr/docs/${id}/withdraw`, { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Withdrawn'); route(); }).catch(() => {}); } });
+}
+const canMgr = () => ME.admin || ME.role === 'manager';
+async function uploadFile(input) {
+  const file = input.files && input.files[0]; if (!file) return null;
+  if (file.size > 10 * 1024 * 1024) throw new Error('Files can be up to 10 MB.');
+  const res = await fetch(`${BASE}/api/clinic/hr/docs/file`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name) }, body: file });
+  const d = await res.json(); if (!d.ok) throw new Error(d.error || 'Upload failed.'); return d.file;
+}
+async function issueDocModal(opts = {}, after) {
+  const team = B.team.filter(t => t.active && t.username !== 'hasta');
+  const isRec = opts.kind === 'record';
+  modal({ title: isRec ? `Add to ${opts.staff_name}'s file` : 'Issue a document', wide: true,
+    body: `<form data-f class="stack" style="gap:12px">
+      ${isRec ? `<div class="grid2">${field('Record type', sel('record_type', Object.entries(opts.record_types || {}), 'contract'))}${field('Title', inp('title', '', 'maxlength="160" placeholder="e.g. Appointment letter — Staff Nurse"'))}</div>`
+      : `<div class="grid2">${field('Type', sel('kind', [['memo', 'Memo'], ['notice', 'Notice'], ['policy', 'Policy'], ['training', 'Training record']], opts.kind || 'memo'))}${field('Title', inp('title', '', 'maxlength="160" placeholder="e.g. Use of the clinic official phone"'))}</div>
+        <div class="grid3" data-train hidden>${field('Training date', inp('training_date', today(), 'type="date"'))}${field('Trainer', inp('trainer', '', 'maxlength="80"'))}${field('Hours', inp('training_hours', '', 'type="number" step="0.5" min="0"'))}</div>`}
+      ${field(isRec ? 'Notes (optional)' : 'Text (optional if you attach a file)', `<textarea class="in" name="body" rows="${isRec ? 2 : 6}" maxlength="20000"></textarea>`)}
+      ${field('Attach file (PDF or image, up to 10 MB)', '<input class="in" type="file" name="file" accept="application/pdf,image/jpeg,image/png,image/webp" style="padding:8px">')}
+      ${isRec ? `<label style="display:flex;gap:8px;align-items:center"><input type="checkbox" name="requires_ack"> Ask ${esc(opts.staff_name)} to sign it (e.g. appointment letter)</label>`
+      : `<div><b class="small">Send to</b><div style="display:flex;gap:16px;margin:6px 0"><label><input type="radio" name="audience" value="all" checked> All staff</label><label><input type="radio" name="audience" value="selected"> Chosen staff</label></div>
+        <div class="checks" data-who hidden>${team.map(t => `<label><input type="checkbox" name="who" value="${t.id}"> ${esc(t.name)}</label>`).join('')}</div></div>
+        <div class="grid2">${field('Sign by (optional)', inp('due_date', '', 'type="date"'))}<label style="display:flex;gap:8px;align-items:center;margin-top:22px"><input type="checkbox" name="requires_ack" checked> Recipients must sign</label></div>`}
+    </form><p class="small muted">${isRec ? 'Kept in the staff file; the staff member can see it in My documents.' : 'Once issued, a document cannot be edited — only withdrawn. Each recipient sees it in My documents and is reminded until they sign.'}</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>${isRec ? 'Save' : 'Issue'}</button>`,
+    onMount(el, close) {
+      const f = el.querySelector('[data-f]');
+      const sync = () => { const t = el.querySelector('[data-train]'); if (t) t.hidden = f.kind.value !== 'training'; const w = el.querySelector('[data-who]'); if (w) w.hidden = f.querySelector('[name=audience]:checked').value !== 'selected'; };
+      f.addEventListener('change', sync); sync();
+      const s = el.querySelector('[data-save]');
+      s.onclick = () => busy(s, async () => {
+        const v = formData(f), file = await uploadFile(f.file);
+        const body = { kind: isRec ? 'record' : v.kind, title: v.title, body: v.body, file, requires_ack: f.requires_ack.checked };
+        if (isRec) Object.assign(body, { staff_id: opts.staff_id, record_type: v.record_type });
+        else Object.assign(body, { audience: f.querySelector('[name=audience]:checked').value, staff_ids: [...f.querySelectorAll('[name=who]:checked')].map(x => +x.value), due_date: v.due_date, training_date: v.training_date, trainer: v.trainer, training_hours: v.training_hours });
+        return api('/clinic/hr/docs', { method: 'POST', body });
+      }).then(r => { close(); toast(isRec ? 'Saved to staff file' : `${r.ref_no} issued to ${r.recipients} staff`); after(r); }).catch(() => {});
+    } });
+}
+async function staffDocsTab(head, q) {
+  const kind = q.get('k') || '', d = await api('/clinic/hr/docs' + (kind ? '?kind=' + kind : ''));
+  MAIN.innerHTML = head('Memos, notices, policies and training records — issued and signed in the app', `<button class="btn gold" data-issue>${icon('plus', 18)}Issue document</button>`) +
+    `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">${[['', 'All'], ['memo', 'Memos'], ['notice', 'Notices'], ['policy', 'Policies'], ['training', 'Training']].map(([k, l]) => `<a class="btn sm ${k === kind ? '' : 'ghost'}" href="#/staff?tab=docs${k ? '&k=' + k : ''}">${l}</a>`).join('')}</div>
+    <section class="panel flush"><div class="rows">${d.docs.map(x => { const pct = x.recipients ? Math.round(x.signed / x.recipients * 100) : 0; return `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.ref_no)} · ${esc(x.kind_label)} · ${esc(fDate(x.issued_at.slice(0, 10)))} · ${esc(x.issued_by_name)}${x.due_date ? ' · sign by ' + esc(fDate(x.due_date)) : ''}</span></div>
+      ${x.status === 'withdrawn' ? pill('cancelled', 'Withdrawn') : x.requires_ack ? `<div class="sigbar" title="${x.signed} of ${x.recipients} signed"><i style="width:${pct}%"></i><span>${x.signed}/${x.recipients} signed</span></div>` : pill('no_charge', 'Information')}</a>`; }).join('') || emptyState('file-text', 'No documents issued yet.')}</div></section>`;
+  MAIN.querySelector('[data-issue]').onclick = () => issueDocModal({}, r => go('#/doc/' + r.id));
+}
+async function staffFilesTab(head, q) {
+  const team = B.team.filter(t => t.username !== 'hasta').sort((a, b) => a.name.localeCompare(b.name));
+  const sid = +q.get('s') || (team[0] && team[0].id);
+  const f = sid ? await api('/clinic/hr/staff-file/' + sid) : null;
+  MAIN.innerHTML = head('Each person\'s records, the documents issued to them, and warning letters') + `<div class="files">
+    <nav class="filelist">${team.map(t => `<a href="#/staff?tab=files&s=${t.id}" class="${t.id === sid ? 'on' : ''}">${esc(t.name)}${t.active ? '' : ' <small>(left)</small>'}</a>`).join('')}</nav>
+    <div>${f ? `<section class="panel"><div class="panel-h"><div class="t">${icon('user', 20)}<h3>${esc(f.staff.name)} · records</h3></div><button class="btn sm gold" data-add>${icon('plus', 15)}Add record</button></div>
+      ${f.records.length ? `<div class="rows">${f.records.map(x => `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.record_label)} · ${esc(x.ref_no)} · added ${esc(fDate(x.issued_at.slice(0, 10)))} by ${esc(x.issued_by_name)}${x.file_name ? ' · ' + esc(x.file_name) : ''}</span></div>${x.status === 'withdrawn' ? pill('cancelled', 'Removed') : x.requires_ack ? '' : ''}</a>`).join('')}</div>` : '<p class="muted">No records yet — add the appointment letter, ID proof, certificates and registration.</p>'}</section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('file-text', 20)}<h3>Documents issued</h3></div></div>
+      ${f.issued.length ? `<div class="rows">${f.issued.map(x => `<a class="row" href="#/doc/${x.id}" style="text-decoration:none;color:inherit"><div class="grow"><b>${esc(x.title)}</b><span>${esc(x.ref_no)} · ${esc(x.kind_label)} · ${esc(fDate(x.issued_at.slice(0, 10)))}${x.ack_at ? ' · signed ' + esc(fUtc(x.ack_at)) : x.viewed_at ? ' · opened, not signed' : ' · not opened'}</span></div>${docState(x)}</a>`).join('')}</div>` : '<p class="muted">None.</p>'}</section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>Warning letters</h3></div></div>
+      ${f.warnings.length ? `<div class="rows">${f.warnings.map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')} · by ${esc(w.issued_by_name)}</span></div>${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">None.</p>'}</section>` : emptyState('users', 'No staff.')}</div></div>`;
+  const add = MAIN.querySelector('[data-add]');
+  if (add) add.onclick = () => issueDocModal({ kind: 'record', staff_id: sid, staff_name: f.staff.name, record_types: f.record_types }, () => route());
 }
 
 /* ---------------- Reports ---------------- */
@@ -1222,7 +1351,6 @@ const GSTR = [0, 5, 12, 18, 28];
 const POST = { draft: 'Draft', approved: 'Approved', part_received: 'Part received', received: 'Received', closed: 'Closed', cancelled: 'Cancelled' };
 const PAYM = { bank: 'Bank transfer', upi: 'UPI', cash: 'Cash', cheque: 'Cheque', card: 'Card' };
 const qtyf = n => (Math.round((n || 0) * 1000) / 1000).toLocaleString('en-IN');
-const canMgr = () => ME.admin || ME.role === 'manager';
 let SUP = null;
 async function suppliersList(force) { if (!SUP || force) SUP = (await api('/clinic/suppliers')).suppliers; return SUP; }
 const products = async () => (await catalogue()).filter(i => i.kind === 'product');

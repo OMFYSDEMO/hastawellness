@@ -118,3 +118,17 @@ table.attgrid td[data-cell]{cursor:pointer}table.attgrid td[data-cell]:hover{bac
 .kiosk-recent div{display:flex;justify-content:space-between;font-size:16px;padding:4px 0}.kiosk-recent span{color:#9fb8b4}
 .kiosk-card{max-width:520px;text-align:center;background:rgba(255,255,255,.06);border-radius:20px;padding:36px}.kiosk-card h1{color:#fff}.kiosk-card p{color:#d6e3e1}
 @media (max-width:900px){.kiosk-wrap{grid-template-columns:1fr;gap:24px}}
+
+/* Staff documents */
+.docbar{position:sticky;top:0;z-index:29;display:flex;align-items:center;gap:12px;padding:10px 18px;background:#fff3d6;color:#5a4614;border-bottom:1px solid #ecdcae}
+.docbar[hidden]{display:none}.docbar .grow{flex:1;min-width:0}.docbar b{display:block;font-size:14px}.docbar span{font-size:12.5px}
+.doc-text{font-size:15px;line-height:1.65;white-space:normal}
+.doc-file{margin-top:14px}.doc-frame{width:100%;height:72vh;border:1px solid var(--line);border-radius:8px;margin-top:8px;background:#fff}
+.signbox{border:2px solid var(--gold)}
+.agree{display:flex;gap:10px;align-items:flex-start;font-weight:600;font-size:15px}.agree input{width:20px;height:20px;margin-top:2px}
+.notice.good{background:var(--good-soft);border-color:#c8e3d1}
+.sigbar{position:relative;width:150px;height:22px;border-radius:999px;background:#eef2f1;overflow:hidden;flex:none}.sigbar i{position:absolute;inset:0 auto 0 0;background:#cfe8d8}.sigbar span{position:relative;display:block;text-align:center;font-size:11.5px;font-weight:700;line-height:22px;color:var(--teal-ink)}
+.files{display:grid;grid-template-columns:220px 1fr;gap:16px;align-items:start}
+.filelist{display:flex;flex-direction:column;background:var(--panel);border:1px solid var(--line-soft);border-radius:var(--r-lg);padding:6px;position:sticky;top:70px}
+.filelist a{padding:9px 12px;border-radius:8px;text-decoration:none;color:var(--teal-ink);font-weight:500}.filelist a.on{background:var(--teal-mist);font-weight:700}.filelist a:hover{background:#f4f7f6}
+@media (max-width:800px){.files{grid-template-columns:1fr}.filelist{position:static;flex-direction:row;overflow-x:auto}.filelist a{white-space:nowrap}.doc-frame{height:60vh}}

@@ -19,6 +19,7 @@ import { verifySecret, hashSecret, handleEms } from './ems.js';
 import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlertStmts, stockAlertsFrom } from './stock.js';
 import { careRoute, uploadPhoto, recallStmt } from './care.js';
 import { hrRoute, kioskRoute, scanRoute } from './hr.js';
+import { docsRoute, uploadDocFile } from './docs.js';
 
 /* ---------------- helpers ---------------- */
 const IST = 330 * 60000;
@@ -113,17 +114,17 @@ function shell(base) {
 <title>Hasta Clinic</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=6">
-<link rel="modulepreload" href="/clinic/app.js?v=11"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=7">
+<link rel="modulepreload" href="/clinic/app.js?v=12"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=11"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=12"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
 function kioskShell(base) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><meta name="ems-base" content="${h(base)}"><title>Staff attendance · Hasta</title>
-<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=6">
+<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=7">
 </head><body class="kiosk-body"><div id="kiosk" class="kiosk"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
 <script type="module" src="/clinic/kiosk.js?v=1"></script></body></html>`;
 }
@@ -138,6 +139,13 @@ async function route(request, env, url, p, base) {
     const { me: u } = await clinicSession(request, env);
     if (!u) return api({ ok: false, error: 'Please sign in.' }, 401);
     return uploadPhoto(request, env, u, url);
+  }
+  // Staff document upload: raw file body (PDF / image), not JSON.
+  if (p === '/hr/docs/file' && m === 'POST') {
+    if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
+    const { me: u } = await clinicSession(request, env);
+    if (!u) return api({ ok: false, error: 'Please sign in.' }, 401);
+    return uploadDocFile(request, env, u);
   }
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
@@ -230,6 +238,7 @@ async function route(request, env, url, p, base) {
   const sr = await stockRoute(request, env, me, p, m, b, q);
   if (sr) return sr;
   // Care records: notes, dental chart, plans, recalls, photos (src/care.js)
+  { const dr = await docsRoute(request, env, url, me, p, m, b, q); if (dr) return dr; }
   { const hr = await hrRoute(request, env, url, me, p, m, b, q, base); if (hr) return hr; }
   const cr = await careRoute(request, env, me, p, m, b, q);
   if (cr) return cr;

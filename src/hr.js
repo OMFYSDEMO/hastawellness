@@ -46,7 +46,7 @@ const WINDOW_S = 30;
 export const approverIds = s => String(s.leave_approvers || '').split(',').map(Number).filter(Boolean);
 export const isApprover = (u, s) => { const ids = approverIds(s); return ids.length ? ids.includes(u.id) : u.admin; };
 
-async function audit(env, me, action, entity, id, detail) {
+export async function audit(env, me, action, entity, id, detail) {
   await env.DB.prepare('INSERT INTO cl_audit (staff_id, staff_name, action, entity, entity_id, detail) VALUES (?,?,?,?,?,?)').bind(me.id, me.name, action, entity, id || null, detail ? String(detail).slice(0, 500) : null).run();
 }
 
@@ -334,7 +334,7 @@ const inr = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractio
 const rs = n => 'Rs. ' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fd = d => new Date(d + 'T00:00:00Z').toLocaleDateString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'short', year: 'numeric' });
 const fm = m => new Date(m + '-01T00:00:00Z').toLocaleDateString('en-GB', { timeZone: 'UTC', month: 'long', year: 'numeric' });
-async function pdfKit(s) {
+export async function pdfKit(s) {
   const pdf = await PDFDocument.create();
   const reg = await pdf.embedFont(StandardFonts.Helvetica), bold = await pdf.embedFont(StandardFonts.HelveticaBold);
   const ink = rgb(0.11, 0.2, 0.22), muted = rgb(0.42, 0.47, 0.47), teal = rgb(0.2, 0.35, 0.37);
@@ -347,7 +347,7 @@ async function pdfKit(s) {
   newPage();
   return { pdf, reg, bold, ink, muted, L, W, text, right, wrap, newPage, get y() { return y; }, set y(v) { y = v; }, get page() { return page; } };
 }
-const pdfResponse = (bytes, name) => new Response(bytes, { headers: { ...HEADERS, 'content-type': 'application/pdf', 'content-disposition': `inline; filename="${name}"` } });
+export const pdfResponse = (bytes, name) => new Response(bytes, { headers: { ...HEADERS, 'content-type': 'application/pdf', 'content-disposition': `inline; filename="${name}"` } });
 
 async function warningPdf(env, id) {
   const w = await env.DB.prepare('SELECT w.*, s.name staff_name FROM cl_warnings w JOIN ems_staff s ON s.id=w.staff_id WHERE w.id=?').bind(id).first();

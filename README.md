@@ -126,3 +126,9 @@ client's active package includes them.
 - **Absences:** a working day (not weekly off / holiday) with no attendance and no approved leave is an unauthorised absence. A manager or the approver either adds the attendance ("was at work") or confirms it, which issues a numbered warning letter PDF (`WL/YYYY/0001`).
 - **Pay:** rate = monthly salary ÷ (working days × daily hours). Paid hours = worked + paid leave, capped at contract hours less absent / unpaid-leave days. No overtime. Months are finalised (locked) by a manager once ended; payslips then appear for staff. PF / ESI / TDS are not included.
 - Staff without the clinic app (e.g. support staff) can sign in and see only *My attendance*.
+
+### Clinic app: staff documents (`src/docs.js`, migration 0016)
+- Managers issue memos, notices, policies and training records (text and/or a PDF / image up to 10 MB, stored in R2 under `staff-docs/`) to all staff or chosen staff, optionally with a sign-by date.
+- Each recipient sees it in *My documents* (a banner reminds them until signed), opens it, ticks "I have read and understood" and types their full name. The signature is stored with time, IP, device and the document's SHA-256 fingerprint (title + text + file hash). Issued documents cannot be edited — only withdrawn.
+- Staff → Documents shows signing progress; each document has an acknowledgement-record PDF, and every signer a signed copy (original PDF + acknowledgement page).
+- Staff → Staff files keeps each person's records (appointment letter, ID proof, certificates, registration…), the documents issued to them and their warning letters. Staff see their own records.
