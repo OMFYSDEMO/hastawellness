@@ -304,7 +304,8 @@ export async function certify(env, me, b) {
   const staffId = parseInt(b.staff_id, 10), mt = parseInt(b.machine_type_id, 10);
   if (!staffId || !mt) return [400, 'Choose the trainer and the machine.'];
   if (staffId === me.id) return [400, 'You cannot certify yourself. Ask another coach or doctor.'];
-  const tr = await env.DB.prepare('SELECT skills, active FROM ems_staff WHERE id=?').bind(staffId).first();
+  const tr = await env.DB.prepare('SELECT skills, active, role FROM ems_staff WHERE id=?').bind(staffId).first();
+  if (tr && tr.role === 'trainee') return [400, 'Academy trainees are certified through Academy → Trainees.'];
   if (!tr || !tr.active || !parse(tr.skills, []).includes('trainer')) return [400, 'That person is not an active EMS trainer. Add the EMS trainer skill first.'];
   const m = await env.DB.prepare('SELECT id FROM ems_machine_types WHERE id=? AND active=1').bind(mt).first();
   if (!m) return [400, 'Choose an active machine.'];

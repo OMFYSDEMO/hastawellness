@@ -2,6 +2,7 @@ import { PAGES } from './pages.js';
 import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify, channelFromVisit, channelCookie, leadChannel } from './util.js';
 import { handleEms, emsDaily } from './ems.js';
 import { verifyPage } from './academy.js';
+import { academyPage, academyApply, purgeAcademyDocs } from './admissions.js';
 import { handleClinic } from './clinic.js';
 import { handleCareers, handleApply, handleAdminJobs, handleAdminApplications, handleAdminCv, careerSitemapPaths, purgeOldApplications } from './careers.js';
 // Hasta Wellness — Cloudflare Worker
@@ -47,6 +48,8 @@ export default {
       if (path === '/admin/jobs' || path.startsWith('/admin/jobs/')) return await handleAdminJobs(request, env, url);
       if (path === '/admin/applications') return await handleAdminApplications(request, env, url);
       if (path.startsWith('/admin/cv/')) return await handleAdminCv(request, env, url);
+      if (path === '/academy/apply') return await academyApply(request, env, url, ctx);
+      if (path === '/academy' || path.startsWith('/academy/')) return await academyPage(env, url);
       if (path === '/careers/apply') return await handleApply(request, env, url, ctx);
       if (path === '/careers' || path.startsWith('/careers/')) return await handleCareers(request, env, url);
     } catch (err) {
@@ -57,7 +60,7 @@ export default {
     const SHORT = { '/ig': 'instagram', '/fb': 'facebook', '/wa': 'whatsapp', '/gmb': 'google' };
     if (SHORT[path]) return new Response(null, { status: 302, headers: { location: `/?src=${SHORT[path]}#book`, 'cache-control': 'no-store', 'set-cookie': channelCookie(url, SHORT[path]) } });
     if (path === '/robots.txt') return robots(url);
-    if (path === '/sitemap.xml') return sitemap(url, await careerSitemapPaths(env).catch(() => []));
+    if (path === '/sitemap.xml') return sitemap(url, ['/academy/', ...(await careerSitemapPaths(env).catch(() => []))]);
     const res = await serveAsset(request, env, url);
     // Remember where the visitor came from (Instagram, Facebook, Google…) so a later enquiry is tagged with it.
     const ch = request.method === 'GET' ? channelFromVisit(request, url) : null;
@@ -76,6 +79,7 @@ export default {
     ).bind(`-${days} days`).run();
     console.log('Lead retention clean-up removed', r.meta && r.meta.changes, 'rows');
     await purgeOldApplications(env);
+    await purgeAcademyDocs(env).catch(e => console.error('academy purge', e));
     await emsDaily(env).catch(err => console.error('EMS daily job failed', err && err.stack || err));
   },
 };

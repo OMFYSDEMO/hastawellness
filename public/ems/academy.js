@@ -1,5 +1,5 @@
 // Hasta EMS Academy — staff screens (framework v1.0).
-import { api, esc, icon, toast, modal, formData, busy, field, inp, sel, emptyState, today, fDate, fDay, pill, BASE } from './core.js?v=8';
+import { api, esc, icon, toast, modal, formData, busy, field, inp, sel, emptyState, today, fDate, fDay, pill, BASE, prettyPhone, wa, initials } from './core.js?v=8';
 
 const TABS = [['overview', 'graduation-cap', 'Overview'], ['curriculum', 'book-open', 'Curriculum'], ['questions', 'list-checks', 'Question bank'],
   ['masters', 'stethoscope', 'Master Trainers'], ['trainees', 'users', 'Trainees'], ['certificates', 'award', 'Certificates']];
@@ -22,14 +22,15 @@ export async function viewAcademy(MAIN, ME, MACHINES, tab = 'overview', go) {
   const ov = await api('/staff/academy');
   const me = ov.me, mName = id => (ov.machines.find(m => m.id === id) || {}).name || 'Machine';
   const approved = ov.curricula.find(c => c.status === 'approved');
+  const tabs = TABS.concat(ME.role === 'admin' || ME.role === 'manager' ? [['admissions', 'user-plus', 'Admissions']] : []);
   MAIN.innerHTML = `<div class="head"><div><h1>Hasta EMS Academy</h1><p>Training and certification for every trainer, on every machine. Framework v1.0.</p></div>
       <div class="acts">${me.medical_lead ? pill('good', 'Medical lead') : ''}${me.master_on.length ? pill('active', 'Master Trainer') : ''}</div></div>
-    <nav class="tabs">${TABS.map(([k, ic, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${icon(ic, 17)}${l}</button>`).join('')}</nav><div data-body></div>`;
+    <nav class="tabs">${tabs.map(([k, ic, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${icon(ic, 17)}${l}</button>`).join('')}</nav><div data-body></div>`;
   MAIN.querySelectorAll('[data-tab]').forEach(b => b.addEventListener('click', () => go(`#/academy?tab=${b.dataset.tab}`)));
   const body = MAIN.querySelector('[data-body]');
   const again = () => viewAcademy(MAIN, ME, MACHINES, tab, go);
   const ctx = { ov, me, mName, approved, again, go };
-  await ({ overview: tOverview, curriculum: tCurriculum, questions: tQuestions, masters: tMasters, trainees: tTrainees, certificates: tCerts }[tab] || tOverview)(body, ctx);
+  await ({ overview: tOverview, curriculum: tCurriculum, questions: tQuestions, masters: tMasters, trainees: tTrainees, certificates: tCerts, admissions: tAdmissions }[tab] || tOverview)(body, ctx);
 }
 
 /* ---------- Overview ---------- */
@@ -60,7 +61,7 @@ async function tOverview(el, { ov, me, mName, approved }) {
 function recordRow(x, mName, mine) {
   const q = x.req;
   const st = x.status === 'certified' ? pill('good', 'Certified') : x.status === 'retraining' ? pill('alert', 'Retraining needed') : x.status === 'closed' ? pill('closed', 'Closed') : q.ready ? pill('good', 'Ready to certify') : pill('warn', 'In training');
-  return `<div class="row" style="align-items:flex-start;flex-wrap:wrap;gap:12px"><div class="grow" style="min-width:220px"><b>${mine ? esc(x.machine_name) : esc(x.trainee_name) + ' · ' + esc(x.machine_name)}</b>
+  return `<div class="row" style="align-items:flex-start;flex-wrap:wrap;gap:12px"><div class="grow" style="min-width:220px"><b>${mine ? esc(x.machine_name) : esc(x.trainee_name) + ' · ' + esc(x.machine_name)}</b>${!mine && x.trainee_role === 'trainee' ? ' ' + pill('active', 'Academy candidate') : ''}
       <span>${x.kind === 'renewal' ? 'Renewal' : 'Initial'} · curriculum v${esc(x.curriculum_version)} · opened ${fDate(x.created_at)}${q.renewal ? ` · ${q.renewal.activity} session${q.renewal.activity === 1 ? '' : 's'} on this machine in 12 months${q.renewal.reduced ? ' (reduced renewal)' : ' (full requirements apply)'}` : ''}</span></div>
     <div style="min-width:150px"><div class="small muted">Theory test</div>${q.test.done ? pill('good', `Passed ${q.test.score}%`) : q.test.attempts ? pill('alert', `Last ${q.test.score}% · ${q.test.left} left`) : pill('closed', 'Not taken')}</div>
     <div style="min-width:150px"><div class="small muted">Supervised (${q.logs.first}/${q.logs.need_first} first)</div>${meter(q.logs.count, q.logs.need)}</div>
@@ -245,7 +246,8 @@ async function tTrainees(el, ctx) {
   }));
   el.querySelectorAll('[data-log]').forEach(b => b.addEventListener('click', () => modal({
     title: 'Log a supervised session', body: `<form data-f class="stack" style="gap:12px">${field('Session date', inp('session_date', today(), `type="date" max="${today()}"`))}${field('Booking ID', inp('appointment_id', '', 'inputmode="numeric" placeholder="Optional"'), 'links the log to an attended booking')}
-      <label class="check"><input type="checkbox" name="first_session"><span>This was the client's first EMS session</span></label>${field('Notes', `<textarea class="in" name="notes" maxlength="300"></textarea>`)}
+      <label class="check"><input type="checkbox" name="first_session"><span>This was the client's first EMS session</span></label>
+      ${(records.find(r => r.id === +b.dataset.log) || {}).trainee_role === 'trainee' ? '<label class="check"><input type="checkbox" name="client_consent"><span>The client agreed, before the session, to an Academy trainee working with them under my supervision</span></label>' : ''}${field('Notes', `<textarea class="in" name="notes" maxlength="300"></textarea>`)}
       <p class="small muted">You confirm you directly supervised this session. Signed in your name.</p></form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Sign session</button>`,
     onMount(m, close) { const s = m.querySelector('[data-save]'); s.addEventListener('click', () => busy(s, () => api(`/staff/academy/records/${b.dataset.log}/logs`, { method: 'POST', body: formData(m.querySelector('[data-f]')) })).then(() => { close(); toast('Session logged'); again(); }).catch(() => {})); },
@@ -282,4 +284,164 @@ async function tCerts(el, ctx) {
         ${c.status !== 'revoked' && (me.role === 'admin' || me.master_on.length) ? `<button class="btn sm quiet" data-revoke="${c.id}">Revoke</button>` : ''}</td></tr>`).join('') || `<tr><td colspan="7">${emptyState('award', 'No certificates yet.')}</td></tr>`}</tbody></table></section>`;
   el.querySelectorAll('[data-cs]').forEach(b => b.addEventListener('click', () => { if (!confirm('Countersign this certificate? You confirm the training record meets the Academy standard.')) return; busy(b, () => api(`/staff/academy/certificates/${b.dataset.cs}/countersign`, { method: 'POST', body: {} })).then(() => { toast('Countersigned — certificate is now valid'); again(); }).catch(() => {}); }));
   el.querySelectorAll('[data-revoke]').forEach(b => b.addEventListener('click', () => { const reason = prompt('Reason for revoking this certificate?'); if (reason === null) return; busy(b, () => api(`/staff/certifications/${b.dataset.revoke}/revoke`, { method: 'POST', body: { reason } })).then(() => { toast('Certificate revoked'); again(); }).catch(() => {}); }));
+}
+
+/* ---------- Admissions (external candidates) ---------- */
+const CLINIC = location.hostname.startsWith('ems.') ? location.origin.replace('//ems.', '//clinicapp.') : location.origin + '/clinicapp';
+const SITE = location.hostname.startsWith('ems.') ? location.origin.replace('//ems.', '//') : location.origin;
+const money = n => '₹' + Number(n || 0).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const APP_PILL = { submitted: 'warn', interview: 'warn', offered: 'active', enrolled: 'good', completed: 'good', waitlisted: 'closed', rejected: 'closed', withdrawn: 'closed' };
+const BATCH_PILL = { draft: 'closed', open: 'good', closed: 'warn', completed: 'closed', cancelled: 'alert' };
+const gst = fee => Math.round((fee + 2 * Math.round(fee * 9) / 100) * 100) / 100;
+const feePill = a => !a.invoice ? '' : a.paid ? pill('good', 'Fee paid') : a.invoice.status === 'draft' ? pill('warn', 'Bill ready · not paid') : pill('alert', `Due ${money(a.invoice.total - a.invoice.paid)}`);
+
+async function tAdmissions(el, ctx) {
+  const d = await api('/staff/academy/admissions');
+  const params = new URLSearchParams(location.hash.split('?')[1] || '');
+  let fBatch = params.get('batch') || '', fStatus = params.get('st') || 'active';
+  const draw = () => {
+    const list = d.applications.filter(a => (!fBatch || a.batch_id === +fBatch) && (fStatus === 'all' || (fStatus === 'active' ? ['submitted', 'interview', 'offered', 'enrolled'].includes(a.status) : a.status === fStatus)));
+    const bCode = id => (d.batches.find(b => b.id === id) || {}).code || '';
+    el.innerHTML = `<div class="head" style="margin-bottom:12px"><div><p class="muted" style="margin:0">Applications come from <a href="${SITE}/academy/" target="_blank" rel="noopener">${SITE.replace(/^https?:\/\//, '')}/academy/</a>. Offer a seat → the course-fee bill (fee + 18% GST) appears in the clinic app → once paid, enrol to create the trainee's login.</p></div>
+      <div class="acts" style="display:flex;gap:8px">${ctx.me.role === 'admin' ? `<button class="btn ghost" data-terms>${icon('pencil', 16)}Course page text</button>` : ''}<button class="btn gold" data-newbatch>${icon('plus', 16)}New batch</button></div></div>
+    <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('calendar-days', 20)}<h3>Batches</h3></div></div>
+      <table class="t"><thead><tr><th>Batch</th><th>Dates</th><th>Machine</th><th class="n">Seats</th><th class="n">Fee + GST</th><th>Status</th><th class="n">To review</th><th></th></tr></thead><tbody>
+      ${d.batches.map(b => `<tr><td><b>${esc(b.code)}</b><div class="small muted">${esc(b.title)}</div></td><td class="small">${fDate(b.start_date)}${b.end_date ? ' – ' + fDate(b.end_date) : ''}${b.apply_by ? `<div class="muted">apply by ${fDate(b.apply_by)}</div>` : ''}</td>
+        <td class="small">${esc(b.machine_name || '—')}</td><td class="n">${b.taken}/${b.seats}</td><td class="n small">${b.fee ? `${money(b.fee_total)}<div class="muted">${money(b.fee)} + GST</div>` : '<span style="color:var(--alert)">Not set</span>'}</td>
+        <td>${pill(BATCH_PILL[b.status], b.status[0].toUpperCase() + b.status.slice(1))}</td><td class="n">${b.to_review ? `<b>${b.to_review}</b>` : '—'}</td><td><button class="btn sm quiet icon" data-eb="${b.id}" aria-label="Edit batch">${icon('pencil', 16)}</button></td></tr>`).join('') || `<tr><td colspan="8">${emptyState('calendar-days', 'No batches yet. Create one, set the fee and open it for applications.')}</td></tr>`}</tbody></table></section>
+    <section class="panel flush" style="margin-top:16px"><div class="panel-h" style="padding:18px 20px 8px;flex-wrap:wrap;gap:10px"><div class="t">${icon('inbox', 20)}<h3>Applications</h3></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">${sel('fb', [['', 'All batches']].concat(d.batches.map(b => [b.id, b.code])), fBatch, 'data-fb style="height:38px;width:auto"')}
+      ${sel('fs', [['active', 'In progress'], ['submitted', 'New'], ['interview', 'Interview'], ['offered', 'Offered'], ['enrolled', 'Enrolled'], ['completed', 'Certified'], ['waitlisted', 'Waitlisted'], ['rejected', 'Not accepted'], ['withdrawn', 'Withdrawn'], ['all', 'All']], fStatus, 'data-fs style="height:38px;width:auto"')}</div></div>
+      <div class="rows">${list.map(a => `<div class="row" data-app="${a.id}" style="cursor:pointer"><span class="avatar">${esc(initials(a.name))}</span><div class="grow"><b>${esc(a.name)}</b><span>${esc(a.app_no)} · ${esc(bCode(a.batch_id))} · ${esc(d.quals[a.qualification] || '')} · BLS ${esc(a.bls)} · applied ${fDay(a.created_at)}</span></div>
+        <div class="end" style="gap:6px;flex-wrap:wrap;justify-content:flex-end">${feePill(a)}${pill(APP_PILL[a.status], d.statuses[a.status])}</div></div>`).join('') || `<div class="row">${emptyState('inbox', 'No applications here.')}</div>`}</div></section>`;
+    el.querySelector('[data-fb]').onchange = e => { fBatch = e.target.value; draw(); };
+    el.querySelector('[data-fs]').onchange = e => { fStatus = e.target.value; draw(); };
+    el.querySelector('[data-newbatch]').onclick = () => batchModal(null);
+    el.querySelectorAll('[data-eb]').forEach(b => b.onclick = () => batchModal(d.batches.find(x => x.id === +b.dataset.eb)));
+    el.querySelectorAll('[data-app]').forEach(r => r.onclick = () => appModal(+r.dataset.app));
+    el.querySelector('[data-terms]')?.addEventListener('click', () => modal({
+      title: 'Course page text', wide: true,
+      body: `<form data-f class="stack" style="gap:12px">${field('Entry requirements (one per line)', `<textarea class="in" name="requirements" rows="6">${esc(d.settings.requirements)}</textarea>`)}${field('Fee and refund terms', `<textarea class="in" name="terms" rows="6" maxlength="1500">${esc(d.settings.terms)}</textarea>`, 'shown on the course page; applicants tick that they have read them')}</form>`,
+      actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
+      onMount(m, close) { const s = m.querySelector('[data-save]'); s.onclick = () => busy(s, () => api('/staff/academy/admissions/terms', { method: 'PUT', body: formData(m.querySelector('[data-f]')) })).then(() => { close(); toast('Saved'); ctx.again(); }).catch(() => {}); },
+    }));
+  };
+  const batchModal = b => modal({
+    title: b ? `Batch ${b.code}` : 'New batch', wide: true,
+    body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('Code', inp('code', b ? b.code : `EMSA-${today().slice(0, 4)}-`, 'maxlength="30" placeholder="EMSA-2026-12"'))}${field('Title', inp('title', b ? b.title : 'EMS Trainer Programme', 'maxlength="120"'))}</div>
+      <div class="grid3">${field('Starts', inp('start_date', b ? b.start_date : '', 'type="date"'))}${field('Ends', inp('end_date', b ? b.end_date || '' : '', 'type="date"'), 'optional')}${field('Applications close', inp('apply_by', b ? b.apply_by || '' : '', 'type="date"'), 'optional')}</div>
+      ${field('Schedule', inp('schedule', b ? b.schedule || '' : '', 'maxlength="200" placeholder="e.g. Classroom Mon–Fri 10 am – 4 pm, then supervised sessions over 4 weeks"'))}
+      <div class="grid3">${field('Machine', sel('machine_type_id', [['', 'Choose']].concat(d.machines.map(m => [m.id, m.name])), b ? b.machine_type_id : (d.machines[0] || {}).id))}${field('Seats', inp('seats', b ? b.seats : 6, 'type="number" min="1" max="50"'))}${field('Course fee before GST (₹)', inp('fee', b ? b.fee || '' : '', 'type="number" min="0" step="1" data-fee'), '18% GST is added on the bill')}</div>
+      <p class="small" data-feeinfo></p>
+      ${field('Status', sel('status', [['draft', 'Draft — not on the website'], ['open', 'Open for applications'], ['closed', 'Closed to applications'], ['completed', 'Completed'], ['cancelled', 'Cancelled']], b ? b.status : 'draft'))}
+      ${field('Internal notes', inp('notes', b ? b.notes || '' : '', 'maxlength="300"'))}</form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save batch</button>`,
+    onMount(m, close) {
+      const fee = m.querySelector('[data-fee]'), info = m.querySelector('[data-feeinfo]');
+      const upd = () => { const f = +fee.value || 0; info.innerHTML = f ? `Candidates pay <b>${money(gst(f))}</b> (${money(f)} + CGST ${money(Math.round(f * 9) / 100)} + SGST ${money(Math.round(f * 9) / 100)}).` : '<span class="muted">Set the fee before opening the batch.</span>'; };
+      fee.oninput = upd; upd();
+      const s = m.querySelector('[data-save]');
+      s.onclick = () => busy(s, () => api(b ? `/staff/academy/batches/${b.id}` : '/staff/academy/batches', { method: b ? 'PUT' : 'POST', body: formData(m.querySelector('[data-f]')) })).then(() => { close(); toast('Batch saved'); ctx.again(); }).catch(() => {});
+    },
+  });
+  const credsModal = (r, title) => {
+    const login = location.origin + BASE + '/#/staff';
+    const msg = `Hello ${r.name.split(' ')[0]}, welcome to the Hasta EMS Academy. Sign in to your course at ${login}\nUsername: ${r.username}\nTemporary password: ${r.password}\nPlease change the password after signing in (Settings).`;
+    modal({ title, body: `<p>Share these with the trainee now. The password is not shown again (you can reset it later).</p>
+      <div class="panel" style="margin:12px 0;font-family:ui-monospace,monospace;font-size:14px">Sign in: ${esc(login)}<br>Username: <b>${esc(r.username)}</b><br>Password: <b>${esc(r.password)}</b></div>${r.record === false ? '<p class="small" style="color:var(--gold-ink)">The training record opens once the medical lead approves the curriculum (use "Open training record" on the application then).</p>' : ''}`,
+      actions: `<button class="btn ghost" data-copy>${icon('copy', 16)}Copy</button><a class="btn gold" href="${esc(wa(r.phone, msg))}" target="_blank" rel="noopener">${icon('message-circle', 16)}Send on WhatsApp</a>`,
+      onMount(m) { m.querySelector('[data-copy]').onclick = () => navigator.clipboard.writeText(msg).then(() => toast('Copied')); } });
+  };
+  const appModal = async id => {
+    let x; try { x = await api(`/staff/academy/applications/${id}`); } catch (e) { return toast(e.message, true); }
+    const a = x.application, st = a.status;
+    const post = (action, body, btn, okMsg) => busy(btn, () => api(`/staff/academy/applications/${id}/${action}`, { method: 'POST', body })).then(r => { toast(okMsg); return r; });
+    const docUrl = k => `${BASE}/api/staff/academy/applications/${id}/doc/${k}`;
+    const inv = a.invoice;
+    modal({
+      title: `${a.name} · ${a.app_no}`, wide: true,
+      body: `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${pill(APP_PILL[st], d.statuses[st])}${feePill(a)}${a.offer_expires && st === 'offered' ? pill(a.offer_expires < today() ? 'alert' : 'closed', 'Offer held until ' + fDate(a.offer_expires)) : ''}</div>
+      <div class="grid2" style="align-items:start"><div>
+        <dl class="small" style="display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:0">
+          <dt class="muted">Batch</dt><dd>${esc(a.batch_code)} · starts ${fDate(a.start_date)}</dd>
+          <dt class="muted">Mobile</dt><dd><a href="${esc(wa(a.phone, `Hello ${a.name.split(' ')[0]}, this is the Hasta EMS Academy about your application ${a.app_no}.`))}" target="_blank" rel="noopener">${esc(prettyPhone(a.phone))}</a></dd>
+          <dt class="muted">Email</dt><dd>${esc(a.email || '')}</dd><dt class="muted">Born</dt><dd>${fDate(a.dob)}${a.gender ? ' · ' + esc(a.gender) : ''}</dd><dt class="muted">City</dt><dd>${esc(a.city || '')}</dd>
+          <dt class="muted">Qualification</dt><dd>${esc(d.quals[a.qualification] || '')}<div>${esc(a.qualification_body || '')}${a.registration_no ? ' · Reg. ' + esc(a.registration_no) : ''}</div></dd>
+          <dt class="muted">Experience</dt><dd>${esc(a.experience || '—')}${a.employer ? ' · ' + esc(a.employer) : ''}</dd><dt class="muted">BLS</dt><dd>${esc(a.bls)}</dd>
+          ${a.statement ? `<dt class="muted">Why</dt><dd>${esc(a.statement)}</dd>` : ''}${a.how_heard ? `<dt class="muted">Heard via</dt><dd>${esc(a.how_heard)}</dd>` : ''}
+          ${a.patient_no ? `<dt class="muted">Clinic record</dt><dd>${esc(a.patient_no)}</dd>` : ''}${a.username ? `<dt class="muted">Login</dt><dd>${esc(a.username)}</dd>` : ''}
+        </dl>
+        <h4 style="margin:16px 0 6px">Documents</h4>${Object.entries(d.docs).map(([k, l]) => a.docs[k] ? `<div class="small" style="padding:2px 0"><a href="${docUrl(k)}" target="_blank" rel="noopener" style="display:inline-flex;gap:6px;align-items:center">${icon('file-text', 15)}${esc(l.split(' (')[0])}</a></div>` : `<div class="small muted">${esc(l.split(' (')[0])}: not uploaded</div>`).join('')}
+      </div><div>
+        <h4 style="margin:0 0 6px">Checks</h4><form data-checks class="stack" style="gap:6px">${Object.entries(d.checks).map(([k, l]) => `<label class="check"><input type="checkbox" name="${k}"${a.checks[k] ? ' checked' : ''}${['enrolled', 'completed', 'withdrawn', 'rejected'].includes(st) ? ' disabled' : ''}><span>${esc(l)}${d.offer_checks.includes(k) ? '' : ' <span class="muted">(before practice)</span>'}</span></label>`).join('')}</form>
+        ${['enrolled', 'completed', 'withdrawn', 'rejected'].includes(st) ? '' : `<button class="btn sm ghost" data-savechecks style="margin-top:8px">Save checks</button>`}
+        ${inv ? `<h4 style="margin:16px 0 6px">Course fee</h4><p class="small" style="margin:0">${inv.no ? esc(inv.no) : 'Draft bill'} · ${money(inv.total)} · paid ${money(inv.paid)}</p><a class="btn sm ghost" style="margin-top:6px" href="${esc(CLINIC + '/#/invoice/' + inv.id)}" target="_blank" rel="noopener">${icon('external-link', 15)}Open bill in the clinic app</a>` : ''}
+        <h4 style="margin:16px 0 6px">History</h4><div class="small" style="max-height:180px;overflow:auto">${x.events.map(e => `<div style="padding:3px 0"><b>${fDay(e.at)}</b> ${esc(e.action)}${e.note ? ` — <span class="muted">${esc(e.note)}</span>` : ''}${e.by_name ? ` <span class="muted">(${esc(e.by_name)})</span>` : ''}</div>`).join('')}</div>
+      </div></div>
+      <form data-act class="stack" style="gap:10px;margin-top:16px;border-top:1px solid var(--line-soft);padding-top:14px">
+        ${['submitted', 'waitlisted', 'interview'].includes(st) ? `<div class="grid3">${field('Interview', inp('interview_at', a.interview_at || '', 'type="datetime-local"'))}${field('Offer held until', inp('offer_expires', '', `type="date" min="${today()}"`))}${field('Move to batch', sel('batch_id', [['', '—']].concat(d.batches.filter(b => b.id !== a.batch_id && !['completed', 'cancelled'].includes(b.status)).map(b => [b.id, b.code]))))}</div>` : ''}
+        ${st === 'offered' && ctx.me.role === 'admin' && !a.paid ? field('Enrol before payment — reason (admin only)', inp('waive_reason', '', 'maxlength="200" placeholder="Leave blank unless agreed"')) : ''}
+        ${field('Note / reason', inp('note', '', 'maxlength="500" placeholder="Added to the history; required to decline or withdraw"'))}</form>`,
+      actions: `<button class="btn ghost" data-close>Close</button>
+        <button class="btn ghost" data-a="note">Add note</button>
+        ${['submitted', 'waitlisted'].includes(st) ? '<button class="btn ghost" data-a="interview">Set interview</button>' : ''}${st === 'interview' ? '<button class="btn ghost" data-a="interview">Change interview</button>' : ''}
+        ${['submitted', 'waitlisted', 'interview'].includes(st) ? '<button class="btn ghost" data-a="move">Move batch</button><button class="btn ghost" data-a="reject">Decline</button>' : ''}
+        ${['submitted', 'interview', 'offered'].includes(st) ? '<button class="btn ghost" data-a="waitlist">Waitlist</button>' : ''}
+        ${['submitted', 'interview', 'waitlisted', 'offered', 'enrolled'].includes(st) ? '<button class="btn ghost" data-a="withdraw">Withdraw</button>' : ''}
+        ${['submitted', 'interview', 'waitlisted'].includes(st) ? `<button class="btn gold" data-a="offer">${icon('check', 16)}Offer a seat</button>` : ''}
+        ${st === 'offered' ? `<button class="btn gold" data-a="enrol">${icon('user-plus', 16)}Enrol</button>` : ''}
+        ${st === 'enrolled' && !a.record_id ? '<button class="btn" data-a="open-record">Open training record</button>' : ''}${st === 'enrolled' ? `<button class="btn ghost" data-a="reset-password">${icon('key-round', 16)}New password</button>` : ''}`,
+      onMount(m, close) {
+        const f = () => formData(m.querySelector('[data-act]'));
+        const reopen = () => { close(); ctx.again().then(() => appModal(id)); };
+        m.querySelector('[data-savechecks]')?.addEventListener('click', e => { const c = formData(m.querySelector('[data-checks]')); const checks = Object.fromEntries(Object.keys(d.checks).map(k => [k, !!c[k]])); post('checks', { checks }, e.currentTarget, 'Checks saved').then(reopen).catch(() => {}); });
+        m.querySelectorAll('[data-a]').forEach(b => b.onclick = () => {
+          const k = b.dataset.a, body = f();
+          if (k === 'withdraw' && !confirm(st === 'enrolled' ? 'Withdraw this trainee? Their login is switched off and their training record closed. Any refund is handled in the clinic app under the terms.' : 'Withdraw this application?')) return;
+          if (k === 'offer') {
+            const go = extra => post('offer', { ...body, ...extra }, b, 'Seat offered — the bill is ready in the clinic app').then(reopen).catch(e => {
+              if (e.data && e.data.matches) modal({ title: 'Same mobile number in the clinic', body: `<p>${esc(e.message)}</p>${e.data.matches.map(p => `<label class="check"><input type="radio" name="pid" value="${p.id}"><span>${esc(p.name)} · ${esc(p.patient_no)}</span></label>`).join('')}<label class="check"><input type="radio" name="pid" value="new"><span>A different person — create a new clinic record</span></label>`,
+                actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Continue</button>`,
+                onMount(m2, c2) { m2.querySelector('[data-save]').onclick = () => { const v = (m2.querySelector('[name=pid]:checked') || {}).value; if (!v) return toast('Choose one.', true); c2(); go(v === 'new' ? { new_patient: true } : { patient_id: +v }); }; } });
+            });
+            return go({});
+          }
+          if (k === 'enrol' || k === 'reset-password') return post(k, body, b, k === 'enrol' ? 'Enrolled' : 'New password made').then(r => { close(); ctx.again(); credsModal(r, k === 'enrol' ? 'Trainee enrolled' : 'New password'); }).catch(() => {});
+          post(k, body, b, 'Saved').then(reopen).catch(() => {});
+        });
+      },
+    });
+  };
+  draw();
+}
+
+/* ---------- Trainee: My course (Academy-only accounts) ---------- */
+export async function mountTrainee(app, me) {
+  app.innerHTML = `<div class="shell"><aside class="side"><div class="brand"><img src="/img/hasta-emblem.webp" alt="" width="34" height="34"><div><b>Hasta EMS Academy</b><span>My course</span></div></div>
+    <nav class="nav" aria-label="Main"><a href="#/" class="on">${icon('graduation-cap', 20)}<span>My course</span></a><a href="#/password" data-pw>${icon('key-round', 20)}<span>Change password</span></a></nav>
+    <div class="me"><span class="avatar">${esc(initials(me.name))}</span><div><b>${esc(me.name)}</b><span>Trainee</span></div><button data-logout aria-label="Sign out" title="Sign out">${icon('log-out', 18)}</button></div></aside>
+    <div class="mainwrap"><main class="main" id="main"></main></div></div>`;
+  const MAIN = app.querySelector('#main');
+  app.querySelector('[data-logout]').onclick = async () => { await api('/auth/logout', { method: 'POST', body: {} }); location.hash = ''; location.reload(); };
+  app.querySelector('[data-pw]').onclick = e => { e.preventDefault(); modal({
+    title: 'Change your password', body: `<form data-f class="stack" style="gap:12px">${field('Current password', inp('current', '', 'type="password" autocomplete="current-password"'))}${field('New password', inp('next', '', 'type="password" autocomplete="new-password" minlength="8"'), 'at least 8 characters')}</form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
+    onMount(m, close) { const s = m.querySelector('[data-save]'); s.onclick = () => busy(s, () => api('/me/secret', { method: 'POST', body: formData(m.querySelector('[data-f]')) })).then(() => { close(); toast('Password changed'); }).catch(() => {}); } }); };
+  const render = async () => {
+    MAIN.innerHTML = '<div class="boot" style="min-height:50vh"><img src="/img/hasta-emblem.webp" alt="" width="44" height="44"></div>';
+    let d; try { d = await api('/staff/academy/my'); } catch (e) { MAIN.innerHTML = `<div class="panel"><p class="err">${esc(e.message)}</p></div>`; return; }
+    const a = d.application, mName = () => a && a.machine_name || 'EMS';
+    MAIN.innerHTML = `<div class="head"><div><h1>Welcome, ${esc(me.name.split(' ')[0])}</h1><p>${a ? `${esc(a.title)} · batch ${esc(a.code)} · ${fDate(a.start_date)}${a.end_date ? ' – ' + fDate(a.end_date) : ''}${a.machine_name ? ' · ' + esc(a.machine_name) : ''}` : 'Hasta EMS Academy'}</p>${a && a.schedule ? `<p class="small muted">${esc(a.schedule)}</p>` : ''}</div></div>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('clipboard-check', 20)}<h3>My progress</h3></div></div>
+        ${d.records.length ? `<div class="rows">${d.records.map(x => recordRow(x, mName, true)).join('')}</div>` : '<p class="muted">Your training record opens on your first day. Ask your Master Trainer if it does not appear.</p>'}
+        <ul class="small muted" style="margin:12px 0 0;padding-left:18px;line-height:1.7"><li>Theory test: ${d.rules.questions} questions, pass mark ${d.rules.pass_mark}%, ${d.rules.max_attempts} attempts. Take it when your Master Trainer says you are ready.</li><li>${d.rules.supervised} supervised sessions with Hasta clients, including ${d.rules.first_sessions} first sessions — logged by your Master Trainer.</li><li>Practical assessment: every checklist item must pass.</li></ul></section>
+      ${d.certificates.length ? `<section class="panel" style="margin-top:16px"><div class="panel-h"><div class="t">${icon('award', 20)}<h3>My certificates</h3></div></div><div class="rows">${d.certificates.map(c => `<div class="row"><div class="grow"><b>${esc(c.machine_name)}</b><span>${esc(c.code)} · valid ${fDate(c.issued_on)} to ${fDate(c.valid_until)}</span></div>${CERT_STATUS(c)}<a class="btn sm ghost" href="${BASE}/api/staff/academy/certificates/${c.id}/pdf">${icon('printer', 15)}PDF</a></div>`).join('')}</div></section>` : ''}
+      <section class="panel flush" style="margin-top:16px"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('book-open', 20)}<h3>Course modules${d.curriculum ? ' · v' + esc(d.curriculum.version) : ''}</h3></div></div>
+        ${d.curriculum ? `<div class="rows">${d.curriculum.modules.map(mo => { const mats = d.materials.filter(x => x.module_no === mo.no); return `<div class="row" style="align-items:flex-start"><span class="time">${mo.no}</span><div class="grow"><b>${esc(mo.title)}</b><span class="small">${esc(mo.content)}</span>
+          <span class="small muted">${esc(mo.hours)}${/^\d+$/.test(mo.hours) ? ' hours' : ''} · assessed by ${esc(mo.assessed)}</span>${mats.map(x => `<div class="small"><a href="${esc(x.kind === 'file' ? fileUrl(x.file_key) : x.url)}" target="_blank" rel="noopener" style="display:inline-flex;gap:6px;align-items:center">${icon(x.kind === 'file' ? 'file-text' : 'external-link', 14)}${esc(x.title)}</a></div>`).join('')}</div></div>`; }).join('')}</div>`
+          : '<p class="muted" style="padding:0 20px 18px">The course materials appear here once the curriculum is approved.</p>'}
+        <p class="small muted" style="padding:0 20px 18px">Course handbook: <a href="/ems/academy/Hasta-EMS-Trainer-Curriculum-v1.1.pdf" target="_blank" rel="noopener">Hasta EMS Trainer Curriculum (PDF)</a></p></section>`;
+    MAIN.querySelectorAll('[data-take]').forEach(b => b.addEventListener('click', () => takeTest(+b.dataset.take, render)));
+  };
+  render();
 }

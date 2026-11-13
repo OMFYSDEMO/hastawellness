@@ -552,7 +552,7 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
   if ((mm = p.match(/^\/hr\/payroll\/(\d{4}-\d{2})\.pdf$/)) && m === 'GET') return (await payrollPdf(env, mm[1], q('staff') ? +q('staff') : null)) || api({ ok: false, error: 'Nothing to show for that month.' }, 404);
   if (p === '/hr/setup' && m === 'GET') {
     const [staff, hol, kio, dev] = await env.DB.batch([
-      env.DB.prepare('SELECT s.id, s.name, s.role, s.active, p.* FROM ems_staff s LEFT JOIN cl_staff_pay p ON p.staff_id=s.id WHERE s.active=1 ORDER BY s.name'),
+      env.DB.prepare('SELECT s.id, s.name, s.role, s.active, p.* FROM ems_staff s LEFT JOIN cl_staff_pay p ON p.staff_id=s.id WHERE s.active=1 AND s.role <> \'trainee\' ORDER BY s.name'),
       env.DB.prepare('SELECT * FROM cl_holidays ORDER BY day'),
       env.DB.prepare('SELECT id, name, created_at, last_seen, active FROM cl_kiosks ORDER BY id'),
       env.DB.prepare('SELECT d.id, d.staff_id, s.name, d.agent, d.created_at, d.last_used FROM cl_att_devices d JOIN ems_staff s ON s.id=d.staff_id WHERE d.active=1 ORDER BY s.name'),

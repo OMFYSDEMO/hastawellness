@@ -33,6 +33,10 @@ export const NAV_LINKS = [
     "Careers · Join us"
   ],
   [
+    "/academy/",
+    "EMS trainer course"
+  ],
+  [
     "/",
     "Home"
   ],

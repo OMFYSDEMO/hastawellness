@@ -692,8 +692,8 @@ async function viewInvoice(id) {
     }
     tbody.innerHTML = lines.map((l, i) => {
       const it = l.item_id ? CAT.find(x => x.id === l.item_id) : null, pk = l.package_def_id ? B.packages.find(x => x.id === l.package_def_id) : null, c = lineCalc(l);
-      const ems = it && it.code === 'EMS-PKG', variable = it && !(it.price > 0) && !ems;
-      return `<tr data-i="${i}"><td><b>${esc(pk ? pk.name : it && !ems ? it.name : l.name)}</b><div class="small muted">${pk ? 'Package' : ems ? 'EMS package · price set in the EMS app' : esc(it?.dept_name || '')}${it?.kind === 'passthrough' ? ' · partner charge' : ''}</div>
+      const ems = it && (it.code === 'EMS-PKG' || it.code === 'EMS-ACADEMY'), variable = it && !(it.price > 0) && !ems;
+      return `<tr data-i="${i}"><td><b>${esc(pk ? pk.name : it && !ems ? it.name : l.name)}</b><div class="small muted">${pk ? 'Package' : ems ? (it.code === 'EMS-ACADEMY' ? 'Academy course fee · set in EMS app → Academy' : 'EMS package · price set in the EMS app') : esc(it?.dept_name || '')}${it?.kind === 'passthrough' ? ' · partner charge' : ''}</div>
           ${c.disc > 0 ? `<input class="in" data-k="discount_reason" value="${esc(l.discount_reason)}" placeholder="Reason for discount" maxlength="120" style="margin-top:6px;height:32px">${c.pct > limit + 1e-9 ? `<div class="small" style="color:var(--gold-ink);margin-top:4px">${c.pct.toFixed(0)}% — ${l._saved && l._saved.discount_by_name && l._saved.discount >= c.disc ? 'authorised by ' + esc(l._saved.discount_by_name) : 'needs ' + esc(approverText()) + ' to authorise'}</div>` : ''}` : ''}</td>
         <td>${pk ? '' : `<select class="in" data-k="doctor_id" style="min-width:130px"><option value="">—</option>${docs.map(t => `<option value="${t.id}"${t.id === l.doctor_id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select>`}</td>
         <td class="n"><input class="in qty" type="number" min="1" max="999" data-k="qty" value="${l.qty}"${ems ? ' readonly title="Set in the EMS app"' : ''}></td>

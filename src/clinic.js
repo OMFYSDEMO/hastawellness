@@ -45,6 +45,9 @@ const R = (s, e, x) => [s, e, x];
 const OK = x => [200, null, x];
 
 export const EMS_ITEM = 'EMS-PKG';
+export const ACADEMY_ITEM = 'EMS-ACADEMY';
+// Items billed only by the platform itself (EMS app packages, Academy course fees): label, price and discount locked.
+const LOCKED = [EMS_ITEM, ACADEMY_ITEM];
 export const MODES = { cash: 'Cash', upi: 'UPI', card: 'Card (POS)', bank: 'Bank transfer', finance: 'Healthcare finance' };
 export const APPT_STATUS = ['booked', 'arrived', 'in_treatment', 'completed', 'no_show', 'cancelled'];
 const HOURS = { 0: ['10:00', '16:00'], 1: ['10:00', '20:30'], 2: ['10:00', '20:30'], 3: ['10:00', '20:30'], 4: ['10:00', '20:30'], 5: ['10:00', '20:30'], 6: ['10:00', '20:30'] };
@@ -69,6 +72,7 @@ async function clinicSession(request, env) {
   if (!r) return { status: 401 };
   if (r.sid === 0) return { me: { kind: 'staff', id: 0, name: 'Clinic admin', role: 'admin', username: 'hasta', skills: ['doctor'], admin: true, depts: [] } };
   if (!r.id) return { status: 401 };
+  if (r.role === 'trainee') return { me: null }; // Academy trainees use the EMS app's Academy only
   const apps = parse(r.apps, ['ems']);
   // Staff without the clinic app can still use attendance & leave ("My attendance" only).
   const limited = r.role !== 'admin' && !apps.includes('clinic');
@@ -317,7 +321,7 @@ async function saveRoom(env, b) {
   else await env.DB.prepare('INSERT INTO cl_rooms (name, dept_id) VALUES (?,?)').bind(name, dept).run();
   return OK();
 }
-const TEAM_SQL = 'SELECT id, name, username, role, skills, apps, reg_no, active FROM ems_staff ORDER BY active DESC, name';
+const TEAM_SQL = "SELECT id, name, username, role, skills, apps, reg_no, active FROM ems_staff WHERE role <> 'trainee' ORDER BY active DESC, name";
 const teamRows = (results, d) => (results || []).map(s => ({ id: s.id, name: s.name, username: s.username, role: s.role, reg_no: s.reg_no, active: !!s.active, skills: parse(s.skills, []), apps: parse(s.apps, ['ems']), depts: (d || []).filter(x => x.staff_id === s.id).map(x => x.dept_id) }));
 async function team(env) {
   const [a, b] = await env.DB.batch([env.DB.prepare(TEAM_SQL), env.DB.prepare('SELECT * FROM cl_staff_depts')]);
@@ -740,7 +744,7 @@ function computeLine(src, item, pkg) {
   const qty = src.qty;
   let unit, kind, name, hsn = null, rate = 0, partner = null, parts = null;
   if (pkg) { unit = pkg.price; kind = 'package'; name = pkg.name; }
-  else { kind = item.kind; name = item.code === EMS_ITEM && src.label ? src.label : item.name; hsn = item.hsn_sac; rate = kind === 'passthrough' ? 0 : item.gst_rate; partner = item.partner; unit = item.price > 0 ? item.price : r2(src.unit_price); }
+  else { kind = item.kind; name = LOCKED.includes(item.code) && src.label ? src.label : item.name; hsn = item.hsn_sac; rate = kind === 'passthrough' ? 0 : item.gst_rate; partner = item.partner; unit = item.price > 0 ? item.price : r2(src.unit_price); }
   const gross = r2(unit * qty);
   const discount = Math.min(gross, Math.max(0, r2(src.discount)));
   const net = r2(gross - discount);
@@ -785,13 +789,13 @@ async function saveInvoice(env, me, id, b, trusted) {
     if (!item && !pkg) return R(400, 'One of the lines has no catalogue item.');
     if (item && !item.active) return R(400, `${item.name} is no longer active in the catalogue.`);
     // The EMS package item is billed only from the EMS app, which sends the package name as the label.
-    if (item && !item.sellable && !(item.code === EMS_ITEM && l.label)) return R(400, item.code === EMS_ITEM ? 'Sell EMS packages from the EMS app; the bill appears here.' : `${item.name} is for internal use and cannot be billed.`);
+    if (item && !item.sellable && !(LOCKED.includes(item.code) && l.label)) return R(400, item.code === EMS_ITEM ? 'Sell EMS packages from the EMS app; the bill appears here.' : item.code === ACADEMY_ITEM ? 'Academy course fees are billed from EMS app → Academy → Admissions.' : `${item.name} is for internal use and cannot be billed.`);
     if (pkg && !pkg.active) return R(400, `${pkg.name} is no longer on sale.`);
     if (item && item.price <= 0 && !(l.unit_price > 0)) return R(400, `Enter the price for ${item.name} (its price varies).`);
-    if (item && item.code === EMS_ITEM && !trusted) {
-      // An EMS package line keeps the price, discount and name the EMS app gave it.
+    if (item && LOCKED.includes(item.code) && !trusted) {
+      // An EMS package or Academy fee line keeps the price, discount and name the EMS app gave it.
       const prev = (prevLines || []).find(x => x.item_id === item.id);
-      if (!prev) return R(400, 'Sell EMS packages from the EMS app; the bill appears here.');
+      if (!prev) return R(400, item.code === EMS_ITEM ? 'Sell EMS packages from the EMS app; the bill appears here.' : 'Academy course fees are billed from EMS app → Academy → Admissions.');
       Object.assign(l, { qty: 1, unit_price: prev.unit_price, discount: prev.discount, discount_reason: prev.discount_reason, label: prev.name });
     }
     const row = computeLine(l, item, pkg);

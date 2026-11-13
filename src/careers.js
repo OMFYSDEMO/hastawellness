@@ -74,7 +74,7 @@ const ul = t => { const l = lines(t); return l.length ? `<ul>${l.map(x => `<li>$
 const today = () => new Date().toISOString().slice(0, 10);
 const isOpen = j => j.status === 'published' && (!j.closing_date || j.closing_date >= today());
 
-function chrome(origin, title, desc, path, body, ld = []) {
+export function chrome(origin, title, desc, path, body, ld = [], opt = {}) {
   const nav = NAV_LINKS.map(([p, l]) => `<a href="${p}">${h(l)}</a>`).join('');
   const ig = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="4.2"/><circle cx="17.4" cy="6.6" r="1" fill="currentColor" stroke="none"/></svg>';
   return `<!doctype html><html lang="en-IN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -86,7 +86,7 @@ function chrome(origin, title, desc, path, body, ld = []) {
 <link rel="preload" href="/fonts/dm-sans-var.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin><style>@font-face{font-family:'DM Sans';font-style:normal;font-display:swap;font-weight:100 1000;src:url(/fonts/dm-sans-var.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}@font-face{font-family:'Manrope';font-style:normal;font-display:swap;font-weight:200 800;src:url(/fonts/manrope-var.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}</style>
 <link rel="stylesheet" href="/assets/service.css">
 ${ld.map(x => `<script type="application/ld+json">${JSON.stringify(x).replace(/</g, '\\u003c')}</script>`).join('')}
-<style>.jobs{display:grid;gap:16px}.job{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:24px;border:1px solid var(--line);border-left:2px solid var(--gold);border-radius:8px;text-decoration:none}.job:hover{border-color:var(--gold)}.job h3{font-size:22px;margin:0 0 6px}.job p{margin:0;color:var(--muted);font-size:14px}.meta{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted);margin:10px 0 0}.meta span:before{content:'·';margin-right:8px;color:var(--gold)}.meta span:first-child:before{content:none}
+${opt.css ? `<style>${opt.css}</style>` : ''}<style>.jobs{display:grid;gap:16px}.job{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:24px;border:1px solid var(--line);border-left:2px solid var(--gold);border-radius:8px;text-decoration:none}.job:hover{border-color:var(--gold)}.job h3{font-size:22px;margin:0 0 6px}.job p{margin:0;color:var(--muted);font-size:14px}.meta{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted);margin:10px 0 0}.meta span:before{content:'·';margin-right:8px;color:var(--gold)}.meta span:first-child:before{content:none}
 .jd{display:grid;grid-template-columns:1.2fr .8fr;gap:56px;align-items:start}.jd h2{font-size:24px;margin:34px 0 10px}.jd ul{padding-left:20px;margin:0}.jd li{margin:6px 0;color:#3f5f62}.jd p{color:var(--muted)}
 .apply{position:sticky;top:100px}form.lead input[type=email],form.lead input[type=file],form.lead textarea{width:100%;padding:12px 14px;border:1px solid var(--line);border-radius:6px;font:inherit;font-size:15px;color:var(--green);background:#fff}form.lead textarea{min-height:90px;resize:vertical}
 .okmsg{padding:22px;border-left:2px solid var(--gold);background:var(--soft);margin-bottom:20px}.errmsg{padding:14px;border-left:2px solid #a0442f;background:#fbefeb;margin-bottom:14px;color:#7a3322}
@@ -102,12 +102,12 @@ ${ld.map(x => `<script type="application/ld+json">${JSON.stringify(x).replace(/<
 <p>Dental · Skin · Hair | Kazhakkoottam, Trivandrum<br>Mon – Sat 10 am – 8:30 pm · Sun 10 am – 4 pm<br><a href="tel:${PHONE_TEL}">${PHONE_DISPLAY}</a></p>
 <a class="social" href="https://www.instagram.com/hasta_wellness/" target="_blank" rel="noopener" aria-label="Hasta Wellness on Instagram (opens in a new tab)">${ig}<span>@hasta_wellness</span></a></div>
 <nav aria-label="Site">${nav}</nav></div>
-<div class="fine"><span>© ${new Date().getFullYear()} Hasta Wellness. All rights reserved. A venture of HASWEL CARE Private Limited.</span><span>Equal-opportunity employer.</span></div></div></footer>
-<div class="mobilebar"><a href="tel:${PHONE_TEL}">Call clinic ↗</a><a class="primary" href="/careers/">Open roles ↗</a></div>
+<div class="fine"><span>© ${new Date().getFullYear()} Hasta Wellness. All rights reserved. A venture of HASWEL CARE Private Limited.</span><span>${opt.fine ?? 'Equal-opportunity employer.'}</span></div></div></footer>
+<div class="mobilebar"><a href="tel:${PHONE_TEL}">Call clinic ↗</a>${opt.bar || '<a class="primary" href="/careers/">Open roles ↗</a>'}</div>
 </body></html>`;
 }
 
-function htmlResponse(url, html, status = 200) {
+export function htmlResponse(url, html, status = 200) {
   const headers = { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff', 'referrer-policy': 'strict-origin-when-cross-origin', 'x-frame-options': 'SAMEORIGIN' };
   if (/\.workers\.dev$|^localhost|^127\./.test(url.hostname)) headers['x-robots-tag'] = 'noindex, nofollow';
   return new Response(html, { status, headers });

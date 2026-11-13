@@ -6,7 +6,8 @@ async function start() {
   let me = null;
   try { ({ me } = await api('/me')); } catch (e) { app.innerHTML = `<div class="boot"><p class="err">${esc(e.message)}</p></div>`; return; }
   if (!me) return login();
-  if (me.kind === 'staff') (await import('./staff.js?v=9')).mount(app, me);
+  if (me.kind === 'staff' && me.role === 'trainee') (await import('./academy.js?v=9')).mountTrainee(app, me);
+  else if (me.kind === 'staff') (await import('./staff.js?v=10')).mount(app, me);
   else (await import('./client.js?v=8')).mount(app, me);
 }
 

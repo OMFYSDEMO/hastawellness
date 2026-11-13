@@ -13,6 +13,7 @@
 
 import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify, leadChannel } from './util.js';
 import * as AC from './academy.js';
+import * as ADM from './admissions.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED } from './packages.js';
 import { EMS_DUE, clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, createPatientFor } from './emslink.js';
@@ -182,7 +183,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=9"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=10"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -212,6 +213,18 @@ async function route(request, env, url, ctx, base, p) {
   const me = await getSession(request, env);
   if (p === '/me' && m === 'GET') return api({ ok: true, me });
   if (!me) return api({ ok: false, error: 'Please sign in.' }, 401);
+  // Academy trainees (external candidates): their own course only.
+  if (me.kind === 'staff' && me.role === 'trainee') {
+    const TRAINEE_OK = /^\/staff\/academy\/(my|file|records\/\d+\/test|attempts\/\d+|certificates\/\d+\/pdf)$/;
+    if (p === '/me/secret' && m === 'POST') return changeSecret(env, me, body);
+    if (!TRAINEE_OK.test(p)) return api({ ok: false, error: 'Your Academy account can only open My course.' }, 403);
+    if (p === '/staff/academy/my' && m === 'GET') return api({ ok: true, ...(await ADM.myCourse(env, me)) });
+    if (p === '/staff/academy/file' && !(await ADM.traineeMayOpen(env, url.searchParams.get('key') || ''))) return api({ ok: false, error: 'Not found' }, 404);
+    const cm = p.match(/^\/staff\/academy\/certificates\/(\d+)\/pdf$/);
+    if (cm && !(await env.DB.prepare('SELECT 1 FROM ems_certifications WHERE id=? AND staff_id=?').bind(+cm[1], me.id).first())) return api({ ok: false, error: 'Not found' }, 404);
+    const res = await academyRoute(request, env, url, me, p, m, body, false);
+    return res || api({ ok: false, error: 'Not found' }, 404);
+  }
 
   if (p === '/units' && m === 'GET') return api({ ok: true, units: (await listUnits(env, { activeOnly: true })).map(publicUnit) });
   if (p === '/slots' && m === 'GET') {
@@ -367,13 +380,13 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/staff/team' && m === 'GET') {
     const { results } = await env.DB.prepare(`SELECT s.id, s.name, s.role, s.skills, s.reg_no, (SELECT COUNT(*) FROM ems_clients c WHERE c.coach_id=s.id AND c.status='active') clients,
       (SELECT group_concat(unit_id) FROM ems_staff_units x WHERE x.staff_id=s.id) units
-      FROM ems_staff s WHERE s.active=1 ORDER BY s.name`).all();
+      FROM ems_staff s WHERE s.active=1 AND s.role <> 'trainee' ORDER BY s.name`).all();
     for (const t of results || []) { t.skills = safeJson(t.skills); t.units = String(t.units || '').split(',').filter(Boolean).map(Number); }
     return api({ ok: true, team: results, me: me.id });
   }
   if (p === '/staff/users' && m === 'GET') {
     if (!admin) return api({ ok: false, error: 'Admins only.' }, 403);
-    const { results } = await env.DB.prepare('SELECT id, name, username, role, active, created_at, skills, reg_no, (SELECT group_concat(unit_id) FROM ems_staff_units x WHERE x.staff_id=ems_staff.id) units FROM ems_staff ORDER BY active DESC, name').all();
+    const { results } = await env.DB.prepare('SELECT id, name, username, role, active, created_at, skills, reg_no, (SELECT group_concat(unit_id) FROM ems_staff_units x WHERE x.staff_id=ems_staff.id) units FROM ems_staff WHERE role <> \'trainee\' ORDER BY active DESC, name').all();
     for (const t of results || []) { t.skills = safeJson(t.skills); t.units = String(t.units || '').split(',').filter(Boolean).map(Number); }
     return api({ ok: true, users: results });
   }
@@ -1228,6 +1241,7 @@ async function academyUpload(request, env) {
   if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
   const me = await getSession(request, env);
   if (!me || me.kind !== 'staff') return api({ ok: false, error: 'Please sign in.' }, 401);
+  if (me.role === 'trainee') return api({ ok: false, error: 'Not available.' }, 403);
   const type = (request.headers.get('content-type') || '').split(';')[0].trim();
   if (!UPLOAD_TYPES[type]) return bad('Upload a PDF, JPG, PNG or WebP file.');
   const len = parseInt(request.headers.get('content-length') || '0', 10);
@@ -1243,6 +1257,23 @@ async function academyRoute(request, env, url, me, p, m, body, admin) {
   let r;
   const ok = x => api({ ok: true, ...x });
   if (p === '/staff/academy' && m === 'GET') return ok(await AC.overview(env, me));
+  // Admissions (external candidates) — managers and admins.
+  if (p.startsWith('/staff/academy/admissions') || p.startsWith('/staff/academy/batches') || p.startsWith('/staff/academy/applications')) {
+    if (me.role !== 'admin' && me.role !== 'manager') return api({ ok: false, error: 'Only managers and admins can handle admissions.' }, 403);
+    const full = ([s, e, x]) => s === 200 ? api({ ok: true, ...(x || {}) }) : api({ ok: false, error: e, ...(x || {}) }, s);
+    if (p === '/staff/academy/admissions' && m === 'GET') return ok(await ADM.overview(env));
+    if (p === '/staff/academy/admissions/terms' && m === 'PUT') return full(await ADM.saveTerms(env, me, body));
+    if (p === '/staff/academy/batches' && m === 'POST') return full(await ADM.saveBatch(env, me, null, body));
+    if ((r = p.match(/^\/staff\/academy\/batches\/(\d+)$/)) && m === 'PUT') return full(await ADM.saveBatch(env, me, +r[1], body));
+    if ((r = p.match(/^\/staff\/academy\/applications\/(\d+)$/)) && m === 'GET') { const d = await ADM.detail(env, +r[1]); return d ? ok(d) : api({ ok: false, error: 'Not found' }, 404); }
+    if ((r = p.match(/^\/staff\/academy\/applications\/(\d+)\/doc\/(\w+)$/)) && m === 'GET') {
+      const f = await ADM.docFile(env, +r[1], r[2]);
+      if (!f) return api({ ok: false, error: 'Not found' }, 404);
+      return new Response(f.obj.body, { headers: { ...HEADERS, 'content-type': f.d.type, 'content-disposition': `inline; filename="${f.d.name.replace(/"/g, '')}"`, 'cache-control': 'private, no-store' } });
+    }
+    if ((r = p.match(/^\/staff\/academy\/applications\/(\d+)\/([a-z-]+)$/)) && m === 'POST') return full(await ADM.act(env, me, +r[1], r[2], body));
+    return api({ ok: false, error: 'Not found' }, 404);
+  }
   if (p === '/staff/academy/file' && m === 'GET') {
     const key = url.searchParams.get('key') || '';
     if (!/^academy\/[0-9a-f-]{36}\.(pdf|jpg|png|webp)$/.test(key)) return bad('Invalid file.');

@@ -246,7 +246,7 @@ export async function overview(env, me) {
   const qc = await env.DB.prepare("SELECT area, COUNT(*) n FROM ems_questions WHERE status='approved' GROUP BY area").all();
   const approvedByArea = Object.fromEntries((qc.results || []).map(r => [r.area, r.n]));
   const testReady = Object.entries(BLUEPRINT).every(([a, n]) => (approvedByArea[a] || 0) >= n);
-  const { results: staff } = await env.DB.prepare('SELECT id, name, role, skills, reg_no, master_course_on, master_course_by FROM ems_staff WHERE active=1 ORDER BY name').all();
+  const { results: staff } = await env.DB.prepare('SELECT id, name, role, skills, reg_no, master_course_on, master_course_by FROM ems_staff WHERE active=1 AND role <> \'trainee\' ORDER BY name').all();
   const people = [];
   for (const p of staff || []) {
     const sk = parse(p.skills, []), on = [];
@@ -403,7 +403,7 @@ async function recordState(env, r) {
   return { ...r, attempts, logs, practicals: practicals.map(p => ({ ...p, items: parse(p.items, {}) })), req };
 }
 export async function listRecords(env, me, all) {
-  const { results } = await env.DB.prepare(`SELECT r.*, s.name trainee_name, m.name machine_name, c.version curriculum_version FROM ems_training_records r
+  const { results } = await env.DB.prepare(`SELECT r.*, s.name trainee_name, s.role trainee_role, m.name machine_name, c.version curriculum_version FROM ems_training_records r
     JOIN ems_staff s ON s.id=r.staff_id JOIN ems_machine_types m ON m.id=r.machine_type_id JOIN ems_curriculum c ON c.id=r.curriculum_id
     ${all ? '' : 'WHERE r.staff_id=?'} ORDER BY r.status, r.id DESC`).bind(...(all ? [] : [me.id])).all();
   const out = [];
@@ -494,8 +494,11 @@ export async function addLog(env, me, recordId, b) {
     if (!a) return R(400, 'That booking was not found or not attended.');
     if (a.machine_type_id && a.machine_type_id !== r.machine_type_id) return R(400, 'That booking used a different machine.');
   }
-  await env.DB.prepare('INSERT INTO ems_supervised_logs (record_id, session_date, first_session, appointment_id, notes, supervisor_id, supervisor_name) VALUES (?,?,?,?,?,?,?)')
-    .bind(recordId, d, b.first_session ? 1 : 0, appt, nz(clean(b.notes, 300)), me.id, mq.staff.name).run();
+  // External Academy trainees practise only with clients who agreed to a trainee working with them.
+  const tr = await staffRow(env, r.staff_id);
+  if (tr && tr.role === 'trainee' && !b.client_consent) return R(400, 'Confirm the client agreed to an Academy trainee working with them.');
+  await env.DB.prepare('INSERT INTO ems_supervised_logs (record_id, session_date, first_session, appointment_id, notes, supervisor_id, supervisor_name, client_consent) VALUES (?,?,?,?,?,?,?,?)')
+    .bind(recordId, d, b.first_session ? 1 : 0, appt, nz(clean(b.notes, 300)), me.id, mq.staff.name, b.client_consent ? 1 : 0).run();
   return R(200);
 }
 export async function addPractical(env, me, recordId, b) {
