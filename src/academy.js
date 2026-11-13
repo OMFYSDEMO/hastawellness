@@ -31,17 +31,88 @@ export const CHECKLIST = [
   ['conduct', 'Maintains privacy, dignity and professional conduct throughout', false],
 ];
 
-const MODULES_V1 = [
-  [1, 'How EMS works', 'Muscle physiology, impulse parameters, programme types, expected effects and limits, evidence and claims.', '3', 'Theory test'],
-  [2, 'Client safety and contraindications', 'Absolute and relative contraindications, pre-session checks, when to stop, referral to clinician. Uses Hasta\'s admission screening.', '4', 'Theory + practical'],
-  [3, 'Rhabdomyolysis, hydration and recovery', 'Risk factors, first-session limits, 48-hour recovery rule, warning signs (pain, dark urine), escalation.', '2', 'Theory + scenario'],
-  [4, 'Machine module (per model)', 'Supplier\'s official course: set-up, suit/electrode fitting, controls, programmes, cleaning, faults.', 'Per supplier', 'Practical'],
-  [5, 'Running a session', 'Intensity progression, per-muscle-group adjustment, communication during the session, cool-down, session notes.', '4', 'Practical'],
-  [6, 'Emergencies and first aid', 'Emergency stop, fainting, cramps, skin reactions, incident reporting. Basic life support certificate required separately.', '2', 'Scenario'],
-  [7, 'Hasta protocols and the platform', 'Admission and consent, package rules, booking, measurements, data protection and confidentiality.', '2', 'Theory'],
-  [8, 'Client care and ethics', 'Respectful practice, privacy and chaperone policy, realistic expectations, no outcome promises, complaints.', '1', 'Theory'],
-  [9, 'Supervised practice', 'Logged sessions with real clients under direct Master Trainer supervision.', '10 sessions', 'Log + sign-off'],
-].map(([no, title, content, hours, assessed]) => ({ no, title, content, hours, assessed }));
+// v1.0 modules (superseded before approval) are kept in the ems_curriculum table.
+
+// v1.1 (13 Nov 2026): full curriculum — handbook public/ems/academy/Hasta-EMS-Trainer-Curriculum-v1.1.pdf
+const MODULES_V11 = [
+ {
+  "no": 1,
+  "title": "How EMS works",
+  "content": "How impulses through electrodes make muscle contract; impulse settings the trainer controls (intensity per area, impulse and rest phases, programmes); why WB-EMS is a high load in a short time; realistic evidence (strength, muscle function, back health as part of a programme) and limits — not a weight-loss treatment on its own; correcting misleading claims.",
+  "hours": "3",
+  "assessed": "Theory test"
+ },
+ {
+  "no": 2,
+  "title": "Client screening, contraindications and consent",
+  "content": "Hasta admission screening; absolute contraindications (electronic implants, pregnancy, epilepsy/neurological disorders, heart rhythm or serious heart disease, arterial disease, bleeding disorders, active cancer, acute illness/fever/infection, hernia, recent surgery in the area, alcohol or drugs) and relative ones needing written clinician clearance; re-check before every session; signed consent renewed at least every 6 months; refer when unsure.",
+  "hours": "4",
+  "assessed": "Theory + practical"
+ },
+ {
+  "no": 3,
+  "title": "Rhabdomyolysis, preparation and recovery",
+  "content": "What rhabdomyolysis is and its risk factors; warning signs (severe pain, swelling, dark urine) and same-day escalation; preparation: light carbohydrate snack about 2 h before, 250–500 ml water 30 min before and straight after, no alcohol or drugs for 24–48 h, no session with fever; recovery rules and post-session advice.",
+  "hours": "3",
+  "assessed": "Theory + scenario"
+ },
+ {
+  "no": 4,
+  "title": "Machine module (per model)",
+  "content": "Supplier's official course for the machine model: inspection, suit sizing and fit, electrode positions and moistening, controls and programmes, emergency stop within reach of trainer and client, cleaning and storage, faults and taking a device out of use. Certification is per machine model.",
+  "hours": "Per supplier (min. 4)",
+  "assessed": "Practical"
+ },
+ {
+  "no": 5,
+  "title": "Running a session",
+  "content": "Pre-session checklist; set-up and explanation; raising intensity per area with the Borg CR10 scale (first sessions about 4, never 10, never pain or continuous cramp); one client per trainer; checking each area at least 3 times; simple controlled movements; stopping at once on any adverse sign; cool-down, advice, booking within the recovery rule; notes the same day.",
+  "hours": "4",
+  "assessed": "Practical"
+ },
+ {
+  "no": 6,
+  "title": "Programme design and progression",
+  "content": "Conditioning phase for new clients (international guideline: no exhausting sessions for 8–10 weeks, about one 20-min session a week, CR10 7–8 only after 8–10 sessions); at least 4 days between intense sessions afterwards; planning 10- and 20-session packages week by week; adapting for goals and for older or less active clients; when to hold or step back.",
+  "hours": "3",
+  "assessed": "Theory + case study"
+ },
+ {
+  "no": 7,
+  "title": "Emergencies, adverse events and first aid",
+  "content": "Emergency stop; fainting, cramp, skin reactions; chest pain, breathlessness or confusion; unresponsive client — call 112 and start basic life support; recording every adverse event or near miss in the incident log the same day. BLS certificate required separately.",
+  "hours": "2",
+  "assessed": "Scenario"
+ },
+ {
+  "no": 8,
+  "title": "Measurements, progress and lifestyle support",
+  "content": "Consistent measurements in the app; photos only with consent and only on clinic devices; explaining progress honestly; general advice within scope (water, regular meals with protein, sleep, daily activity); referring diets, supplements, medicines and medical questions to the clinic's doctor or dietitian.",
+  "hours": "2",
+  "assessed": "Practical"
+ },
+ {
+  "no": 9,
+  "title": "Hasta protocols, the platform and data protection",
+  "content": "Admission and consent rules; package entitlements and expiry; payments taken in the clinic app against the package bill; booking, rotas and device status; notes, measurements and incidents in the EMS app; confidentiality, the clinic phone policy (HCPL/OO/2026/001) and the Digital Personal Data Protection Act, 2023.",
+  "hours": "2",
+  "assessed": "Theory"
+ },
+ {
+  "no": 10,
+  "title": "Client care, ethics and professional conduct",
+  "content": "Privacy and dignity, chaperone on request; honest expectations, no outcome promises or pressure selling; working within scope; handling complaints and escalating concerns.",
+  "hours": "1",
+  "assessed": "Theory"
+ },
+ {
+  "no": 11,
+  "title": "Supervised practice",
+  "content": "At least 10 real client sessions logged in the EMS app with a Master Trainer qualified on the machine present throughout, including 3 first sessions. The practical checklist is assessed here; every critical item must be passed.",
+  "hours": "10 sessions",
+  "assessed": "Log + sign-off"
+ }
+];
 
 // Starter question bank — every question must be approved by the medical lead before use.
 const Q = [
@@ -89,6 +160,36 @@ const Q = [
   ['protocols', 'A client\'s package does not include progress reviews and they ask for one. You:', ['Do one anyway', 'Explain it is not included and offer an upgrade; it cannot be booked', 'Do it off the record', 'Charge cash'], 1],
   ['protocols', 'Client health information must be:', ['Shared with friends if asked', 'Kept confidential and shared only within the care team', 'Posted for training', 'Discussed in public areas'], 1],
   ['protocols', 'Who approves clinical exceptions such as entry requirements or contraindication rules?', ['Any trainer', 'The unit manager', 'The medical lead', 'The client'], 2],
+  // added with curriculum v1.1
+  ["how", "Which scale does Hasta use to set and check EMS intensity with the client?", ["The Borg CR10 scale (how hard it feels, 0–10)", "Heart-rate zones only", "The highest number on the device", "The client's body weight"], 0],
+  ["how", "Which intensity must never be used, whatever the client's fitness?", ["CR10 4 (somewhat strong)", "CR10 5–6 (strong)", "Maximal (CR10 10) or a continuous cramp-like contraction", "Low intensity during the warm-up"], 2],
+  ["how", "Which statement about the evidence for EMS is fair?", ["It replaces all other exercise", "It can improve strength and muscle function as part of a supervised programme", "It works safely without supervision", "It burns fat while the client sleeps"], 1],
+  ["contra", "Which condition is still an absolute contraindication under the 2024 German consensus?", ["Well-controlled diabetes", "Epilepsy and other neurological disorders", "Cancer treated years ago, now in remission", "Mild muscle stiffness"], 1],
+  ["contra", "A client has diabetes. What applies at Hasta?", ["EMS is never allowed", "Only with written clearance from the clinician", "No restriction", "The trainer decides"], 1],
+  ["contra", "A client has an abdominal or groin hernia. You:", ["Avoid the abdominal electrodes and continue", "Do not give EMS and refer to the clinician", "Lower the intensity", "Ask the client to sign a waiver"], 1],
+  ["contra", "How often must the client's signed EMS consent be renewed?", ["Never", "At least every 6 months", "Every 5 years", "Only when the package changes"], 1],
+  ["contra", "A client drank alcohol last night. You:", ["Train as usual", "Postpone; avoid alcohol for 24–48 hours before EMS", "Use a higher intensity", "Train the legs only"], 1],
+  ["contra", "A client had a heart stent fitted 3 months ago. You:", ["Go ahead at low intensity", "Do not give EMS and refer to the clinician", "Avoid the chest electrodes only", "Halve the session time"], 1],
+  ["rhabdo", "What should the client drink before a session?", ["Nothing", "About 250–500 ml of water about 30 minutes before, and again straight after", "2 litres in the hour before", "Only energy drinks"], 1],
+  ["rhabdo", "What should the client eat before EMS?", ["Nothing for 6 hours", "A light carbohydrate snack about 2 hours before", "A large meal just before", "Only a protein shake"], 1],
+  ["rhabdo", "Which client is at higher risk of rhabdomyolysis?", ["A regular client after a 4-day gap", "A new client pushed to high intensity in the first session", "A client who drank water beforehand", "A client kept at low intensity"], 1],
+  ["rhabdo", "A client reported dark urine after their last session. When can they have the next one?", ["Next week", "Only after the clinician has cleared them", "After 48 hours", "When they feel fine"], 1],
+  ["machine", "Where must the emergency stop be?", ["In the office", "Within reach of both the trainer and the client", "Behind the client on the device", "Anywhere in the room"], 1],
+  ["machine", "How often should you check the intensity at each electrode area during a session?", ["Once at the start", "At least 3 times, adjusting as needed", "Never — the programme does it", "Only if the client complains"], 1],
+  ["session", "What is the target intensity in a client's first sessions?", ["CR10 about 4 (somewhat strong)", "CR10 8", "The maximum the client can stand", "CR10 10"], 0],
+  ["session", "How long is the conditioning phase for beginners in the international guideline?", ["1 week", "8–10 weeks", "2 days", "There is none"], 1],
+  ["session", "When may very hard intensities (CR10 7–8) be used?", ["From the first session", "Only after 8–10 sessions at the earliest, if well tolerated", "Never", "Whenever the client asks"], 1],
+  ["session", "What does the guideline suggest for a first session?", ["About 5 minutes of familiarisation, then about 12 minutes intermittent at low intensity", "60 minutes", "40 minutes at high intensity", "2 minutes only"], 0],
+  ["session", "After the conditioning phase, the guideline's minimum gap between intense sessions is:", ["12 hours", "1 day", "4 days", "2 weeks"], 2],
+  ["session", "Which movements suit early EMS sessions?", ["Jumps and sprints", "Simple controlled exercises such as partial squats and rows", "Heavy barbell lifts", "Running on a treadmill"], 1],
+  ["session", "How many clients may one Hasta trainer supervise during EMS?", ["One", "Two", "Four", "As many as there are devices"], 0],
+  ["emergency", "A client complains of chest pain during EMS. You:", ["Lower the intensity", "Stop at once and call for medical help", "Finish the programme first", "Give water and continue"], 1],
+  ["emergency", "The skin under an electrode is burning or very red. You:", ["Continue at lower intensity", "Stop, check the skin, record it and inform the clinician if needed", "Add more water and continue", "Ignore it"], 1],
+  ["emergency", "Which number connects to India's all-in-one emergency service?", ["112", "911", "999", "000"], 0],
+  ["protocols", "A client asks for a diet plan and supplements for faster weight loss. You:", ["Write a diet plan", "Give general advice and refer to the clinic's doctor or dietitian", "Recommend the supplements you use", "Say EMS alone is enough"], 1],
+  ["protocols", "Where may client progress photos be taken and kept?", ["On your personal phone", "Only on clinic devices, in the clinic app, with the client's consent", "In a WhatsApp group", "Anywhere, if deleted later"], 1],
+  ["protocols", "A client wants a promise of how many kilograms they will lose. You:", ["Promise 5 kg", "Explain that results vary and set honest expectations", "Promise a refund if not", "Avoid the question"], 1],
+  ["protocols", "Who takes payment for an EMS package?", ["The trainer, in cash", "The front desk, against the package bill in the clinic app", "The trainer, by UPI to their phone", "Nobody until the end"], 1],
 ];
 
 /* ---------------- helpers ---------------- */
@@ -109,7 +210,7 @@ function perm(seed, n) {
 
 export async function ensureSeed(env) {
   const c = await env.DB.prepare('SELECT COUNT(*) n FROM ems_curriculum').first();
-  if (!c.n) await env.DB.prepare("INSERT INTO ems_curriculum (version, modules, status, notes) VALUES ('1.0', ?, 'draft', 'Agreed with the equipment supplier and medical lead (framework v1.0). Awaiting approval in the platform by the medical lead.')").bind(JSON.stringify(MODULES_V1)).run();
+  if (!c.n) await env.DB.prepare("INSERT INTO ems_curriculum (version, modules, status, notes) VALUES ('1.1', ?, 'draft', 'Full curriculum (handbook v1.1). Awaiting approval in the platform by the medical lead.')").bind(JSON.stringify(MODULES_V11)).run();
   const q = await env.DB.prepare('SELECT COUNT(*) n FROM ems_questions').first();
   if (!q.n) for (const [area, question, options, answer] of Q) await env.DB.prepare('INSERT INTO ems_questions (area, question, options, answer) VALUES (?,?,?,?)').bind(area, question, JSON.stringify(options), answer).run();
 }
@@ -176,7 +277,7 @@ export async function newVersion(env, me, b) {
   if (!/^\d+\.\d+$/.test(ver)) return R(400, 'Enter a version like 1.1.');
   if (await env.DB.prepare("SELECT 1 FROM ems_curriculum WHERE status='draft'").first()) return R(400, 'There is already a draft version. Approve or edit it first.');
   const base = await env.DB.prepare('SELECT * FROM ems_curriculum ORDER BY id DESC LIMIT 1').first();
-  const mods = Array.isArray(b.modules) ? b.modules : parse(base && base.modules, MODULES_V1);
+  const mods = Array.isArray(b.modules) ? b.modules : parse(base && base.modules, MODULES_V11);
   const clean_mods = mods.map((m, i) => ({ no: i + 1, title: clean(m.title, 80), content: clean(m.content, 600), hours: clean(m.hours, 20), assessed: clean(m.assessed, 40) })).filter(m => m.title);
   await env.DB.prepare("INSERT INTO ems_curriculum (version, modules, status, notes) VALUES (?,?,'draft',?)").bind(ver, JSON.stringify(clean_mods), nz(clean(b.notes, 300))).run();
   return R(200);
