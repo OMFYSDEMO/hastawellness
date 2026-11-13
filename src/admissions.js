@@ -36,13 +36,16 @@ export const BATCH_STATUS = ['draft', 'open', 'closed', 'completed', 'cancelled'
 export const APP_STATUS = { submitted: 'New', interview: 'Interview', offered: 'Offered — awaiting fee', enrolled: 'Enrolled', completed: 'Certified', waitlisted: 'Waitlisted', rejected: 'Not accepted', withdrawn: 'Withdrawn' };
 const HOLDS_SEAT = ['offered', 'enrolled', 'completed'];
 const ACTIVE = ['submitted', 'interview', 'offered', 'enrolled', 'waitlisted'];
-export const QUALS = { physio: 'Physiotherapy (BPT / MPT)', nursing: 'Nursing (GNM / BSc / ANM)', sports: 'Sports science / physical education', fitness: 'Fitness trainer certificate', doctor: 'Doctor (MBBS / BAMS / BHMS / other)', other: 'Other' };
+export const QUALS = { aesthetic: 'Aesthetic therapist', cosmetic_doctor: 'Cosmetic doctor', physio: 'Physiotherapist (BPT / MPT)' };
+// Minimum 6 months' work experience in that role.
+export const EXP_BANDS = { m6: '6–12 months', y1: '1–3 years', y3: 'More than 3 years' };
+export const DEFAULT_FEE = 20000;
 export const DOCS = { id_proof: ['Photo ID (Aadhaar with number masked, passport, driving licence or voter ID)', true], qualification: ['Qualification certificate', true], bls: ['BLS / CPR certificate (if you have one)', false], photo: ['Passport-size photo', false] };
-export const CHECKS = { id: 'Photo ID matches the applicant', qualification: 'Qualification certificate checked', background: 'Health, fitness or allied-health background suitable', bls: 'Valid BLS certificate (or booked before supervised practice)', interview: 'Interview done — communication and attitude suitable' };
+export const CHECKS = { id: 'Photo ID matches the applicant', qualification: 'Qualification certificate checked', background: 'Aesthetic therapist, cosmetic doctor or physiotherapist with 6+ months’ experience', bls: 'Valid BLS certificate (or booked before supervised practice)', interview: 'Interview done — communication and attitude suitable' };
 const OFFER_CHECKS = ['id', 'qualification', 'background', 'interview'];
 const DOC_MAX = 5 * 1024 * 1024;
 const SIGS = { pdf: [[0x25, 0x50, 0x44, 0x46], 'application/pdf'], jpg: [[0xff, 0xd8, 0xff], 'image/jpeg'], png: [[0x89, 0x50, 0x4e, 0x47], 'image/png'] };
-const DEFAULT_REQS = 'Aged 18 or over\nA health, fitness or allied-health background: physiotherapy, nursing, sports science or physical education, a recognised fitness-trainer certificate, or a medical degree\nA valid Basic Life Support (BLS) certificate before supervised practice starts (you can take it during the course)\nComfortable speaking with clients in English or Malayalam\nAble to attend every classroom day and complete the supervised sessions at Hasta, Kazhakkoottam';
+const DEFAULT_REQS = 'Aged 18 or over\nWorking as an aesthetic therapist, cosmetic doctor or physiotherapist, with at least 6 months’ experience\nA valid Basic Life Support (BLS) certificate before supervised practice starts (you can take it during the course)\nComfortable speaking with clients in English or Malayalam\nAble to attend every classroom day and complete the supervised sessions at Hasta, Kazhakkoottam';
 
 async function settingsOf(env) {
   const { results } = await env.DB.prepare("SELECT key, value FROM cl_settings WHERE key IN ('academy_terms','academy_requirements','gstin','trade_name')").all();
@@ -99,9 +102,10 @@ export async function academyPage(env, url) {
 <div class="two"><label>Mobile number<input type="tel" name="phone" autocomplete="tel" inputmode="tel" required pattern="[0-9+ \\(\\)\\-]{10,20}"></label><label>Email<input type="email" name="email" autocomplete="email" required maxlength="120"></label></div>
 <div class="two"><label>Date of birth<input type="date" name="dob" required max="${today()}"></label><label>Gender<select name="gender"><option value="">Prefer not to say</option><option value="female">Female</option><option value="male">Male</option><option value="other">Other</option></select></label></div>
 <label>City / town<input type="text" name="city" maxlength="80" required></label></fieldset>
-<fieldset><legend>Qualification and experience</legend><label>Main qualification<select name="qualification" required>${Object.entries(QUALS).map(([k, l]) => `<option value="${k}">${h(l)}</option>`).join('')}</select></label>
-<div class="two"><label>Course / certificate name and institute<input type="text" name="qualification_body" maxlength="160" required placeholder="e.g. BPT, Kerala University of Health Sciences"></label><label>Registration number (if any)<input type="text" name="registration_no" maxlength="60" placeholder="e.g. council registration"></label></div>
-<div class="two"><label>Experience with clients<input type="text" name="experience" maxlength="120" placeholder="e.g. 3 years as a gym trainer, or Fresher"></label><label>Current employer (optional)<input type="text" name="employer" maxlength="120"></label></div>
+<fieldset><legend>Qualification and experience</legend><label>You are a<select name="qualification" required><option value="">Choose</option>${Object.entries(QUALS).map(([k, l]) => `<option value="${k}">${h(l)}</option>`).join('')}</select></label>
+<div class="two"><label>Course / certificate name and institute<input type="text" name="qualification_body" maxlength="160" required placeholder="e.g. Diploma in Cosmetology, VLCC Institute"></label><label>Registration number (if any)<input type="text" name="registration_no" maxlength="60" placeholder="e.g. council registration"></label></div>
+<div class="two"><label>Experience in this role<select name="exp_band" required><option value="">Choose</option><option value="lt6">Less than 6 months</option>${Object.entries(EXP_BANDS).map(([k, l]) => `<option value="${k}">${h(l)}</option>`).join('')}</select></label><label>Current or last employer<input type="text" name="employer" maxlength="120" required></label></div>
+<label>Your work in brief (optional)<input type="text" name="experience" maxlength="120" placeholder="e.g. skin treatments and body contouring at a clinic in Kochi"></label>
 <label>Basic Life Support (BLS / CPR)<select name="bls"><option value="valid">I have a valid BLS certificate</option><option value="expired">My BLS certificate has expired</option><option value="none">I don’t have one yet</option></select></label>
 <label>Why do you want to become an EMS trainer? (optional)<textarea name="statement" maxlength="1000"></textarea></label>
 <label>How did you hear about us?<select name="how_heard"><option value="">—</option><option>Instagram</option><option>Facebook</option><option>Google</option><option>Friend or colleague</option><option>Hasta client</option><option>Other</option></select></label></fieldset>
@@ -118,7 +122,7 @@ export async function academyPage(env, url) {
   const body = `<div class="wrap"><p class="crumbs"><a href="/">Home</a> / EMS Academy</p>
 <div class="hero" style="grid-template-columns:1fr;padding-bottom:30px"><div><div class="eyebrow">HASTA EMS ACADEMY · KAZHAKKOOTTAM, TRIVANDRUM</div>
 <h1>Become a certified <em>EMS trainer.</em></h1>
-<p>A practical programme for physiotherapists, nurses, sports-science graduates and fitness trainers: classroom modules, hands-on machine training and real sessions with Hasta clients under a Master Trainer, ending in a certificate anyone can check online.</p>
+<p>A practical programme for aesthetic therapists, cosmetic doctors and physiotherapists with at least 6 months’ experience: classroom modules, hands-on machine training and real sessions with Hasta clients under a Master Trainer, ending in a certificate anyone can check online.</p>
 <p><a class="btn" href="#apply">Apply for the next batch <span>↗</span></a></p></div></div></div>
 <section class="block"><div class="wrap"><div class="eyebrow">BATCHES</div><h2>Upcoming batches</h2>${batchList}</div></section>
 <section class="block"><div class="wrap ac-grid"><div><div class="eyebrow">HOW IT WORKS</div><h2>From application to certificate</h2>
@@ -168,7 +172,11 @@ export async function academyApply(request, env, url, ctx) {
   const age = (Date.parse(today()) - Date.parse(dob)) / (365.25 * 864e5);
   if (age < 18) return backTo(url, 'Applicants must be 18 or over.');
   const qual = QUALS[form.get('qualification')] ? form.get('qualification') : null;
-  if (!qual) return backTo(url, 'Please choose your qualification.');
+  if (!qual) return backTo(url, 'Please choose whether you are an aesthetic therapist, cosmetic doctor or physiotherapist.');
+  const band = form.get('exp_band');
+  if (band === 'lt6') return backTo(url, 'The programme needs at least 6 months’ experience as an aesthetic therapist, cosmetic doctor or physiotherapist. You’re welcome to apply once you have it.');
+  if (!EXP_BANDS[band]) return backTo(url, 'Please choose your experience.');
+  if (!clean(form.get('employer'), 120)) return backTo(url, 'Please enter your current or last employer.');
   // Batch: an open batch, or the next one if none is open (kept as a waiting list).
   let batch = null;
   const bid = parseInt(form.get('batch'), 10);
@@ -208,13 +216,13 @@ export async function academyApply(request, env, url, ctx) {
     try {
       id = (await env.DB.prepare(`INSERT INTO ems_academy_applications (app_no, batch_id, name, phone, email, dob, gender, city, qualification, qualification_body, registration_no, experience, employer, bls, statement, how_heard, docs, consent_at, consent_ip_hash, status)
         VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(appNo, batch.id, name, ph, email, dob, ['female', 'male', 'other'].includes(form.get('gender')) ? form.get('gender') : null, nz(clean(form.get('city'), 80)),
-        qual, nz(clean(form.get('qualification_body'), 160)), nz(clean(form.get('registration_no'), 60)), nz(clean(form.get('experience'), 120)), nz(clean(form.get('employer'), 120)), bls,
+        qual, nz(clean(form.get('qualification_body'), 160)), nz(clean(form.get('registration_no'), 60)), `${EXP_BANDS[band]}${clean(form.get('experience'), 120) ? ' — ' + clean(form.get('experience'), 120) : ''}`, nz(clean(form.get('employer'), 120)), bls,
         nz(clean(form.get('statement'), 1000)), nz(clean(form.get('how_heard'), 40)), JSON.stringify(docs), nowIso(), ipHash, status).run()).meta.last_row_id;
     } catch (e) { if (!/UNIQUE/i.test(String(e && e.message))) throw e; }
   }
   if (!id) return backTo(url, 'Something went wrong. Please try again.');
   await event(env, id, status === 'waitlisted' ? 'Applied — batch full, placed on the waiting list' : 'Applied on the website', null, 'Applicant');
-  const alert = notify(env, `EMS Academy application: ${name}`, [['Application', appNo], ['Batch', `${batch.title} (${batch.start_date})`], ['Name', name], ['Mobile', ph], ['Email', email], ['Qualification', `${QUALS[qual]} — ${clean(form.get('qualification_body'), 160)}`], ['BLS', bls], ['Status', APP_STATUS[status]]],
+  const alert = notify(env, `EMS Academy application: ${name}`, [['Application', appNo], ['Batch', `${batch.title} (${batch.start_date})`], ['Name', name], ['Mobile', ph], ['Email', email], ['Role', `${QUALS[qual]} — ${clean(form.get('qualification_body'), 160)}`], ['Experience', EXP_BANDS[band]], ['BLS', bls], ['Status', APP_STATUS[status]]],
     '/#/academy?tab=admissions', env.EMS_ORIGIN || (url.origin.includes('localhost') ? url.origin + '/ems' : url.origin.replace('//', '//ems.')));
   if (ctx && ctx.waitUntil) ctx.waitUntil(alert); else await alert;
   return backTo(url, null, appNo);
@@ -267,11 +275,11 @@ export async function overview(env) {
   await syncCompleted(env);
   const [batches, apps, s, machines] = await Promise.all([
     batchesWithSeats(env),
-    env.DB.prepare(`SELECT a.id, a.app_no, a.batch_id, a.name, a.phone, a.qualification, a.bls, a.status, a.created_at, a.offer_expires, a.invoice_id, a.staff_id, ${invoiceSql} invoice FROM ems_academy_applications a ORDER BY a.id DESC LIMIT 500`).all().then(r => r.results || []),
+    env.DB.prepare(`SELECT a.id, a.app_no, a.batch_id, a.name, a.phone, a.qualification, a.experience, a.bls, a.status, a.created_at, a.offer_expires, a.invoice_id, a.staff_id, ${invoiceSql} invoice FROM ems_academy_applications a ORDER BY a.id DESC LIMIT 500`).all().then(r => r.results || []),
     settingsOf(env),
     env.DB.prepare('SELECT id, name FROM ems_machine_types WHERE active=1 ORDER BY name').all().then(r => r.results || []),
   ]);
-  return { batches, applications: apps.map(shapeApp), settings: s, machines, statuses: APP_STATUS, quals: QUALS, docs: Object.fromEntries(Object.entries(DOCS).map(([k, [l]]) => [k, l])), checks: CHECKS, offer_checks: OFFER_CHECKS };
+  return { batches, applications: apps.map(shapeApp), default_fee: DEFAULT_FEE, settings: s, machines, statuses: APP_STATUS, quals: QUALS, docs: Object.fromEntries(Object.entries(DOCS).map(([k, [l]]) => [k, l])), checks: CHECKS, offer_checks: OFFER_CHECKS };
 }
 
 export async function detail(env, id) {
