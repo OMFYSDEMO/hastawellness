@@ -20,6 +20,7 @@ import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlertStmts, s
 import { careRoute, uploadPhoto, recallStmt } from './care.js';
 import { hrRoute, kioskRoute, scanRoute } from './hr.js';
 import { docsRoute, uploadDocFile } from './docs.js';
+import * as EXP from './expenses.js';
 import { emsForPatient, link as emsLink, unlink as emsUnlink, recheck as emsRecheck, billPackage, legacyPayments, moveLegacyPayment, resolveLegacyPayment, emsAppointments, emsAlerts, markEmsAppt } from './emslink.js';
 
 /* ---------------- helpers ---------------- */
@@ -153,6 +154,14 @@ async function route(request, env, url, p, base) {
     if (!u) return api({ ok: false, error: 'Please sign in.' }, 401);
     return uploadDocFile(request, env, u);
   }
+  // Expense receipt upload: raw file body.
+  if (p === '/expenses/file' && m === 'POST') {
+    if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
+    const { me: u } = await clinicSession(request, env);
+    if (!u || u.limited || !(u.admin || u.role === 'manager')) return api({ ok: false, error: 'Managers or admins only.' }, 403);
+    const [st, e, x] = await EXP.uploadReceipt(request, env);
+    return st === 200 ? api({ ok: true, ...x }) : api({ ok: false, error: e }, st);
+  }
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
   }
@@ -247,6 +256,15 @@ async function route(request, env, url, p, base) {
   if ((r = p.match(/^\/payments\/(\d+)\/void$/)) && m === 'POST') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return done(await voidPayment(env, me, +r[1], b)); }
   if (p === '/apply-advance' && m === 'POST') return done(await applyAdvance(env, me, b));
   if (p === '/cash' && m === 'GET') return api({ ok: true, ...(await cashBook(env)) });
+  // Expenses (managers and admins)
+  if (p.startsWith('/expenses')) {
+    if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403);
+    if (p === '/expenses' && m === 'GET') { const from = isDate(q('from')) ? q('from') : today().slice(0, 8) + '01', to = isDate(q('to')) ? q('to') : today(); return api({ ok: true, ...(await EXP.listExpenses(env, from, to)) }); }
+    if (p === '/expenses' && m === 'POST') return done(await EXP.saveExpense(env, me, null, b));
+    if ((r = p.match(/^\/expenses\/(\d+)$/)) && m === 'PUT') return done(await EXP.saveExpense(env, me, +r[1], b));
+    if ((r = p.match(/^\/expenses\/(\d+)\/void$/)) && m === 'POST') return done(await EXP.voidExpense(env, me, +r[1], b));
+    if ((r = p.match(/^\/expenses\/(\d+)\/receipt$/)) && m === 'GET') { const f = await EXP.receiptFile(env, +r[1]); if (!f) return api({ ok: false, error: 'Not found' }, 404); return new Response(f.obj.body, { headers: { 'content-type': f.r.type, 'content-disposition': `inline; filename="${f.r.name.replace(/"/g, '')}"`, 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } }); }
+  }
   if (p === '/cash/opening' && m === 'PUT') return done(await setOpening(env, me, b));
   if (p === '/cash/deposits' && m === 'POST') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return done(await addDeposit(env, me, b)); }
 
@@ -1023,12 +1041,15 @@ const CASH_SQL = [
   'SELECT * FROM cl_cash_deposits ORDER BY deposited_on DESC, id DESC LIMIT 60',
   `SELECT MIN(paid_on) d FROM cl_payments WHERE mode='cash' AND voided=0 AND (CASE WHEN ${OPEN_D} IS NULL THEN legacy=0 ELSE paid_on >= ${OPEN_D} END) AND paid_on > COALESCE((SELECT MAX(deposited_on) FROM cl_cash_deposits), '0000')`,
   "SELECT key, value FROM cl_settings WHERE key IN ('cash_opening_date','cash_opening_amount','cash_opening_by')",
+  // Cash paid out: expenses and supplier payments in cash, from the opening date (only once an opening balance is set).
+  `SELECT COALESCE(SUM(amount),0) s FROM cl_expenses WHERE mode='cash' AND voided=0 AND ${OPEN_D} IS NOT NULL AND spent_on >= ${OPEN_D}`,
+  `SELECT COALESCE(SUM(amount),0) s FROM cl_supplier_payments WHERE mode='cash' AND voided=0 AND ${OPEN_D} IS NOT NULL AND paid_on >= ${OPEN_D}`,
 ];
-function cashFrom([cash, dep, deposits, since, open]) {
+function cashFrom([cash, dep, deposits, since, open, exp, sup]) {
   const o = Object.fromEntries((open.results || []).map(x => [x.key, x.value]));
   const opening = o.cash_opening_date ? { date: o.cash_opening_date, amount: r2(o.cash_opening_amount), by: o.cash_opening_by || null } : null;
-  const c = cash.results[0].s, d = dep.results[0].s, ob = opening ? opening.amount : 0;
-  return { in_hand: r2(ob + c - d), opening, received: r2(c), deposited: r2(d), deposits: deposits.results || [], oldest_undeposited: opening && ob > 0 && !d ? opening.date : since.results[0].d };
+  const c = cash.results[0].s, d = dep.results[0].s, ob = opening ? opening.amount : 0, spent = r2(exp.results[0].s + sup.results[0].s);
+  return { in_hand: r2(ob + c - d - spent), opening, received: r2(c), deposited: r2(d), spent, deposits: deposits.results || [], oldest_undeposited: opening && ob > 0 && !d ? opening.date : since.results[0].d };
 }
 async function setOpening(env, me, b) {
   if (!me.admin && me.role !== 'manager') return R(403, 'Managers or admins only.');
@@ -1074,9 +1095,10 @@ async function dashboard(env, me) {
     ...stockQ, recallQ,
   ]);
   const [appts, open, pays, out, lds, billed] = res.slice(0, 6).map(x => x.results || []);
-  const cash = cashFrom(res.slice(6, 10));
-  const stock = stockAlertsFrom(res.slice(10, 10 + stockQ.length));
-  const recalls = res[10 + stockQ.length].results || [];
+  const N = 6 + CASH_SQL.length;
+  const cash = cashFrom(res.slice(6, N));
+  const stock = stockAlertsFrom(res.slice(N, N + stockQ.length));
+  const recalls = res[N + stockQ.length].results || [];
   return { today: d, appointments: appts.map(a => ({ ...a, planned_items: parse(a.planned_items, []) })), unclosed: open, collections: pays, cash,
     outstanding: { count: out[0].n, amount: r2(out[0].s) }, new_leads: lds[0].n, billed_today: r2(billed[0].s), stock, recalls };
 }
