@@ -2166,12 +2166,25 @@ async function viewDiscipline(head) {
     body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('Staff member', sel('staff_id', [['', 'Choose']].concat(d.staff.filter(x => x.powers.open).map(x => [x.id, x.name]))))}${field('Category', sel('category', [['', 'Choose']].concat(Object.entries(d.categories))))}</div>
       <div class="grid2">${field('Date of the incident', inp('incident_date', '', `type="date" max="${today()}"`))}${field('Until (if it went on over several days)', inp('incident_end', '', `type="date" max="${today()}"`), 'optional')}</div>
       ${field('What happened', `<textarea class="in" name="allegation" rows="5" maxlength="1500" placeholder="Be specific: date, time, place, what was done or said, who was affected. Facts only — no opinions."></textarea>`, 'the employee will see this exactly as written')}
-      ${field('Rule, policy or standard broken', inp('rule_breached', '', 'maxlength="400" placeholder="e.g. Office Order HCPL/OO/2026/001 (clinic phone policy), clause 3"'))}
+      ${field('Rule, policy or standard broken', `<input class="in" name="rule_breached" list="disc-rules" maxlength="400" autocomplete="off" placeholder="Type to search: policy, memo, phone, leave, cash, confidentiality…"><datalist id="disc-rules"></datalist><input type="hidden" name="rule_doc_id"><div class="small muted" data-rulehint style="margin-top:4px">Choose the staff member first to see the policies issued to them. You can add the clause after choosing, e.g. ", point 2".</div>`)}
       ${field('Evidence', `<textarea class="in" name="evidence" rows="3" maxlength="1500" placeholder="e.g. attendance record for 3 Nov; statement from Sherly; screenshot of the post (attached)"></textarea>`, 'what the decision will rely on')}
       ${d.full ? field('Evidence files (optional)', '<input class="in" type="file" data-att accept=".pdf,image/*">', 'PDF or photo, up to 10 MB') : ''}
       ${d.full ? field('Gross misconduct?', sel('gross_type', [['', 'No — normal procedure']].concat(d.gross.map(g => [g, g]))), 'only for the most serious cases; still needs show-cause, reply period, hearing and the clinic admin') : ''}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Open case</button>`,
-    onMount(el, close) { const sv = el.querySelector('[data-save]'); sv.onclick = () => busy(sv, async () => { const v = formData(el.querySelector('[data-f]')); const fi = el.querySelector('[data-att]'); const f = fi ? await uploadFile(fi) : null; return api('/clinic/hr/discipline', { method: 'POST', body: { ...v, attachments: f ? [f] : [] } }); }).then(r => { close(); toast(`Case ${r.case_no} opened`); go('#/staff?tab=discipline&case=' + r.id); }).catch(() => {}); } }));
+    onMount(el, close) {
+      // Rule suggestions: policies / memos / notices issued to the chosen employee (with their signature status), then clinic standards.
+      const f = el.querySelector('[data-f]'), rule = f.rule_breached, docIn = f.rule_doc_id, hint = el.querySelector('[data-rulehint]'), dl = el.querySelector('#disc-rules');
+      let R = { docs: [], standards: [] };
+      const label = x => `${x.ref_no} — ${x.title}`;
+      const sync = () => { const v = rule.value.trim(), doc = R.docs.find(x => v === label(x) || v.startsWith(x.ref_no));
+        docIn.value = doc ? doc.id : '';
+        hint.innerHTML = doc ? (doc.ack_at ? `<span style="color:var(--ok,#2e7d5b);display:inline-flex;gap:6px;align-items:center">${icon('check-circle', 14)} Signed by this employee on ${esc(fUtc(doc.ack_at))}${doc.disputed ? ' (they recorded disagreement)' : ''} — the letter will say so.</span>` : `<span style="color:var(--gold-ink);display:inline-flex;gap:6px;align-items:center">${icon('alert-triangle', 14)} Issued ${esc(fUtc(doc.issued_at))} but not signed by this employee yet — weaker evidence.</span>`)
+          : v && R.standards.includes(v) ? `<span class="muted">Clinic standard — stronger if it is also in a policy the employee has signed.</span>` : 'Type to search the policies issued to this employee and the clinic standards. Add the clause after choosing, e.g. ", point 2".'; };
+      f.staff_id.addEventListener('change', async () => { R = { docs: [], standards: [] }; dl.innerHTML = ''; if (!f.staff_id.value) return sync();
+        try { R = await api('/clinic/hr/discipline/rules?staff_id=' + f.staff_id.value); } catch { return; }
+        dl.innerHTML = R.docs.map(x => `<option value="${esc(label(x))}">${esc(x.ack_at ? 'Signed ' + fDay(x.ack_at.slice(0, 10)) : 'Not signed yet')}</option>`).join('') + R.standards.map(x => `<option value="${esc(x)}">Clinic standard</option>`).join(''); sync(); });
+      rule.addEventListener('input', sync); rule.addEventListener('change', sync);
+      const sv = el.querySelector('[data-save]'); sv.onclick = () => busy(sv, async () => { const v = formData(el.querySelector('[data-f]')); const fi = el.querySelector('[data-att]'); const f = fi ? await uploadFile(fi) : null; return api('/clinic/hr/discipline', { method: 'POST', body: { ...v, attachments: f ? [f] : [] } }); }).then(r => { close(); toast(`Case ${r.case_no} opened`); go('#/staff?tab=discipline&case=' + r.id); }).catch(() => {}); } }));
 }
 
 async function viewDiscCase(id, head) {
@@ -2193,7 +2206,7 @@ async function viewDiscCase(id, head) {
         ${c.gross ? `<div class="notice" style="margin:0 0 10px">${icon('alert-triangle', 18)}<div>Gross misconduct alleged: ${esc(c.gross)}</div></div>` : ''}
         <div class="small"><b>Incident:</b> ${esc(fDay(c.incident_date))}${c.incident_end && c.incident_end !== c.incident_date ? ' – ' + esc(fDay(c.incident_end)) : ''}</div>
         <div class="small" style="margin-top:6px"><b>What happened:</b> ${esc(c.allegation)}</div>
-        <div class="small" style="margin-top:6px"><b>Rule broken:</b> ${esc(c.rule_breached)}</div>
+        <div class="small" style="margin-top:6px"><b>Rule broken:</b> ${esc(c.rule_breached)}${c.rule_ref ? ` · <a href="#/doc/${c.rule_doc_id}">${esc(c.rule_ref)}</a> ${c.rule_ack_at ? `— signed by ${esc(c.staff_name)} on ${esc(fUtc(c.rule_ack_at))}` : '— <span style="color:var(--gold-ink)">not signed by the employee</span>'}` : ''}</div>
         ${c.evidence ? `<div class="small" style="margin-top:6px"><b>Evidence:</b> ${esc(c.evidence)}</div>` : ''}
         ${c.attachments.length ? `<div class="small" style="margin-top:6px">${c.attachments.map((f, i) => `<a href="${BASE}/api/clinic/hr/discipline/${c.id}/file/${i}" target="_blank" rel="noopener">${icon('file-text', 14)} ${esc(f.name)}</a>`).join(' · ')}</div>` : ''}</section>
       <section class="panel"><div class="panel-h"><h3>Steps</h3></div>${c.actions.map(a => `<div style="padding:10px 0;border-top:1px solid var(--line-soft)"><b>${esc(DSTAGE[a.stage])}</b> <span class="small muted">· ${esc(a.by_name)} · ${esc(fUtc(a.created_at))}</span>${det(a)}</div>`).join('') || '<p class="muted small">No steps yet.</p>'}</section>

@@ -49,6 +49,21 @@ export const GROSS = ['Theft, fraud or dishonesty', 'Serious breach of patient c
   'Falsifying records, attendance or bills', 'Serious risk to patient safety through negligence', 'Serious insubordination'];
 export const STAGES = { verbal: 'Verbal warning', written: 'First written warning', final: 'Final written warning', dismissal: 'Dismissal' };
 const LEVEL = { verbal: 1, written: 2, final: 3, dismissal: 4 };
+// Clinic standards offered when typing the rule broken (alongside the policies, memos and notices issued in the app).
+// A standard that is not in a policy the employee signed is weaker evidence — issue it as a policy when you can.
+export const STANDARDS = [
+  'Patient confidentiality — patient information, records and photographs must not be shared outside the clinic',
+  'Attendance and punctuality — be at work for the full shift and clock in / out in the app',
+  'Leave — apply in the app and get approval before taking leave',
+  'Cash and billing — every payment is recorded in the clinic app when it is received',
+  'Respectful behaviour towards patients, visitors and colleagues',
+  "Clinical protocols, infection control and the duty doctor's instructions",
+  'Clinic phone and social media — official use only; no clinic or patient content on personal social media',
+  'Uniform, ID card and personal presentation',
+  'Clinic property, stock and equipment — care and proper use',
+  'No alcohol or drugs at work',
+  'Honest records — attendance, patient records and bills must be true and complete',
+];
 const DEFAULTS = { disc_verbal_months: 6, disc_written_months: 12, disc_final_months: 12, disc_reply_days: 3, disc_appeal_days: 7 };
 
 async function rules(env) {
@@ -85,7 +100,8 @@ async function standing(env, staffId) {
 }
 
 async function caseFull(env, id) {
-  const c = await env.DB.prepare('SELECT c.*, s.name staff_name FROM cl_disc_cases c JOIN ems_staff s ON s.id=c.staff_id WHERE c.id=?').bind(id).first();
+  const c = await env.DB.prepare(`SELECT c.*, s.name staff_name, d.ref_no rule_ref, d.issued_at rule_issued_at, r.ack_at rule_ack_at FROM cl_disc_cases c JOIN ems_staff s ON s.id=c.staff_id
+    LEFT JOIN cl_docs d ON d.id=c.rule_doc_id LEFT JOIN cl_doc_recipients r ON r.doc_id=c.rule_doc_id AND r.staff_id=c.staff_id WHERE c.id=?`).bind(id).first();
   if (!c) return null;
   const { results } = await env.DB.prepare(`SELECT a.*, d.ref_no, r.ack_at, r.response, r.ack_comment, r.form_data, r.refused_at
     FROM cl_disc_actions a LEFT JOIN cl_docs d ON d.id=a.doc_id LEFT JOIN cl_doc_recipients r ON r.doc_id=a.doc_id AND r.staff_id=a.staff_id WHERE a.case_id=? ORDER BY a.id`).bind(id).all();
@@ -135,7 +151,7 @@ async function letter(env, { s, ref, staff: st0, subject, paras, sig, receipt })
 const facts = c => [
   `Date of the incident: ${fd(c.incident_date)}${c.incident_end && c.incident_end !== c.incident_date ? ` to ${fd(c.incident_end)}` : ''}.`,
   `What happened: ${c.allegation}`,
-  `Rule or standard concerned: ${c.rule_breached}`,
+  `Rule or standard concerned: ${c.rule_breached}${c.rule_ack_at ? ` (${c.rule_ref}, which you read and signed in the Hasta Clinic app on ${fd(c.rule_ack_at)})` : c.rule_ref ? ` (${c.rule_ref}, issued to you in the Hasta Clinic app on ${fd(c.rule_issued_at)})` : ''}`,
   c.evidence ? `Evidence considered: ${c.evidence}` : null,
 ];
 // Appeals go to someone not involved in the decision: the Managing Director, or — when the MD made the
@@ -162,13 +178,19 @@ async function openCase(env, me, b) {
   if (allegation.length < 30) return R(400, 'Describe specifically what happened — when, where, what was done or said (at least a few sentences). Vague allegations cannot be acted on.');
   if (rule.length < 5) return R(400, 'Name the rule, policy or standard that was broken (e.g. Office Order HCPL/OO/2026/001, clinic leave policy).');
   const gross = GROSS.includes(b.gross_type) ? b.gross_type : null;
+  // A policy / memo issued in the app: it must have been sent to this employee.
+  let ruleDoc = null;
+  if (b.rule_doc_id) {
+    ruleDoc = await env.DB.prepare("SELECT d.id FROM cl_docs d JOIN cl_doc_recipients r ON r.doc_id=d.id AND r.staff_id=? WHERE d.id=? AND d.status='issued' AND d.kind IN ('policy','memo','notice','training','form')").bind(staff.id, parseInt(b.rule_doc_id, 10)).first();
+    if (!ruleDoc) return R(400, 'That document was not issued to this employee. Choose another, or type the rule.');
+  }
   if (gross && !isSuper(me, rl.s) && !rl.writtenBy.includes(me.id)) return R(403, 'Only the Operations Head or the clinic admin can mark a case as gross misconduct.');
   const atts = (Array.isArray(b.attachments) ? b.attachments : []).filter(f => f && typeof f.key === 'string' && f.key.startsWith('staff-docs/')).slice(0, 10).map(f => ({ key: f.key, name: clean(f.name, 120), type: clean(f.type, 40) }));
   const pre = `DC/${today().slice(0, 4)}/`;
   const last = await env.DB.prepare('SELECT case_no FROM cl_disc_cases WHERE case_no LIKE ? ORDER BY id DESC LIMIT 1').bind(pre + '%').first();
   const no = pre + String((last ? parseInt(last.case_no.slice(pre.length), 10) : 0) + 1).padStart(4, '0');
-  const id = (await env.DB.prepare(`INSERT INTO cl_disc_cases (case_no, staff_id, category, gross, incident_date, incident_end, allegation, rule_breached, evidence, attachments, raised_by, raised_by_name)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`).bind(no, staff.id, cat, gross, b.incident_date, nz(b.incident_end), allegation, rule, nz(evidence), JSON.stringify(atts), me.id, me.name).run()).meta.last_row_id;
+  const id = (await env.DB.prepare(`INSERT INTO cl_disc_cases (case_no, staff_id, category, gross, incident_date, incident_end, allegation, rule_breached, rule_doc_id, evidence, attachments, raised_by, raised_by_name)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(no, staff.id, cat, gross, b.incident_date, nz(b.incident_end), allegation, rule, ruleDoc ? ruleDoc.id : null, nz(evidence), JSON.stringify(atts), me.id, me.name).run()).meta.last_row_id;
   await audit(env, me, 'disc.open', 'disc_case', id, `${no} ${staff.name}: ${CATEGORIES[cat]}${gross ? ' (GROSS: ' + gross + ')' : ''}`);
   return OK({ id, case_no: no });
 }
@@ -393,6 +415,13 @@ export async function disciplineRoute(request, env, url, me, p, m, b) {
       rules: { verbal_months: rl.verbal_months, written_months: rl.written_months, final_months: rl.final_months, reply_days: rl.reply_days, appeal_days: rl.appeal_days }, full });
   }
   if (p === '/hr/discipline' && m === 'POST') return done(await openCase(env, me, b));
+  // Suggestions for "Rule, policy or standard broken": documents issued to this employee (with whether they signed), then clinic standards.
+  if (p === '/hr/discipline/rules' && m === 'GET') {
+    const sid = parseInt(url.searchParams.get('staff_id'), 10) || 0;
+    const { results } = await env.DB.prepare(`SELECT d.id, d.ref_no, d.kind, d.title, d.issued_at, r.ack_at, r.response FROM cl_docs d JOIN cl_doc_recipients r ON r.doc_id=d.id AND r.staff_id=?
+      WHERE d.status='issued' AND d.kind IN ('policy','memo','notice','training','form') ORDER BY d.id DESC`).bind(sid).all();
+    return json({ ok: true, docs: (results || []).map(d => ({ id: d.id, ref_no: d.ref_no, kind: d.kind, title: d.title, issued_at: d.issued_at, ack_at: d.ack_at, disputed: d.response === 'disputed' })), standards: STANDARDS });
+  }
   if ((mm = p.match(/^\/hr\/discipline\/(\d+)$/)) && m === 'GET') {
     const c = await caseFull(env, +mm[1]);
     if (!c || (!full && c.raised_by !== me.id)) return json({ ok: false, error: 'Not found.' }, 404);
