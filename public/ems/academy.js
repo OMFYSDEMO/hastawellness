@@ -22,7 +22,8 @@ export async function viewAcademy(MAIN, ME, MACHINES, tab = 'overview', go) {
   const ov = await api('/staff/academy');
   const me = ov.me, mName = id => (ov.machines.find(m => m.id === id) || {}).name || 'Machine';
   const approved = ov.curricula.find(c => c.status === 'approved');
-  const tabs = TABS.concat(ME.role === 'admin' || ME.role === 'manager' ? [['admissions', 'user-plus', 'Admissions']] : []);
+  const mgr = ME.role === 'admin' || ME.role === 'manager';
+  const tabs = TABS.concat(mgr || me.master_on.length ? [['batches', 'calendar-days', 'Batches']] : [], mgr ? [['admissions', 'user-plus', 'Admissions']] : []);
   MAIN.innerHTML = `<div class="head"><div><h1>Hasta EMS Academy</h1><p>Training and certification for every trainer, on every machine. Framework v1.0.</p></div>
       <div class="acts">${me.medical_lead ? pill('good', 'Medical lead') : ''}${me.master_on.length ? pill('active', 'Master Trainer') : ''}</div></div>
     <nav class="tabs">${tabs.map(([k, ic, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${icon(ic, 17)}${l}</button>`).join('')}</nav><div data-body></div>`;
@@ -30,7 +31,7 @@ export async function viewAcademy(MAIN, ME, MACHINES, tab = 'overview', go) {
   const body = MAIN.querySelector('[data-body]');
   const again = () => viewAcademy(MAIN, ME, MACHINES, tab, go);
   const ctx = { ov, me, mName, approved, again, go };
-  await ({ overview: tOverview, curriculum: tCurriculum, questions: tQuestions, masters: tMasters, trainees: tTrainees, certificates: tCerts, admissions: tAdmissions }[tab] || tOverview)(body, ctx);
+  await ({ overview: tOverview, curriculum: tCurriculum, questions: tQuestions, masters: tMasters, trainees: tTrainees, certificates: tCerts, admissions: tAdmissions, batches: tBatches }[tab] || tOverview)(body, ctx);
 }
 
 /* ---------- Overview ---------- */
@@ -308,7 +309,7 @@ async function tAdmissions(el, ctx) {
       <table class="t"><thead><tr><th>Batch</th><th>Dates</th><th>Machine</th><th class="n">Seats</th><th class="n">Fee + GST</th><th>Status</th><th class="n">To review</th><th></th></tr></thead><tbody>
       ${d.batches.map(b => `<tr><td><b>${esc(b.code)}</b><div class="small muted">${esc(b.title)}</div></td><td class="small">${fDate(b.start_date)}${b.end_date ? ' – ' + fDate(b.end_date) : ''}${b.apply_by ? `<div class="muted">apply by ${fDate(b.apply_by)}</div>` : ''}</td>
         <td class="small">${esc(b.machine_name || '—')}</td><td class="n">${b.taken}/${b.seats}</td><td class="n small">${b.fee ? `${money(b.fee_total)}<div class="muted">${money(b.fee)} + GST</div>` : '<span style="color:var(--alert)">Not set</span>'}</td>
-        <td>${pill(BATCH_PILL[b.status], b.status[0].toUpperCase() + b.status.slice(1))}</td><td class="n">${b.to_review ? `<b>${b.to_review}</b>` : '—'}</td><td><button class="btn sm quiet icon" data-eb="${b.id}" aria-label="Edit batch">${icon('pencil', 16)}</button></td></tr>`).join('') || `<tr><td colspan="8">${emptyState('calendar-days', 'No batches yet. Create one, set the fee and open it for applications.')}</td></tr>`}</tbody></table></section>
+        <td>${pill(BATCH_PILL[b.status], b.status[0].toUpperCase() + b.status.slice(1))}</td><td class="n">${b.to_review ? `<b>${b.to_review}</b>` : '—'}</td><td style="white-space:nowrap"><a class="btn sm ghost" href="#/academy?tab=batches&batch=${b.id}">Open</a> <button class="btn sm quiet icon" data-eb="${b.id}" aria-label="Edit batch">${icon('pencil', 16)}</button></td></tr>`).join('') || `<tr><td colspan="8">${emptyState('calendar-days', 'No batches yet. Create one, set the fee and open it for applications.')}</td></tr>`}</tbody></table></section>
     <section class="panel flush" style="margin-top:16px"><div class="panel-h" style="padding:18px 20px 8px;flex-wrap:wrap;gap:10px"><div class="t">${icon('inbox', 20)}<h3>Applications</h3></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">${sel('fb', [['', 'All batches']].concat(d.batches.map(b => [b.id, b.code])), fBatch, 'data-fb style="height:38px;width:auto"')}
       ${sel('fs', [['active', 'In progress'], ['submitted', 'New'], ['interview', 'Interview'], ['offered', 'Offered'], ['enrolled', 'Enrolled'], ['completed', 'Certified'], ['waitlisted', 'Waitlisted'], ['rejected', 'Not accepted'], ['withdrawn', 'Withdrawn'], ['all', 'All']], fStatus, 'data-fs style="height:38px;width:auto"')}</div></div>
@@ -434,14 +435,175 @@ export async function mountTrainee(app, me) {
     MAIN.innerHTML = `<div class="head"><div><h1>Welcome, ${esc(me.name.split(' ')[0])}</h1><p>${a ? `${esc(a.title)} · batch ${esc(a.code)} · ${fDate(a.start_date)}${a.end_date ? ' – ' + fDate(a.end_date) : ''}${a.machine_name ? ' · ' + esc(a.machine_name) : ''}` : 'Hasta EMS Academy'}</p>${a && a.schedule ? `<p class="small muted">${esc(a.schedule)}</p>` : ''}</div></div>
       <section class="panel"><div class="panel-h"><div class="t">${icon('clipboard-check', 20)}<h3>My progress</h3></div></div>
         ${d.records.length ? `<div class="rows">${d.records.map(x => recordRow(x, mName, true)).join('')}</div>` : '<p class="muted">Your training record opens on your first day. Ask your Master Trainer if it does not appear.</p>'}
-        <ul class="small muted" style="margin:12px 0 0;padding-left:18px;line-height:1.7"><li>Theory test: ${d.rules.questions} questions, pass mark ${d.rules.pass_mark}%, ${d.rules.max_attempts} attempts. Take it when your Master Trainer says you are ready.</li><li>${d.rules.supervised} supervised sessions with Hasta clients, including ${d.rules.first_sessions} first sessions — logged by your Master Trainer.</li><li>Practical assessment: every checklist item must pass.</li></ul></section>
+        <ul class="small muted" style="margin:12px 0 0;padding-left:18px;line-height:1.7"><li>Theory test: ${d.rules.questions} questions, pass mark ${d.rules.pass_mark}%, ${d.rules.max_attempts} attempts. Take it when your Master Trainer says you are ready.</li><li>${d.rules.supervised} supervised sessions with Hasta clients, including ${d.rules.first_sessions} first sessions — logged by your Master Trainer.</li><li>Practical assessment: every checklist item must pass.</li></ul>
+        ${d.gate && (d.gate.modules.length || !d.gate.attendanceOk || !d.gate.bls) ? `<div class="small" style="margin-top:10px;padding:10px 12px;background:var(--soft,#f3f6f5);border-radius:8px"><b>Still needed:</b> ${[d.gate.modules.length ? `modules ${d.gate.modules.join(', ')} signed off (before the test)` : '', !d.gate.attendanceOk ? `attendance of ${d.min_attendance}% — yours is ${d.gate.attendance.pct}% (before the test)` : '', !d.gate.bls ? 'a verified BLS certificate (before supervised sessions)' : ''].filter(Boolean).join(' · ')}</div>` : ''}</section>
+      <div class="grid2" style="align-items:start;margin-top:16px">
+      <section class="panel"><div class="panel-h"><div class="t">${icon('calendar-days', 20)}<h3>Timetable and attendance</h3></div>${d.attendance && d.attendance.pct !== null ? pill(d.attendance.pct >= d.min_attendance ? 'good' : 'alert', `Attendance ${d.attendance.pct}%`) : ''}</div>
+        ${(d.timetable || []).length ? `<div class="rows">${d.timetable.map(t => `<div class="row"><span class="time">${t.day_date.slice(8)}/${t.day_date.slice(5, 7)}</span><div class="grow"><b>${fDate(t.day_date)}${t.start_time ? ' · ' + t.start_time + (t.end_time ? '–' + t.end_time : '') : ''}</b><span>${[t.modules.length ? 'Modules ' + t.modules.join(', ') : '', t.trainer_name ? esc(t.trainer_name) : '', t.topic ? esc(t.topic) : ''].filter(Boolean).join(' · ')}</span></div>${t.mark ? pill(ATT_P[t.mark], ATT_L[t.mark]) : t.day_date > today() ? '<span class="small muted">Upcoming</span>' : ''}</div>`).join('')}</div>` : '<p class="muted">The timetable will appear here.</p>'}</section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('shield-check', 20)}<h3>BLS certificate</h3></div>${d.bls ? pill(d.bls.status === 'verified' ? 'good' : d.bls.status === 'pending' ? 'warn' : d.bls.status === 'rejected' ? 'alert' : 'closed', { verified: 'Verified', pending: 'Being checked', rejected: 'Not accepted' }[d.bls.status] || 'Not uploaded') : ''}</div>
+        ${d.bls && d.bls.status === 'verified' ? `<p class="muted">Verified, valid until ${fDate(d.bls.expiry)}.</p>` : `<p class="small">A valid Basic Life Support (BLS / CPR) certificate is needed before your supervised sessions with clients.${d.bls && d.bls.status === 'rejected' ? ' Your last upload was not accepted — please upload a clearer or valid certificate.' : ''}</p>
+        ${d.bls && d.bls.status === 'pending' ? '<p class="muted small">We are checking the certificate you uploaded.</p>' : `<form data-bls class="stack" style="gap:10px">${field('Valid until', inp('expiry', '', `type="date" min="${today()}"`))}${field('Certificate (PDF, JPG or PNG, up to 5 MB)', '<input class="in" type="file" name="file" accept=".pdf,.jpg,.jpeg,.png">')}<button class="btn" type="submit">Upload</button></form>`}`}</section></div>
+      ${d.feedback && (d.feedback.open || d.feedback.done) ? `<section class="panel" style="margin-top:16px"><div class="panel-h"><div class="t">${icon('message-circle', 20)}<h3>Course feedback</h3></div></div>${d.feedback.done ? '<p class="muted">Thank you for your feedback.</p>' : `<form data-fb class="stack" style="gap:10px"><p class="small muted" style="margin:0">Rate each from 1 (poor) to 5 (excellent).</p>
+        ${Object.entries(d.feedback.labels).map(([k, l]) => `<div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center"><span>${esc(l)}</span><div style="display:flex;gap:10px">${[1, 2, 3, 4, 5].map(n => `<label class="check" style="gap:3px"><input type="radio" name="${k}" value="${n}"><span>${n}</span></label>`).join('')}</div></div>`).join('')}
+        ${field('How likely are you to recommend this course to a colleague? (0–10)', inp('recommend', '', 'type="number" min="0" max="10"'))}${field('What was best?', '<textarea class="in" name="best" rows="2" maxlength="600"></textarea>')}${field('What should we improve?', '<textarea class="in" name="improve" rows="2" maxlength="600"></textarea>')}<button class="btn" type="submit">Send feedback</button></form>`}</section>` : ''}
       ${d.certificates.length ? `<section class="panel" style="margin-top:16px"><div class="panel-h"><div class="t">${icon('award', 20)}<h3>My certificates</h3></div></div><div class="rows">${d.certificates.map(c => `<div class="row"><div class="grow"><b>${esc(c.machine_name)}</b><span>${esc(c.code)} · valid ${fDate(c.issued_on)} to ${fDate(c.valid_until)}</span></div>${CERT_STATUS(c)}<a class="btn sm ghost" href="${BASE}/api/staff/academy/certificates/${c.id}/pdf">${icon('printer', 15)}PDF</a></div>`).join('')}</div></section>` : ''}
       <section class="panel flush" style="margin-top:16px"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('book-open', 20)}<h3>Course modules${d.curriculum ? ' · v' + esc(d.curriculum.version) : ''}</h3></div></div>
         ${d.curriculum ? `<div class="rows">${d.curriculum.modules.map(mo => { const mats = d.materials.filter(x => x.module_no === mo.no); return `<div class="row" style="align-items:flex-start"><span class="time">${mo.no}</span><div class="grow"><b>${esc(mo.title)}</b><span class="small">${esc(mo.content)}</span>
-          <span class="small muted">${esc(mo.hours)}${/^\d+$/.test(mo.hours) ? ' hours' : ''} · assessed by ${esc(mo.assessed)}</span>${mats.map(x => `<div class="small"><a href="${esc(x.kind === 'file' ? fileUrl(x.file_key) : x.url)}" target="_blank" rel="noopener" style="display:inline-flex;gap:6px;align-items:center">${icon(x.kind === 'file' ? 'file-text' : 'external-link', 14)}${esc(x.title)}</a></div>`).join('')}</div></div>`; }).join('')}</div>`
+          <span class="small muted">${esc(mo.hours)}${/^\d+$/.test(mo.hours) ? (mo.hours === '1' ? ' hour' : ' hours') : ''} · assessed by ${esc(mo.assessed)}${(() => { const sg = (d.signed || []).find(x => x.module_no === mo.no); return sg ? ` · <b style="color:var(--good,#2e7d5b)">✓ signed off by ${esc(sg.signed_name)}</b>` : ''; })()}</span>${mats.map(x => `<div class="small"><a href="${esc(x.kind === 'file' ? fileUrl(x.file_key) : x.url)}" target="_blank" rel="noopener" style="display:inline-flex;gap:6px;align-items:center">${icon(x.kind === 'file' ? 'file-text' : 'external-link', 14)}${esc(x.title)}</a></div>`).join('')}</div></div>`; }).join('')}</div>`
           : '<p class="muted" style="padding:0 20px 18px">The course materials appear here once the curriculum is approved.</p>'}
         <p class="small muted" style="padding:0 20px 18px">Course handbook: <a href="/ems/academy/Hasta-EMS-Trainer-Curriculum-v1.1.pdf" target="_blank" rel="noopener">Hasta EMS Trainer Curriculum (PDF)</a></p></section>`;
     MAIN.querySelectorAll('[data-take]').forEach(b => b.addEventListener('click', () => takeTest(+b.dataset.take, render)));
+    MAIN.querySelector('[data-bls]')?.addEventListener('submit', async e => {
+      e.preventDefault(); const f = e.currentTarget, file = f.file.files[0], btn = f.querySelector('button');
+      if (!f.expiry.value) return toast('Enter the expiry date.', true);
+      if (!file) return toast('Choose the certificate file.', true);
+      if (file.size > 5 * 1024 * 1024) return toast('The file must be under 5 MB.', true);
+      btn.disabled = true;
+      try { const r = await fetch(`${BASE}/api/staff/academy/my/bls?expiry=${encodeURIComponent(f.expiry.value)}`, { method: 'POST', credentials: 'same-origin', headers: { 'content-type': file.type || 'application/octet-stream' }, body: file }); const j = await r.json(); if (!j.ok) throw new Error(j.error || 'Upload failed'); toast('Uploaded — we will check it'); render(); }
+      catch (err) { toast(err.message, true); btn.disabled = false; }
+    });
+    MAIN.querySelector('[data-fb]')?.addEventListener('submit', e => { e.preventDefault(); const btn = e.currentTarget.querySelector('button'); busy(btn, () => api('/staff/academy/my/feedback', { method: 'POST', body: formData(e.currentTarget) })).then(() => { toast('Thank you!'); render(); }).catch(() => {}); });
   };
   render();
+}
+
+/* ---------- Batches: running a batch after admission ---------- */
+const ATT_L = { present: 'Present', late: 'Late', absent: 'Absent', excused: 'Excused' };
+const ATT_P = { present: 'good', late: 'warn', absent: 'alert', excused: 'closed' };
+const dmy = d => d ? d.split('-').reverse().join('/') : '';
+const TEMPLATES = {
+  start: ['Course start reminder', (n, b) => `Hello ${n}, a reminder that the Hasta EMS Trainer Programme (batch ${b.code}) starts on ${fDate(b.start_date)}${b.schedule ? ' — ' + b.schedule : ''}. Venue: Hasta Wellness, Technopark Phase 3 Service Road, Kazhakkoottam. Please bring a photo ID and wear comfortable clothes. See you there!`],
+  day: ['Next teaching day', (n, b, x) => { const d = x.days.find(d => d.day_date >= today()); return `Hello ${n}, your next Academy day is ${d ? fDate(d.day_date) + (d.start_time ? ' at ' + d.start_time : '') + (d.modules.length ? ', modules ' + d.modules.join(', ') : '') : 'to be confirmed'}. Please be on time.`; }],
+  bls: ['BLS certificate reminder', n => `Hello ${n}, please upload your valid BLS / CPR certificate in your Academy account (My course → BLS certificate). We need it verified before you can start supervised sessions with clients.`],
+  test: ['Theory test ready', n => `Hello ${n}, your modules are signed off — you can now take the theory test in your Academy account (My course). 40 questions, pass mark 80%, up to 3 attempts. All the best!`],
+  sessions: ['Supervised sessions pending', (n, b, x, t) => `Hello ${n}, you have completed ${t.record ? t.record.logs.count : 0} of ${t.record ? t.record.logs.need : 10} supervised sessions. Please contact the clinic to book your remaining sessions with your Master Trainer.`],
+  feedback: ['Feedback request', n => `Hello ${n}, thank you for training with the Hasta EMS Academy. Please take two minutes to share your feedback in your Academy account (My course → Course feedback).`],
+  custom: ['Custom message', n => `Hello ${n}, `],
+};
+
+async function tBatches(el, ctx) {
+  const params = new URLSearchParams(location.hash.split('?')[1] || '');
+  const id = +params.get('batch');
+  if (id) return batchPage(el, ctx, id, params.get('view') || 'roster');
+  const d = await api('/staff/academy/batches');
+  el.innerHTML = `<section class="panel flush"><div class="rows">${d.batches.map(b => `<a class="row" href="#/academy?tab=batches&batch=${b.id}"><span class="avatar">${icon('calendar-days', 18)}</span><div class="grow"><b>${esc(b.code)} · ${esc(b.title)}</b><span>${fDate(b.start_date)}${b.end_date ? ' – ' + fDate(b.end_date) : ''} · ${esc(b.machine_name || 'machine not set')} · ${b.taken}/${b.seats} seats</span></div><div class="end">${pill(BATCH_PILL[b.status], b.status[0].toUpperCase() + b.status.slice(1))}</div></a>`).join('') || `<div class="row">${emptyState('calendar-days', d.can_manage ? 'No batches yet. Create one in Admissions.' : 'No batches on a machine you are a Master Trainer for.')}</div>`}</div></section>`;
+}
+
+async function batchPage(el, ctx, id, view) {
+  let d; try { d = await api(`/staff/academy/batches/${id}`); } catch (e) { el.innerHTML = `<div class="panel"><p class="err">${esc(e.message)}</p></div>`; return; }
+  const b = d.batch, active = d.roster.filter(t => ['enrolled', 'completed'].includes(t.status));
+  const reload = v => { location.hash = `#/academy?tab=batches&batch=${id}&view=${v || view}`; };
+  const refresh = () => batchPage(el, ctx, id, view);
+  const VIEWS = [['roster', 'users', 'Roster'], ['timetable', 'calendar-days', 'Timetable & attendance'], ['modules', 'list-checks', 'Modules'], ['feedback', 'message-circle', 'Feedback']];
+  el.innerHTML = `<div class="head" style="margin-bottom:10px"><div><p class="small" style="margin:0"><a href="#/academy?tab=batches">← All batches</a></p><h2 style="margin:4px 0">${esc(b.code)} · ${esc(b.title)}</h2>
+      <p class="muted" style="margin:0">${fDate(b.start_date)}${b.end_date ? ' – ' + fDate(b.end_date) : ''} · ${esc(b.machine_name || 'machine not set')} · lead trainer: <b>${esc(b.lead_name || 'not set')}</b> · minimum attendance ${b.min_attendance}% · ${pill(BATCH_PILL[b.status], b.status)}</p></div>
+    <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap"><a class="btn ghost" href="${BASE}/api/staff/academy/batches/${id}/report" target="_blank" rel="noopener">${icon('printer', 16)}Batch report</a>
+      ${d.can_manage ? `<button class="btn ghost" data-msg>${icon('message-circle', 16)}Message</button><button class="btn ghost" data-set>${icon('pencil', 16)}Settings</button>${b.status !== 'completed' ? `<button class="btn gold" data-close-batch>${icon('check', 16)}Close batch</button>` : ''}` : ''}</div></div>
+    ${b.status === 'completed' ? `<p class="panel small" style="margin:0 0 12px">Closed ${fDay(b.completed_at)} by ${esc(b.completed_by)}${b.completion_note ? ' — ' + esc(b.completion_note) : ''}</p>` : ''}
+    <nav class="tabs" style="margin-bottom:12px">${VIEWS.map(([k, ic, l]) => `<button data-view="${k}" class="${k === view ? 'on' : ''}">${icon(ic, 16)}${l}</button>`).join('')}</nav><div data-v></div>`;
+  el.querySelectorAll('[data-view]').forEach(x => x.onclick = () => reload(x.dataset.view));
+  const V = el.querySelector('[data-v]');
+
+  if (view === 'roster') {
+    const flagged = d.roster.filter(t => t.flags.length && t.status !== 'withdrawn').length;
+    V.innerHTML = `${flagged ? `<p class="small" style="margin:0 0 10px;color:var(--gold-ink)">${icon('alert-triangle', 15)} ${flagged} trainee${flagged > 1 ? 's need' : ' needs'} attention — see the notes under each name.</p>` : ''}
+    <section class="panel flush" style="overflow:auto"><table class="t"><thead><tr><th>Trainee</th><th>Fee</th><th>BLS</th><th class="n">Attendance</th><th class="n">Modules</th><th>Theory test</th><th class="n">Sessions</th><th>Practical</th><th>Certificate</th></tr></thead><tbody>
+    ${d.roster.map(t => { const r = t.record, gone = t.status === 'withdrawn'; return `<tr style="${gone ? 'opacity:.5' : ''}"><td><b>${esc(t.name)}</b><div class="small muted">${esc(t.app_no)} · ${esc(t.status)} · <a href="${esc(wa(t.phone, `Hello ${t.name.split(' ')[0]}, `))}" target="_blank" rel="noopener">${esc(prettyPhone(t.phone))}</a></div>${t.flags.length && !gone ? `<div class="small" style="color:var(--gold-ink);max-width:340px">${t.flags.map(esc).join(' · ')}</div>` : ''}</td>
+      <td>${!t.fee ? '—' : t.fee.status === 'final' && t.fee.due <= 0 ? pill('good', 'Paid') : pill('alert', t.fee.status === 'draft' ? 'Not billed' : 'Due ' + money(t.fee.due))}</td>
+      <td>${t.bls_status === 'verified' ? pill('good', 'Verified') : t.bls_status === 'pending' ? `${pill('warn', 'To check')}${d.can_manage ? ` <button class="btn sm ghost" data-bls="${t.id}">Check</button>` : ''}` : t.bls_status === 'rejected' ? pill('alert', 'Rejected') : pill('closed', t.bls_doc ? 'Uploaded' : 'None')}${t.bls_doc && d.can_manage && t.bls_status !== 'pending' && t.bls_status !== 'verified' ? ` <button class="btn sm ghost" data-bls="${t.id}">Check</button>` : ''}</td>
+      <td class="n">${t.attendance.pct === null ? '—' : `<b style="color:${t.attendance.pct < b.min_attendance ? 'var(--alert)' : 'inherit'}">${t.attendance.pct}%</b><div class="small muted">${t.attendance.attended}/${t.attendance.held - t.attendance.unmarked}</div>`}</td>
+      <td class="n">${r ? `${t.modules.length}/${d.taught}` : '—'}</td>
+      <td>${!r ? '—' : r.test.done ? pill('good', `Passed ${r.test.score}%`) : r.test.attempts ? pill(r.status === 'retraining' ? 'alert' : 'warn', `${r.test.score}% · ${r.test.attempts}/3`) : '<span class="small muted">Not taken</span>'}</td>
+      <td class="n">${r ? `${r.logs.count}/${r.logs.need}<div class="small muted">${r.logs.first}/${r.logs.need_first} first</div>` : '—'}</td>
+      <td>${!r ? '—' : r.practical.done ? pill('good', 'Passed') : r.practical.tried ? pill('alert', 'Not passed') : '<span class="small muted">Not done</span>'}</td>
+      <td>${t.certificate && t.certificate.code ? `${CERT_STATUS(t.certificate)}<div class="small muted">${esc(t.certificate.code)}</div>` : r && r.ready ? pill('active', 'Ready to certify') : '—'}</td></tr>`; }).join('') || `<tr><td colspan="9">${emptyState('users', 'No one offered or enrolled yet.')}</td></tr>`}</tbody></table></section>
+    <p class="small muted">Supervised sessions, the practical and certification are recorded in Academy → Trainees. The theory test opens for a trainee once modules 1–${d.taught} are signed off and attendance is at least ${b.min_attendance}%; supervised sessions need a verified BLS certificate.</p>`;
+    V.querySelectorAll('[data-bls]').forEach(x => x.onclick = () => { const t = d.roster.find(t => t.id === +x.dataset.bls); modal({
+      title: `BLS certificate · ${t.name}`, body: `<p><a class="btn sm ghost" href="${BASE}/api/staff/academy/applications/${t.id}/doc/bls" target="_blank" rel="noopener">${icon('file-text', 15)}Open the certificate</a></p><form data-f class="stack" style="gap:12px">${field('Valid until', inp('expiry', '', `type="date" min="${today()}"`), 'as printed on the certificate')}${field('If not accepted — reason (the trainee sees it)', inp('note', '', 'maxlength="300"'))}</form>`,
+      actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn ghost" data-no>Not accepted</button><button class="btn gold" data-yes>Verify</button>`,
+      onMount(m, close) { const go = (dec, btn) => busy(btn, () => api(`/staff/academy/applications/${t.id}/bls`, { method: 'POST', body: { ...formData(m.querySelector('[data-f]')), decision: dec } })).then(() => { close(); toast('Saved'); refresh(); }).catch(() => {}); m.querySelector('[data-yes]').onclick = e => go('verify', e.currentTarget); m.querySelector('[data-no]').onclick = e => go('reject', e.currentTarget); } }); });
+  }
+
+  if (view === 'timetable') {
+    const trainerOpts = [['', '—']].concat(d.trainers.map(t => [t.id, t.name]));
+    V.innerHTML = `${d.can_manage ? `<div style="display:flex;gap:8px;margin-bottom:10px"><button class="btn gold" data-addday>${icon('plus', 16)}Add a day</button><button class="btn ghost" data-adddays>${icon('calendar-days', 16)}Add several days</button></div>` : ''}
+    <section class="panel flush"><div class="rows">${d.days.map(day => { const n = active.length, marked = Object.keys(day.marks).length, here = Object.values(day.marks).filter(s => s === 'present' || s === 'late').length, past = day.day_date <= today(); return `<div class="row" style="align-items:flex-start"><span class="time">${dmy(day.day_date).slice(0, 5)}</span><div class="grow"><b>${fDate(day.day_date)}${day.start_time ? ` · ${day.start_time}${day.end_time ? '–' + day.end_time : ''}` : ''}</b>
+      <span>${day.modules.length ? 'Modules ' + day.modules.map(n => `${n}${(d.modules.find(m => m.no === n) || {}).title ? ' ' + esc(d.modules.find(m => m.no === n).title) : ''}`).join('; ') : 'No modules set'}${day.trainer_name ? ' · ' + esc(day.trainer_name) : ''}${day.topic ? ' · ' + esc(day.topic) : ''}</span>
+      ${past ? `<span class="small ${marked < n ? '' : 'muted'}" style="${marked < n ? 'color:var(--gold-ink)' : ''}">${marked ? `${here} of ${n} attended` : ''}${marked < n ? `${marked ? ' · ' : ''}${n - marked} not marked` : ''}</span>` : ''}</div>
+      <div class="end" style="gap:6px">${past && d.can_teach && n ? `<button class="btn sm${marked < n ? ' gold' : ' ghost'}" data-att="${day.id}">Attendance</button>` : ''}${d.can_manage ? `<button class="btn sm quiet icon" data-ed="${day.id}" aria-label="Edit">${icon('pencil', 15)}</button><button class="btn sm quiet icon" data-del="${day.id}" aria-label="Delete">${icon('trash-2', 15)}</button>` : ''}</div></div>`; }).join('') || `<div class="row">${emptyState('calendar-days', 'No teaching days yet. Add the timetable so attendance can be taken.')}</div>`}</div></section>`;
+    const modChecks = sel => `<div style="display:flex;flex-wrap:wrap;gap:6px 14px">${d.modules.map(m => `<label class="check"><input type="checkbox" name="mod" value="${m.no}"${sel.includes(m.no) ? ' checked' : ''}><span>${m.no}. ${esc(m.title)}</span></label>`).join('')}</div>`;
+    const dayModal = day => modal({
+      title: day ? `Teaching day ${fDate(day.day_date)}` : 'Add a teaching day', wide: true,
+      body: `<form data-f class="stack" style="gap:12px"><div class="grid3">${field('Date', inp('day_date', day ? day.day_date : (d.days.length ? '' : b.start_date), `type="date" min="${b.start_date}"${b.end_date ? ` max="${b.end_date}"` : ''}`))}${field('Starts', inp('start_time', day ? day.start_time || '' : '10:00', 'type="time"'))}${field('Ends', inp('end_time', day ? day.end_time || '' : '16:00', 'type="time"'))}</div>
+        ${field('Trainer', sel('trainer_id', trainerOpts, day ? day.trainer_id : b.lead_trainer_id))}${field('Modules taught', modChecks(day ? day.modules : []))}${field('Topic / notes', inp('topic', day ? day.topic || '' : '', 'maxlength="160"'))}</form>`,
+      actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
+      onMount(m, close) { const s = m.querySelector('[data-save]'); s.onclick = () => { const f = formData(m.querySelector('[data-f]')); f.modules = [...m.querySelectorAll('[name=mod]:checked')].map(x => +x.value); busy(s, () => api(day ? `/staff/academy/batches/${id}/days/${day.id}` : `/staff/academy/batches/${id}/days`, { method: day ? 'PUT' : 'POST', body: f })).then(() => { close(); toast('Saved'); refresh(); }).catch(() => {}); }; },
+    });
+    V.querySelector('[data-addday]')?.addEventListener('click', () => dayModal(null));
+    V.querySelector('[data-adddays]')?.addEventListener('click', () => modal({
+      title: 'Add several teaching days', body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('From', inp('from', b.start_date, 'type="date"'))}${field('To', inp('to', b.end_date || '', 'type="date"'))}</div>
+        <div style="display:flex;gap:12px;flex-wrap:wrap">${['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].map((w, i) => `<label class="check"><input type="checkbox" name="wd" value="${i}"${i >= 1 && i <= 5 ? ' checked' : ''}><span>${w}</span></label>`).join('')}</div>
+        <div class="grid3">${field('Starts', inp('start_time', '10:00', 'type="time"'))}${field('Ends', inp('end_time', '16:00', 'type="time"'))}${field('Trainer', sel('trainer_id', trainerOpts, b.lead_trainer_id))}</div><p class="small muted">Set the modules for each day afterwards with the pencil.</p></form>`,
+      actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Add days</button>`,
+      onMount(m, close) { const s = m.querySelector('[data-save]'); s.onclick = () => busy(s, async () => {
+        const f = formData(m.querySelector('[data-f]')), wds = [...m.querySelectorAll('[name=wd]:checked')].map(x => +x.value);
+        if (!f.from || !f.to || f.to < f.from) throw (toast('Choose the dates.', true), new Error('dates'));
+        const have = new Set(d.days.map(x => x.day_date)); let n = 0;
+        for (let t = new Date(f.from + 'T00:00:00Z'); t <= new Date(f.to + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + 1)) {
+          const ds = t.toISOString().slice(0, 10);
+          if (!wds.includes(t.getUTCDay()) || have.has(ds)) continue;
+          await api(`/staff/academy/batches/${id}/days`, { method: 'POST', body: { day_date: ds, start_time: f.start_time, end_time: f.end_time, trainer_id: f.trainer_id, modules: [] } }); n++;
+        }
+        return n; }).then(n => { close(); toast(`${n} day${n === 1 ? '' : 's'} added`); refresh(); }).catch(() => {}); } }));
+    V.querySelectorAll('[data-ed]').forEach(x => x.onclick = () => dayModal(d.days.find(y => y.id === +x.dataset.ed)));
+    V.querySelectorAll('[data-del]').forEach(x => x.onclick = () => { if (confirm('Delete this teaching day?')) api(`/staff/academy/batches/${id}/days/${x.dataset.del}`, { method: 'DELETE', body: {} }).then(() => { toast('Deleted'); refresh(); }).catch(e => toast(e.message, true)); });
+    V.querySelectorAll('[data-att]').forEach(x => x.onclick = () => { const day = d.days.find(y => y.id === +x.dataset.att); modal({
+      title: `Attendance · ${fDate(day.day_date)}`, body: `<form data-f class="stack" style="gap:8px">${active.map(t => `<div style="display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap"><b>${esc(t.name)}</b><div class="seg" style="display:flex;gap:4px">${Object.entries(ATT_L).map(([k, l]) => `<label class="check" style="gap:4px"><input type="radio" name="a${t.id}" value="${k}"${(day.marks[t.id] || (Object.keys(day.marks).length ? '' : 'present')) === k ? ' checked' : ''}><span>${l}</span></label>`).join('')}</div></div>`).join('')}</form>`,
+      actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save attendance</button>`,
+      onMount(m, close) { const s = m.querySelector('[data-save]'); s.onclick = () => { const marks = {}; for (const t of active) { const c = m.querySelector(`[name=a${t.id}]:checked`); if (c) marks[t.id] = c.value; } busy(s, () => api(`/staff/academy/batches/${id}/days/${day.id}/attendance`, { method: 'POST', body: { marks } })).then(() => { close(); toast('Attendance saved'); refresh(); }).catch(() => {}); }; } }); });
+  }
+
+  if (view === 'modules') {
+    const withRec = active.filter(t => t.record);
+    const taughtBy = n => d.days.filter(x => x.modules.includes(n) && x.day_date <= today()).length;
+    V.innerHTML = `<p class="small muted" style="margin:0 0 10px">${d.can_sign ? 'Tick a module once the trainee has been taught it and you are satisfied they understand it. Signed modules show on the trainee’s My course page.' : 'Only a Master Trainer qualified for this machine can sign off modules.'} Module 11 (supervised practice) is the session log in Academy → Trainees.</p>
+    <section class="panel flush" style="overflow:auto"><table class="t"><thead><tr><th>Trainee</th>${d.modules.filter(m => m.no <= d.taught).map(m => `<th class="n" title="${esc(m.title)}">${m.no}${taughtBy(m.no) ? '' : '<div class="small muted" style="font-weight:400">not yet</div>'}</th>`).join('')}<th class="n">Done</th>${d.can_sign ? '<th></th>' : ''}</tr></thead><tbody>
+    ${withRec.map(t => `<tr><td><b>${esc(t.name)}</b></td>${d.modules.filter(m => m.no <= d.taught).map(m => { const s = t.modules.find(x => x.module_no === m.no); return `<td class="n"><input type="checkbox" data-sign="${t.id}:${m.no}"${s ? ' checked' : ''}${d.can_sign && t.status === 'enrolled' ? '' : ' disabled'} title="${s ? esc(`Signed by ${s.signed_name}, ${fDay(s.signed_at)}`) : esc(m.title)}" style="width:18px;height:18px"></td>`; }).join('')}<td class="n"><b>${t.modules.length}/${d.taught}</b></td>${d.can_sign ? `<td>${t.status === 'enrolled' && t.modules.length < d.taught ? `<button class="btn sm ghost" data-signtaught="${t.id}">Sign all taught</button>` : ''}</td>` : ''}</tr>`).join('') || `<tr><td colspan="13">${emptyState('list-checks', 'No enrolled trainees with an open training record.')}</td></tr>`}</tbody></table></section>
+    <div class="small muted" style="margin-top:8px">${d.modules.filter(m => m.no <= d.taught).map(m => `${m.no}. ${esc(m.title)}`).join(' · ')}</div>`;
+    V.querySelectorAll('[data-sign]').forEach(c => c.onchange = () => { const [aid, no] = c.dataset.sign.split(':').map(Number); api(`/staff/academy/batches/${id}/modules`, { method: 'POST', body: { application_id: aid, module_no: no, done: c.checked } }).then(() => toast(c.checked ? 'Signed off' : 'Sign-off removed')).catch(e => { c.checked = !c.checked; toast(e.message, true); }); });
+    V.querySelectorAll('[data-signtaught]').forEach(x => x.onclick = () => { const t = active.find(t => t.id === +x.dataset.signtaught); const mods = d.modules.filter(m => m.no <= d.taught && taughtBy(m.no) && !t.modules.some(s => s.module_no === m.no)).map(m => m.no);
+      if (!mods.length) return toast('No taught modules left to sign for this trainee.', true);
+      if (!confirm(`Sign off modules ${mods.join(', ')} for ${t.name}?`)) return;
+      busy(x, () => api(`/staff/academy/batches/${id}/modules`, { method: 'POST', body: { application_id: t.id, modules: mods, done: true } })).then(() => { toast('Signed off'); refresh(); }).catch(() => {}); });
+  }
+
+  if (view === 'feedback') {
+    const f = d.feedback;
+    V.innerHTML = `<div class="grid2" style="align-items:start"><section class="panel"><div class="panel-h"><div class="t">${icon('award', 20)}<h3>Scores (${f.count} of ${active.length})</h3></div></div>
+      ${f.count ? `<dl style="display:grid;grid-template-columns:1fr auto;gap:6px 14px;margin:0">${Object.entries(f.labels).map(([k, l]) => `<dt>${esc(l)}</dt><dd style="margin:0"><b>${f.averages[k] ?? '—'}</b> / 5</dd>`).join('')}${f.recommend !== null ? `<dt>Would recommend</dt><dd style="margin:0"><b>${f.recommend}</b> / 10</dd>` : ''}</dl>` : '<p class="muted">No feedback yet. It opens for each trainee after they pass the theory test, or when the course ends.</p>'}
+      ${active.filter(t => !t.feedback).length && f.count ? `<p class="small muted">Not yet: ${active.filter(t => !t.feedback).map(t => esc(t.name)).join(', ')}</p>` : ''}</section>
+      <section class="panel"><div class="panel-h"><div class="t">${icon('message-circle', 20)}<h3>Comments</h3></div></div>${f.comments.filter(c => c.best || c.improve).map(c => `<div style="padding:8px 0;border-bottom:1px solid var(--line-soft)"><b>${esc(c.name)}</b>${c.recommend !== null ? ` <span class="small muted">· ${c.recommend}/10</span>` : ''}${c.best ? `<div class="small"><b>Best:</b> ${esc(c.best)}</div>` : ''}${c.improve ? `<div class="small"><b>Improve:</b> ${esc(c.improve)}</div>` : ''}</div>`).join('') || '<p class="muted">No comments yet.</p>'}</section></div>`;
+  }
+
+  el.querySelector('[data-set]')?.addEventListener('click', () => modal({
+    title: 'Batch settings', body: `<form data-f class="stack" style="gap:12px">${field('Lead Master Trainer', sel('lead_trainer_id', [['', '—']].concat(d.trainers.map(t => [t.id, t.name])), b.lead_trainer_id), d.trainers.length ? 'Master Trainers qualified on this machine' : 'No Master Trainer is qualified on this machine yet')}${field('Minimum attendance for the theory test (%)', inp('min_attendance', b.min_attendance, 'type="number" min="50" max="100"'))}</form><p class="small muted">Dates, seats, fee and status: Admissions → batch pencil.</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
+    onMount(m, close) { const s = m.querySelector('[data-save]'); s.onclick = () => busy(s, () => api(`/staff/academy/batches/${id}/run`, { method: 'PUT', body: formData(m.querySelector('[data-f]')) })).then(() => { close(); toast('Saved'); refresh(); }).catch(() => {}); } }));
+  el.querySelector('[data-close-batch]')?.addEventListener('click', () => { const open = d.roster.filter(t => ['offered', 'enrolled'].includes(t.status)); modal({
+    title: `Close batch ${b.code}`, body: `${open.length ? `<p>${open.length} trainee${open.length > 1 ? 's are' : ' is'} not certified or withdrawn yet: <b>${open.map(t => esc(t.name)).join(', ')}</b>. Their records stay open; write how they will be followed up.</p>` : '<p>Everyone is certified or withdrawn. Closing marks the batch completed and takes it off the website.</p>'}<form data-f>${field('Note', inp('note', '', 'maxlength="500"'))}</form><p class="small muted">Download the batch report first if you need it for the file.</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>Close batch</button>`,
+    onMount(m, close) { const s = m.querySelector('[data-save]'); s.onclick = () => busy(s, () => api(`/staff/academy/batches/${id}/complete`, { method: 'POST', body: formData(m.querySelector('[data-f]')) })).then(() => { close(); toast('Batch closed'); refresh(); }).catch(() => {}); } }); });
+  el.querySelector('[data-msg]')?.addEventListener('click', () => { const people = d.roster.filter(t => t.status !== 'withdrawn'); modal({
+    title: 'Message the batch on WhatsApp', wide: true,
+    body: `<div class="stack" style="gap:12px">${field('Message', sel('tpl', Object.entries(TEMPLATES).map(([k, [l]]) => [k, l]), 'start', 'data-tpl'))}${field('Text', '<textarea class="in" rows="4" data-text></textarea>', '“{name}” is replaced with each trainee’s first name')}
+      <div class="rows" data-people>${people.map(t => `<div class="row"><div class="grow"><b>${esc(t.name)}</b><span>${esc(prettyPhone(t.phone))} · ${esc(t.status)}${t.flags.length ? ' · ' + esc(t.flags[0]) : ''}</span></div><a class="btn sm gold" data-send="${t.id}" target="_blank" rel="noopener">${icon('message-circle', 15)}Send</a></div>`).join('')}</div>
+      <p class="small muted">WhatsApp opens one chat at a time. Each send is noted on the trainee’s history.</p></div>`,
+    actions: '<button class="btn ghost" data-close>Done</button>',
+    onMount(m) {
+      const tpl = m.querySelector('[data-tpl]'), text = m.querySelector('[data-text]');
+      const fill = () => { const [, fn] = TEMPLATES[tpl.value]; text.value = fn('{name}', b, d, people[0] || {}); upd(); };
+      const upd = () => m.querySelectorAll('[data-send]').forEach(a => { const t = people.find(t => t.id === +a.dataset.send); const msg = (tpl.value === 'sessions' ? TEMPLATES.sessions[1]('{name}', b, d, t) : text.value).replaceAll('{name}', t.name.split(' ')[0]); a.href = wa(t.phone, msg); });
+      tpl.onchange = fill; text.oninput = upd; fill();
+      m.querySelectorAll('[data-send]').forEach(a => a.addEventListener('click', () => { a.classList.remove('gold'); a.classList.add('ghost'); api(`/staff/academy/batches/${id}/messages`, { method: 'POST', body: { application_ids: [+a.dataset.send], template: TEMPLATES[tpl.value][0] } }).catch(() => {}); }));
+    } }); });
 }

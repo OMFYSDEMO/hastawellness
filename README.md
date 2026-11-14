@@ -153,3 +153,14 @@ client's active package includes them.
 - **EMS app → Academy → Admissions** (managers, admins) — batches (dates, machine, seats, fee before GST, status draft/open/closed/completed/cancelled); applications with documents, eligibility checks, history. Interview → Offer (needs ID, qualification, background and interview checks; respects the seat limit; creates or reuses a clinic patient record and a draft bill on item `EMS-ACADEMY`, SAC 999293, 18%) → the desk finalises and takes payment in the clinic app → Enrol (only when the bill is fully paid; an admin may enrol earlier with a reason) creates a trainee login and opens the training record on the batch's machine.
 - **Trainee accounts** (`ems_staff.role = 'trainee'`) see only *My course*: materials of the approved curriculum, their record, the theory test and their certificates. They are blocked from every other EMS route, the clinic app, team lists, rota, documents and payroll. Supervised sessions for trainees need the client's agreement ticked by the Master Trainer.
 - Migration `0019_academy_admissions.sql`. Course page requirements and fee/refund terms are settings (`academy_requirements`, `academy_terms`), edited by admins in Admissions → Course page text.
+
+### Running a batch (after admission)
+
+Academy → **Batches** (managers, admins, and Master Trainers qualified on the batch's machine), one page per batch:
+- **Roster** — every trainee's fee, BLS, attendance, modules signed (x/10), theory test, supervised sessions, practical and certificate, with "needs attention" notes (fee due, BLS missing, attendance under the minimum, unmarked days, taught modules not signed, retraining, batch ended but not ready).
+- **Timetable & attendance** — teaching days (date, times, modules, trainer); "Add several days" fills a date range by weekday. Attendance per day: present, late, absent, excused (excused doesn't count against the trainee).
+- **Modules** — Master Trainers tick modules 1–10 per trainee (module 11 is the supervised-session log).
+- **Feedback** — averages and comments from the trainees' end-of-course form.
+- **Message** (WhatsApp templates, one chat at a time, logged), **Settings** (lead Master Trainer, minimum attendance, default 90%), **Batch report** (PDF: summary, roster, pending items, attendance register, feedback), **Close batch** (needs a follow-up note if anyone is not certified or withdrawn).
+
+Gates for Academy trainees: the theory test opens only when modules 1–10 are signed off and attendance is at or above the minimum; supervised sessions need a BLS certificate the trainee uploads in My course and a manager verifies; certification needs both. Migration `0020_academy_batch_running.sql`.

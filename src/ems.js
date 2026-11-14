@@ -14,6 +14,7 @@
 import { json, sameOrigin, clean, nz, normalisePhone, h, sha256, notify, leadChannel } from './util.js';
 import * as AC from './academy.js';
 import * as ADM from './admissions.js';
+import * as BR from './batchrun.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED } from './packages.js';
 import { EMS_DUE, clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, createPatientFor } from './emslink.js';
@@ -183,7 +184,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=10"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=11"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -192,6 +193,13 @@ async function route(request, env, url, ctx, base, p) {
   const m = request.method;
   let body = {};
   if (p === '/staff/academy/upload' && m === 'POST') return academyUpload(request, env);
+  if (p === '/staff/academy/my/bls' && m === 'POST') {
+    if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
+    const me = await getSession(request, env);
+    if (!me || me.role !== 'trainee') return api({ ok: false, error: 'Not available.' }, 403);
+    const [st, e] = await BR.uploadBls(env, me, request);
+    return st === 200 ? api({ ok: true }) : api({ ok: false, error: e }, st);
+  }
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
     if (!(request.headers.get('content-type') || '').includes('application/json')) return api({ ok: false, error: 'Unsupported' }, 415);
@@ -215,10 +223,11 @@ async function route(request, env, url, ctx, base, p) {
   if (!me) return api({ ok: false, error: 'Please sign in.' }, 401);
   // Academy trainees (external candidates): their own course only.
   if (me.kind === 'staff' && me.role === 'trainee') {
-    const TRAINEE_OK = /^\/staff\/academy\/(my|file|records\/\d+\/test|attempts\/\d+|certificates\/\d+\/pdf)$/;
+    const TRAINEE_OK = /^\/staff\/academy\/(my|my\/feedback|file|records\/\d+\/test|attempts\/\d+|certificates\/\d+\/pdf)$/;
     if (p === '/me/secret' && m === 'POST') return changeSecret(env, me, body);
     if (!TRAINEE_OK.test(p)) return api({ ok: false, error: 'Your Academy account can only open My course.' }, 403);
-    if (p === '/staff/academy/my' && m === 'GET') return api({ ok: true, ...(await ADM.myCourse(env, me)) });
+    if (p === '/staff/academy/my' && m === 'GET') return api({ ok: true, ...(await ADM.myCourse(env, me)), ...(await BR.traineeExtras(env, me)) });
+    if (p === '/staff/academy/my/feedback' && m === 'POST') { const [st, e] = await BR.submitFeedback(env, me, body); return st === 200 ? api({ ok: true }) : api({ ok: false, error: e }, st); }
     if (p === '/staff/academy/file' && !(await ADM.traineeMayOpen(env, url.searchParams.get('key') || ''))) return api({ ok: false, error: 'Not found' }, 404);
     const cm = p.match(/^\/staff\/academy\/certificates\/(\d+)\/pdf$/);
     if (cm && !(await env.DB.prepare('SELECT 1 FROM ems_certifications WHERE id=? AND staff_id=?').bind(+cm[1], me.id).first())) return api({ ok: false, error: 'Not found' }, 404);
@@ -1257,6 +1266,37 @@ async function academyRoute(request, env, url, me, p, m, body, admin) {
   let r;
   const ok = x => api({ ok: true, ...x });
   if (p === '/staff/academy' && m === 'GET') return ok(await AC.overview(env, me));
+  // Running a batch — managers/admins, and Master Trainers qualified on the batch's machine (checked per action).
+  {
+    const full = ([s, e, x]) => s === 200 ? api({ ok: true, ...(x || {}) }) : api({ ok: false, error: e, ...(x || {}) }, s);
+    const mgr = me.role === 'admin' || me.role === 'manager';
+    let b;
+    if (p === '/staff/academy/batches' && m === 'GET') {
+      const all = await ADM.overview(env);
+      const on = mgr ? null : (await AC.overview(env, me)).me.master_on;
+      return ok({ batches: all.batches.filter(x => mgr || on.includes(x.machine_type_id)), can_manage: mgr });
+    }
+    if ((b = p.match(/^\/staff\/academy\/batches\/(\d+)(\/.*)?$/))) {
+      const id = +b[1], rest = b[2] || '';
+      if (rest === '' && m === 'GET') { const r2 = await BR.batchDetail(env, me, id); if (r2[0] === 200 && !mgr && !r2[2].can_teach) return api({ ok: false, error: 'Only managers, admins or Master Trainers for this machine.' }, 403); return full(r2); }
+      if (rest === '/report' && m === 'GET') {
+        const d = await BR.batchDetail(env, me, id);
+        if (d[0] !== 200 || (!mgr && !d[2].can_teach)) return api({ ok: false, error: 'Not found' }, 404);
+        const f = await BR.reportPdf(env, me, id);
+        return new Response(f.bytes, { headers: { ...HEADERS, 'content-type': 'application/pdf', 'content-disposition': `inline; filename="${f.name}"`, 'cache-control': 'private, no-store' } });
+      }
+      if (rest === '/run' && m === 'PUT') return full(await BR.saveBatchRun(env, me, id, body));
+      if (rest === '/days' && m === 'POST') return full(await BR.saveDay(env, me, id, null, body));
+      let dm;
+      if ((dm = rest.match(/^\/days\/(\d+)$/)) && m === 'PUT') return full(await BR.saveDay(env, me, id, +dm[1], body));
+      if ((dm = rest.match(/^\/days\/(\d+)$/)) && m === 'DELETE') return full(await BR.deleteDay(env, me, id, +dm[1]));
+      if ((dm = rest.match(/^\/days\/(\d+)\/attendance$/)) && m === 'POST') return full(await BR.markAttendance(env, me, id, +dm[1], body));
+      if (rest === '/modules' && m === 'POST') return full(await BR.signModule(env, me, id, body));
+      if (rest === '/messages' && m === 'POST') return full(await BR.logMessage(env, me, id, body));
+      if (rest === '/complete' && m === 'POST') return full(await BR.completeBatch(env, me, id, body));
+    }
+    if ((b = p.match(/^\/staff\/academy\/applications\/(\d+)\/bls$/)) && m === 'POST') return full(await BR.blsDecision(env, me, +b[1], body));
+  }
   // Admissions (external candidates) — managers and admins.
   if (p.startsWith('/staff/academy/admissions') || p.startsWith('/staff/academy/batches') || p.startsWith('/staff/academy/applications')) {
     if (me.role !== 'admin' && me.role !== 'manager') return api({ ok: false, error: 'Only managers and admins can handle admissions.' }, 403);

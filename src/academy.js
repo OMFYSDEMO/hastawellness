@@ -6,6 +6,7 @@
 //     sessions, every practical checklist item passed) — per machine, 12 months, with a public verification code.
 
 import { PDFDocument, StandardFonts, rgb } from './vendor/pdf-lib.esm.min.js';
+import { traineeGate } from './batchrun.js';
 import qrcode from './vendor/qrcode.js';
 import { clean, nz, h } from './util.js';
 
@@ -379,7 +380,7 @@ export async function recordMasterCourse(env, me, staffId, b) {
 }
 
 /* ---------------- training records ---------------- */
-async function recordState(env, r) {
+export async function recordState(env, r) {
   const q = (sql, ...b) => env.DB.prepare(sql).bind(...b).all().then(x => x.results || []);
   const [attempts, logs, practicals] = await Promise.all([
     q('SELECT id, score, passed, started_at, submitted_at FROM ems_test_attempts WHERE record_id=? ORDER BY id', r.id),
@@ -433,6 +434,13 @@ export async function startTest(env, me, recordId) {
   if (r.status !== 'in_training') return R(400, r.status === 'retraining' ? 'You have used all three attempts. Your Master Trainer must arrange retraining before another attempt.' : 'This training record is closed.');
   const st = await recordState(env, r);
   if (st.req.test.done) return R(400, 'You have already passed the theory test.');
+  const gate = me.role === 'trainee' ? await traineeGate(env, recordId) : null;
+  if (gate && !st.attempts.some(a => !a.submitted_at)) {
+    const need = [];
+    if (gate.modules.length) need.push(`module${gate.modules.length > 1 ? 's' : ''} ${gate.modules.join(', ')} signed off by your Master Trainer`);
+    if (!gate.attendanceOk) need.push(`attendance of at least ${gate.min}% (yours is ${gate.attendance.pct}%)`);
+    if (need.length) return R(400, 'The test opens once you have ' + need.join(' and ') + '.');
+  }
   if (st.req.test.left <= 0) return R(400, 'No attempts left.');
   const open = st.attempts.find(a => !a.submitted_at);
   let ids;
@@ -497,6 +505,7 @@ export async function addLog(env, me, recordId, b) {
   // External Academy trainees practise only with clients who agreed to a trainee working with them.
   const tr = await staffRow(env, r.staff_id);
   if (tr && tr.role === 'trainee' && !b.client_consent) return R(400, 'Confirm the client agreed to an Academy trainee working with them.');
+  if (tr && tr.role === 'trainee') { const g = await traineeGate(env, recordId); if (g && !g.bls) return R(400, 'This trainee’s BLS certificate must be verified (Academy → Admissions → batch) before supervised sessions with clients.'); }
   await env.DB.prepare('INSERT INTO ems_supervised_logs (record_id, session_date, first_session, appointment_id, notes, supervisor_id, supervisor_name, client_consent) VALUES (?,?,?,?,?,?,?,?)')
     .bind(recordId, d, b.first_session ? 1 : 0, appt, nz(clean(b.notes, 300)), me.id, mq.staff.name, b.client_consent ? 1 : 0).run();
   return R(200);
@@ -529,6 +538,10 @@ export async function certifyRecord(env, me, recordId) {
   if (!st.req.test.done) missing.push(`theory test passed at ${RULES.pass_mark}% or more`);
   if (!st.req.logs.done) missing.push(`${st.req.logs.need} supervised sessions${st.req.logs.need_first ? ` including ${st.req.logs.need_first} first sessions` : ''} (have ${st.req.logs.count}, ${st.req.logs.first} first)`);
   if (!st.req.practical.done) missing.push('practical assessment with every checklist item passed');
+  const tr = await staffRow(env, r.staff_id);
+  const gate = tr && tr.role === 'trainee' ? await traineeGate(env, recordId) : null;
+  if (gate && gate.modules.length) missing.push(`module${gate.modules.length > 1 ? 's' : ''} ${gate.modules.join(', ')} signed off`);
+  if (gate && !gate.bls) missing.push('a verified BLS certificate');
   if (missing.length) return R(400, 'Not ready to certify. Still needed: ' + missing.join('; ') + '.');
   const cur = await env.DB.prepare('SELECT version FROM ems_curriculum WHERE id=?').bind(r.curriculum_id).first();
   // Countersignature: a unit manager certifying someone at their own unit needs a second Master Trainer.
@@ -563,7 +576,7 @@ const statusOf = c => c.status === 'revoked' ? 'Revoked' : c.status === 'pending
 const longDay = d => new Date(d.slice(0, 10) + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
 const siteOrigin = url => url.hostname.startsWith('ems.') ? url.origin.replace('//ems.', '//') : url.origin;
 const WIN = /[^\x20-\x7E\xA0-\xFF–—‘’“”•…]/g;
-const safe = s => String(s == null ? '' : s).replace(WIN, '?');
+export const safe = s => String(s == null ? '' : s).replace(WIN, '?');
 
 export async function certificatePdf(env, request, c) {
   const url = new URL(request.url);
