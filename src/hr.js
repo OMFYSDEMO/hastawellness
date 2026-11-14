@@ -48,7 +48,11 @@ export const approverIds = s => String(s.leave_approvers || '').split(',').map(N
 export const isApprover = (u, s) => { const ids = approverIds(s); return ids.length ? ids.includes(u.id) : u.admin; };
 // Who decides one application: the clinic admin (super admin) can decide any; a leave approver decides everyone
 // else's, but never their own or another approver's — those go to the clinic admin.
-export const canDecideLeave = (u, s, l) => !!u.admin || (isApprover(u, s) && l.staff_id !== u.id && !approverIds(s).includes(l.staff_id));
+// The clinic admin (super admin): the built-in admin login and the accounts named in Settings (super_admins, default the
+// "Clinic admin" account). Other admin-role accounts are not super admins.
+export const superIds = s => String(s.super_admins || '1').split(',').map(Number).filter(Boolean);
+export const isSuper = (u, s) => u.id === 0 || u.username === 'hasta' || superIds(s).includes(u.id);
+export const canDecideLeave = (u, s, l) => isSuper(u, s) || (isApprover(u, s) && l.staff_id !== u.id && !approverIds(s).includes(l.staff_id));
 
 export async function audit(env, me, action, entity, id, detail) {
   await env.DB.prepare('INSERT INTO cl_audit (staff_id, staff_name, action, entity, entity_id, detail) VALUES (?,?,?,?,?,?)').bind(me.id, me.name, action, entity, id || null, detail ? String(detail).slice(0, 500) : null).run();
@@ -365,7 +369,7 @@ export async function pdfKit(s) {
   const newPage = () => { page = pdf.addPage([595, 842]); y = 790; page.drawText(s.legal_name || 'HASWEL CARE Private Limited', { x: L, y, size: 13, font: bold, color: teal }); y -= 14; page.drawText(s.trade_name || 'Hasta Wellness', { x: L, y, size: 8, font: reg, color: muted }); y -= 10; page.drawText(String(s.address || '').slice(0, 150), { x: L, y, size: 7, font: reg, color: muted }); y -= 9; page.drawLine({ start: { x: L, y }, end: { x: L + W, y }, thickness: 0.6, color: teal }); y -= 24; };
   const text = (t, x, size = 10, f = reg, c = ink) => page.drawText(String(t), { x, y, size, font: f, color: c });
   const right = (t, x, size = 9, f = reg, c = ink) => page.drawText(String(t), { x: x - f.widthOfTextAtSize(String(t), size), y, size, font: f, color: c });
-  const wrap = (t, size = 10, f = reg, x = L, w = W, lh = 14) => { for (const para of String(t).split('\n')) { let line = ''; for (const word of para.split(' ')) { const tst = line ? line + ' ' + word : word; if (f.widthOfTextAtSize(tst, size) > w) { text(line, x, size, f); y -= lh; line = word; } else line = tst; } text(line, x, size, f); y -= lh; } };
+  const wrap = (t, size = 10, f = reg, x = L, w = W, lh = 14) => { const put = l => { if (y < 56) newPage(); text(l, x, size, f); y -= lh; }; for (const para of String(t).split('\n')) { let line = ''; for (const word of para.split(' ')) { const tst = line ? line + ' ' + word : word; if (f.widthOfTextAtSize(tst, size) > w) { put(line); line = word; } else line = tst; } put(line); } };
   newPage();
   return { pdf, reg, bold, ink, muted, L, W, text, right, wrap, newPage, get y() { return y; }, set y(v) { y = v; }, get page() { return page; } };
 }
@@ -525,7 +529,7 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
     const st = ['pending', 'approved', 'rejected', 'cancelled'].includes(q('status')) ? q('status') : null;
     const { results } = await env.DB.prepare(`SELECT l.*, s.name staff_name FROM cl_leave l JOIN ems_staff s ON s.id=l.staff_id ${st ? 'WHERE l.status=?' : ''} ORDER BY l.status='pending' DESC, l.from_date DESC LIMIT 200`).bind(...(st ? [st] : [])).all();
     const bal = {}; for (const l of (results || []).filter(x => x.status === 'pending')) if (!bal[l.staff_id]) bal[l.staff_id] = await leaveBalance(env, l.staff_id, s, await env.DB.prepare('SELECT * FROM cl_staff_pay WHERE staff_id=?').bind(l.staff_id).first());
-    return api({ ok: true, leave: (results || []).map(l => ({ ...l, can_decide: canDecideLeave(me, s, l), to_admin: approverIds(s).includes(l.staff_id) })), balances: bal, can_decide: appr || !!me.admin });
+    return api({ ok: true, leave: (results || []).map(l => ({ ...l, can_decide: canDecideLeave(me, s, l), to_admin: approverIds(s).includes(l.staff_id) })), balances: bal, can_decide: appr || isSuper(me, s) });
   }
   if ((mm = p.match(/^\/hr\/leave\/(\d+)\/decide$/)) && m === 'POST') {
     const l = await env.DB.prepare('SELECT staff_id FROM cl_leave WHERE id=?').bind(+mm[1]).first();

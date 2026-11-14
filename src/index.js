@@ -3,6 +3,7 @@ import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, no
 import { handleEms, emsDaily } from './ems.js';
 import { verifyPage } from './academy.js';
 import { academyPage, academyApply, purgeAcademyDocs } from './admissions.js';
+import { disciplineDaily } from './discipline.js';
 import { handleClinic } from './clinic.js';
 import { handleCareers, handleApply, handleAdminJobs, handleAdminApplications, handleAdminCv, careerSitemapPaths, purgeOldApplications } from './careers.js';
 // Hasta Wellness — Cloudflare Worker
@@ -80,6 +81,7 @@ export default {
     console.log('Lead retention clean-up removed', r.meta && r.meta.changes, 'rows');
     await purgeOldApplications(env);
     await purgeAcademyDocs(env).catch(e => console.error('academy purge', e));
+    await disciplineDaily(env).catch(e => console.error('discipline daily', e));
     await emsDaily(env).catch(err => console.error('EMS daily job failed', err && err.stack || err));
   },
 };

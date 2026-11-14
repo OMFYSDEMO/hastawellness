@@ -21,6 +21,7 @@ import { careRoute, uploadPhoto, recallStmt } from './care.js';
 import { hrRoute, kioskRoute, scanRoute } from './hr.js';
 import { docsRoute, uploadDocFile } from './docs.js';
 import * as EXP from './expenses.js';
+import { disciplineRoute } from './discipline.js';
 import { emsForPatient, link as emsLink, unlink as emsUnlink, recheck as emsRecheck, billPackage, legacyPayments, moveLegacyPayment, resolveLegacyPayment, emsAppointments, emsAlerts, markEmsAppt } from './emslink.js';
 
 /* ---------------- helpers ---------------- */
@@ -122,9 +123,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
-<link rel="modulepreload" href="/clinic/app.js?v=21"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="modulepreload" href="/clinic/app.js?v=22"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=21"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=22"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -278,6 +279,7 @@ async function route(request, env, url, p, base) {
   const sr = await stockRoute(request, env, me, p, m, b, q);
   if (sr) return sr;
   // Care records: notes, dental chart, plans, recalls, photos (src/care.js)
+  { const dr = await disciplineRoute(request, env, url, me, p, m, b); if (dr) return dr; }
   { const dr = await docsRoute(request, env, url, me, p, m, b, q); if (dr) return dr; }
   { const hr = await hrRoute(request, env, url, me, p, m, b, q, base); if (hr) return hr; }
   const cr = await careRoute(request, env, me, p, m, b, q);
