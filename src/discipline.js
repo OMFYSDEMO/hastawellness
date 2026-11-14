@@ -34,7 +34,9 @@ const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 const parse = (s, f) => { try { return s ? JSON.parse(s) : f; } catch { return f; } };
 const addDays = (d, n) => { const t = new Date(d + 'T00:00:00Z'); t.setUTCDate(t.getUTCDate() + n); return t.toISOString().slice(0, 10); };
 const addMonths = (d, n) => { const t = new Date(d + 'T00:00:00Z'); t.setUTCMonth(t.getUTCMonth() + n); return t.toISOString().slice(0, 10); };
-const fd = d => d ? new Date(d.slice(0, 10) + 'T00:00:00Z').toLocaleDateString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' }) : '';
+// Dates: plain YYYY-MM-DD as given; timestamps (UTC) shown as the clinic's local (IST) date.
+const ist = d => d && d.length > 10 ? new Date(Date.parse(d.endsWith('Z') ? d : d + 'Z') + IST).toISOString().slice(0, 10) : d;
+const fd = d => d ? new Date(ist(d).slice(0, 10) + 'T00:00:00Z').toLocaleDateString('en-GB', { timeZone: 'UTC', day: 'numeric', month: 'long', year: 'numeric' }) : '';
 const json = (d, s = 200) => new Response(JSON.stringify(d), { status: s, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' } });
 
 export const CATEGORIES = {
@@ -292,6 +294,7 @@ async function act(env, me, id, b, request) {
       cs.hearing ? `A hearing was held on ${fd(cs.hearing.details.held_on)} (present: ${cs.hearing.details.present}). Findings: ${cs.hearing.details.findings}` : null,
       priorPara(st),
       { h: 'Decision' },
+      c.gross ? `The clinic finds that this amounts to gross misconduct (${c.gross}).` : null,
       reasons,
     ];
     if (stage === 'written') paras.push(`You are therefore given a first written warning. It will stay on your record for ${months} months, until ${fd(valid)}.`, { h: 'What is expected from now on' }, improve,
