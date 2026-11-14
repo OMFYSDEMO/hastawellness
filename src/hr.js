@@ -46,6 +46,9 @@ const WINDOW_S = 30;
 
 export const approverIds = s => String(s.leave_approvers || '').split(',').map(Number).filter(Boolean);
 export const isApprover = (u, s) => { const ids = approverIds(s); return ids.length ? ids.includes(u.id) : u.admin; };
+// Who decides one application: the clinic admin (super admin) can decide any; a leave approver decides everyone
+// else's, but never their own or another approver's — those go to the clinic admin.
+export const canDecideLeave = (u, s, l) => !!u.admin || (isApprover(u, s) && l.staff_id !== u.id && !approverIds(s).includes(l.staff_id));
 
 export async function audit(env, me, action, entity, id, detail) {
   await env.DB.prepare('INSERT INTO cl_audit (staff_id, staff_name, action, entity, entity_id, detail) VALUES (?,?,?,?,?,?)').bind(me.id, me.name, action, entity, id || null, detail ? String(detail).slice(0, 500) : null).run();
@@ -483,7 +486,7 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
   if ((mm = p.match(/^\/hr\/leave\/(\d+)\/cancel$/)) && m === 'POST') {
     const l = await env.DB.prepare('SELECT * FROM cl_leave WHERE id=?').bind(+mm[1]).first();
     if (!l || (l.staff_id !== me.id && !hrUser)) return api({ ok: false, error: 'Not found.' }, 404);
-    if (l.status === 'approved' && !appr) return api({ ok: false, error: 'Approved leave can only be cancelled by the approver.' }, 400);
+    if (l.status === 'approved' && !canDecideLeave(me, s, l)) return api({ ok: false, error: approverIds(s).includes(l.staff_id) ? 'Approved leave of a leave approver can only be cancelled by the clinic admin.' : 'Approved leave can only be cancelled by the approver.' }, 400);
     if (!['pending', 'approved'].includes(l.status)) return api({ ok: false, error: 'Already closed.' }, 400);
     await env.DB.prepare("UPDATE cl_leave SET status='cancelled', decided_by=?, decided_by_name=?, decided_at=? WHERE id=?").bind(me.id, me.name, nowIso(), l.id).run();
     await audit(env, me, 'leave.cancel', 'leave', l.id); return api({ ok: true });
@@ -522,9 +525,14 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
     const st = ['pending', 'approved', 'rejected', 'cancelled'].includes(q('status')) ? q('status') : null;
     const { results } = await env.DB.prepare(`SELECT l.*, s.name staff_name FROM cl_leave l JOIN ems_staff s ON s.id=l.staff_id ${st ? 'WHERE l.status=?' : ''} ORDER BY l.status='pending' DESC, l.from_date DESC LIMIT 200`).bind(...(st ? [st] : [])).all();
     const bal = {}; for (const l of (results || []).filter(x => x.status === 'pending')) if (!bal[l.staff_id]) bal[l.staff_id] = await leaveBalance(env, l.staff_id, s, await env.DB.prepare('SELECT * FROM cl_staff_pay WHERE staff_id=?').bind(l.staff_id).first());
-    return api({ ok: true, leave: results || [], balances: bal, can_decide: appr });
+    return api({ ok: true, leave: (results || []).map(l => ({ ...l, can_decide: canDecideLeave(me, s, l), to_admin: approverIds(s).includes(l.staff_id) })), balances: bal, can_decide: appr || !!me.admin });
   }
-  if ((mm = p.match(/^\/hr\/leave\/(\d+)\/decide$/)) && m === 'POST') { if (!appr) return deny('Only the leave approver can approve or reject leave.'); return done(await decideLeave(env, me, +mm[1], b)); }
+  if ((mm = p.match(/^\/hr\/leave\/(\d+)\/decide$/)) && m === 'POST') {
+    const l = await env.DB.prepare('SELECT staff_id FROM cl_leave WHERE id=?').bind(+mm[1]).first();
+    if (!l) return api({ ok: false, error: 'Not found.' }, 404);
+    if (!canDecideLeave(me, s, l)) return deny(approverIds(s).includes(l.staff_id) ? 'Leave of a leave approver is approved by the clinic admin.' : 'Only the leave approver can approve or reject leave.');
+    return done(await decideLeave(env, me, +mm[1], b));
+  }
   if (p === '/hr/absences/confirm' && m === 'POST') return done(await confirmAbsences(env, me, b, request));
   if (p === '/hr/warnings' && m === 'GET') {
     const { results } = await env.DB.prepare('SELECT w.*, s.name staff_name FROM cl_warnings w JOIN ems_staff s ON s.id=w.staff_id ORDER BY w.id DESC LIMIT 200').all();
