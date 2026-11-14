@@ -666,7 +666,7 @@ async function viewInvoice(id) {
   MAIN.innerHTML = `<a href="#/patient/${inv.patient_id}?tab=invoices" class="crumb">${icon('arrow-left', 16)}${esc(inv.patient_name)}</a>
     <div class="head"><div><h1>${draft ? 'Draft bill' : esc(inv.invoice_no)}</h1><p>${esc(inv.patient_name)} · ${esc(inv.patient_no)} · ${esc(fDate(inv.invoice_date))} ${st(inv.status)}</p></div>
       <div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${draft ? `<button class="btn quiet" data-del>${icon('trash-2', 16)}Delete draft</button><button class="btn ghost" data-save>Save draft</button><button class="btn gold" data-final>${icon('check', 18)}Finalise invoice</button>`
-        : `${inv.legacy ? '<span class="small muted" style="align-self:center">From the previous system</span>' : ''}${inv.legacy && d.lines.some(l => l.kind === 'opening') ? '' : `<a class="btn ghost" href="${BASE}/api/clinic/invoices/${id}/pdf" target="_blank" rel="noopener">${icon('printer', 18)}PDF</a>`}${inv.status === 'final' && canManage() ? '<button class="btn quiet" data-cancel>Cancel invoice</button>' : ''}${inv.status === 'final' && inv.balance > 0 && d.advance > 0 ? `<button class="btn ghost" data-adv>Apply advance (${money(d.advance)})</button>` : ''}${inv.status === 'final' && inv.balance > 0 ? `<button class="btn gold" data-pay>${icon('wallet', 18)}Take payment</button>` : ''}`}</div></div>
+        : `${inv.legacy ? '<span class="small muted" style="align-self:center">From the previous system</span>' : ''}${inv.legacy && d.lines.some(l => l.kind === 'opening') ? '' : `<a class="btn ghost" href="${BASE}/api/clinic/invoices/${id}/pdf" target="_blank" rel="noopener">${icon('printer', 18)}PDF</a>`}${inv.status === 'final' && canManage() ? '<button class="btn quiet" data-cancel>Cancel invoice</button>' : ''}${inv.status === 'final' && inv.balance > 0 && d.advance > 0 ? `<button class="btn ghost" data-adv>Apply advance (${money(d.advance)})</button>` : ''}${inv.status === 'final' && inv.balance > 0 && inv.balance <= 5 && inv.paid > 0 ? `<button class="btn ghost" data-roundoff>Round off ${money(inv.balance)}</button>` : ''}${inv.status === 'final' && inv.balance > 0 ? `<button class="btn gold" data-pay>${icon('wallet', 18)}Take payment</button>` : ''}`}</div></div>
     ${inv.status === 'cancelled' ? `<div class="alertline" style="margin-bottom:14px">Cancelled: ${esc(inv.cancel_reason || '')}</div>` : ''}
     <section class="panel flush"><table class="t inv-lines"><thead><tr><th>Item</th><th>Clinician</th><th class="n">Qty</th><th class="n">Rate</th><th class="n">Discount (₹)</th><th class="n">GST</th><th class="n">Amount</th>${draft ? '<th></th>' : ''}</tr></thead><tbody data-lines></tbody></table>
       ${draft ? `<div style="padding:14px 16px;border-top:1px solid var(--line-soft);display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr);gap:10px"><div data-add></div>${sel('addpkg', [['', '+ Add a package'], ...B.packages.filter(x => x.active).map(x => [x.id, `${x.name} — ${money(x.price)}`])])}</div>` : ''}
@@ -731,6 +731,7 @@ async function viewInvoice(id) {
   } else {
     const p = { id: inv.patient_id, name: inv.patient_name };
     MAIN.querySelector('[data-pay]') && (MAIN.querySelector('[data-pay]').onclick = () => payModal(p, inv, () => route()));
+    MAIN.querySelector('[data-roundoff]') && (MAIN.querySelector('[data-roundoff]').onclick = e => { if (!confirm(`Settle this invoice by writing off ${money(inv.balance)} as round-off? The bill total drops by that amount; GST is unchanged.`)) return; busy(e.currentTarget, () => api(`/clinic/invoices/${id}/round-off`, { method: 'POST', body: {} })).then(() => { toast('Settled — round-off added'); route(); }).catch(() => {}); });
     MAIN.querySelector('[data-adv]') && (MAIN.querySelector('[data-adv]').onclick = e => busy(e.currentTarget, () => api('/clinic/apply-advance', { method: 'POST', body: { invoice_id: id } })).then(r => { toast(`${money(r.applied)} applied`); route(); }).catch(() => {}));
     MAIN.querySelector('[data-cancel]') && (MAIN.querySelector('[data-cancel]').onclick = e => { const reason = prompt('Reason for cancelling this invoice? Any payment stays with the patient as advance.'); if (!reason) return; busy(e.currentTarget, () => api(`/clinic/invoices/${id}/cancel`, { method: 'POST', body: { reason } })).then(() => { toast('Invoice cancelled'); route(); }).catch(() => {}); });
   }
@@ -743,14 +744,19 @@ function payModal(p, inv, after) {
       <div class="grid2">${field('Amount (₹)', inp('amount', due || '', 'type="number" min="1" step="0.01" inputmode="decimal"'))}${field('Date', inp('paid_on', today(), `type="date" max="${today()}"`))}</div>
       <div class="chips">${Object.entries(B.modes).map(([k, l], i) => `<label class="chip"><input type="radio" name="mode" value="${k}"${i === 0 ? ' checked' : ''}>${esc(l)}</label>`).join('')}</div>
       <div data-ref hidden>${field('Reference', inp('reference', '', 'maxlength="80"'))}</div><div data-lender hidden>${field('Finance company', inp('lender', 'Fibe', 'maxlength="60"'))}</div>
-      ${field('Note', inp('notes', '', 'maxlength="200"'), 'optional')}</form>`,
+      ${field('Note', inp('notes', '', 'maxlength="200"'), 'optional')}
+      ${inv ? '<label class="check" data-ro hidden><input type="checkbox" name="round_off"><span data-rotext></span></label>' : ''}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>${icon('check', 18)}Record payment</button>`,
     onMount(el, close) {
       const f = el.querySelector('[data-f]');
       const sync = () => { const m = formData(f).mode; el.querySelector('[data-ref]').hidden = m === 'cash'; el.querySelector('[data-ref] .f').firstChild.textContent = refLabel[m] || 'Reference'; el.querySelector('[data-lender]').hidden = m !== 'finance'; };
       f.querySelectorAll('[name=mode]').forEach(r => r.onchange = sync); sync();
+      // Round-off: when the amount leaves up to ₹5 unpaid, offer to settle the rest.
+      const ro = el.querySelector('[data-ro]'), rest = () => Math.round((due - (+f.amount.value || 0)) * 100) / 100;
+      const syncRo = () => { if (!ro) return; const r = rest(); ro.hidden = !(r > 0 && r <= 5 && +f.amount.value > 0); el.querySelector('[data-rotext]').textContent = `Round off the remaining ${money(r)} and close the bill`; if (ro.hidden) f.round_off.checked = false; };
+      f.amount.addEventListener('input', syncRo); syncRo();
       const s = el.querySelector('[data-save]');
-      s.onclick = () => busy(s, () => api('/clinic/payments', { method: 'POST', body: { ...formData(f), patient_id: p.id, invoice_id: inv ? inv.id : null } })).then(r => { close(); toast(r.advance > 0 ? `Payment recorded · ${money(r.advance)} held as advance` : 'Payment recorded'); after && after(); }).catch(() => {});
+      s.onclick = () => busy(s, async () => { const r = await api('/clinic/payments', { method: 'POST', body: { ...formData(f), patient_id: p.id, invoice_id: inv ? inv.id : null } }); if (inv && f.round_off && f.round_off.checked) { await api(`/clinic/invoices/${inv.id}/round-off`, { method: 'POST', body: {} }); r.rounded = true; } return r; }).then(r => { close(); toast(r.advance > 0 ? `Payment recorded · ${money(r.advance)} held as advance` : r.rounded ? 'Payment recorded · bill settled with round-off' : 'Payment recorded'); after && after(); }).catch(() => {});
     } });
 }
 

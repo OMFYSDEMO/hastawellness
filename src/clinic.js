@@ -121,9 +121,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
-<link rel="modulepreload" href="/clinic/app.js?v=15"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="modulepreload" href="/clinic/app.js?v=16"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=15"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=16"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -237,6 +237,7 @@ async function route(request, env, url, p, base) {
   if ((r = p.match(/^\/invoices\/(\d+)$/)) && m === 'PUT') return done(await saveInvoice(env, me, +r[1], b));
   if ((r = p.match(/^\/invoices\/(\d+)$/)) && m === 'DELETE') return done(await deleteDraft(env, me, +r[1]));
   if ((r = p.match(/^\/invoices\/(\d+)\/finalise$/)) && m === 'POST') return done(await finalise(env, me, +r[1]));
+  if ((r = p.match(/^\/invoices\/(\d+)\/round-off$/)) && m === 'POST') return done(await roundOff(env, me, +r[1]));
   if ((r = p.match(/^\/invoices\/(\d+)\/cancel$/)) && m === 'POST') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return done(await cancelInvoice(env, me, +r[1], b)); }
   if ((r = p.match(/^\/invoices\/(\d+)\/pdf$/)) && m === 'GET') return invoicePdfResponse(env, request, +r[1]);
 
@@ -909,6 +910,24 @@ async function cancelInvoice(env, me, id, b) {
   await env.DB.prepare("UPDATE cl_appointments SET closure=NULL, invoice_id=NULL WHERE invoice_id=?").bind(id).run();
   await audit(env, me, 'invoice.cancel', 'invoice', id, `${inv.invoice_no}: ${reason}`);
   return OK();
+}
+
+// Settle a small balance left by rounding (up to ₹5): adds a non-taxable adjustment line that reduces the
+// invoice total to what was actually paid. GST on the bill is unchanged.
+export const ROUND_OFF_MAX = 5;
+async function roundOff(env, me, id) {
+  const inv = await env.DB.prepare(`${INV_SELECT} WHERE i.id=?`).bind(id).first();
+  if (!inv || inv.status !== 'final') return R(400, 'Only a final invoice can be settled.');
+  const bal = r2(inv.total - inv.paid);
+  if (!(bal > 0)) return R(400, 'Nothing is due on this invoice.');
+  if (bal > ROUND_OFF_MAX) return R(400, `Round-off is only for balances up to ₹${ROUND_OFF_MAX}. Take the payment, or ask a manager to give a discount.`);
+  if (!(inv.paid > 0)) return R(400, 'Take the payment first; round-off settles only what is left after paying.');
+  await env.DB.batch([
+    env.DB.prepare("INSERT INTO cl_invoice_lines (invoice_id, kind, name, qty, unit_price, discount, gst_rate, taxable, exempt, cgst, sgst, total) VALUES (?, 'adjustment', 'Settlement adjustment (round-off)', 1, ?, 0, 0, 0, ?, 0, 0, ?)").bind(id, -bal, -bal, -bal),
+    env.DB.prepare('UPDATE cl_invoices SET exempt=ROUND(exempt - ?, 2), total=ROUND(total - ?, 2) WHERE id=?').bind(bal, bal, id),
+  ]);
+  await audit(env, me, 'invoice.round_off', 'invoice', id, `${inv.invoice_no}: ₹${bal} written off as round-off`);
+  return OK({ amount: bal });
 }
 
 /* ---------------- payments ---------------- */
