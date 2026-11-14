@@ -121,9 +121,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
-<link rel="modulepreload" href="/clinic/app.js?v=17"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="modulepreload" href="/clinic/app.js?v=18"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=17"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=18"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -247,6 +247,7 @@ async function route(request, env, url, p, base) {
   if ((r = p.match(/^\/payments\/(\d+)\/void$/)) && m === 'POST') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return done(await voidPayment(env, me, +r[1], b)); }
   if (p === '/apply-advance' && m === 'POST') return done(await applyAdvance(env, me, b));
   if (p === '/cash' && m === 'GET') return api({ ok: true, ...(await cashBook(env)) });
+  if (p === '/cash/opening' && m === 'PUT') return done(await setOpening(env, me, b));
   if (p === '/cash/deposits' && m === 'POST') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return done(await addDeposit(env, me, b)); }
 
   // Reports
@@ -1011,16 +1012,34 @@ async function listPayments(env, from, to) {
     WHERE p.paid_on BETWEEN ? AND ? ORDER BY p.paid_on DESC, p.id DESC`).bind(f, t).all();
   return results || [];
 }
-// Cash book counts cash taken in this app only — payments carried over from the previous system were banked there.
+// Cash book. With an opening balance set (Payments → Cash in hand → Opening balance), it starts from the cash
+// counted in the drawer at the start of that day, adds every cash payment from that day (including ones carried
+// over from the previous system) and takes off bank deposits from that day. Without one, it counts cash taken in
+// this app only (payments carried over from the previous system were banked there).
+const OPEN_D = "(SELECT value FROM cl_settings WHERE key='cash_opening_date')";
 const CASH_SQL = [
-  "SELECT COALESCE(SUM(amount),0) s FROM cl_payments WHERE mode='cash' AND voided=0 AND legacy=0",
-  'SELECT COALESCE(SUM(amount),0) s FROM cl_cash_deposits',
+  `SELECT COALESCE(SUM(amount),0) s FROM cl_payments WHERE mode='cash' AND voided=0 AND (CASE WHEN ${OPEN_D} IS NULL THEN legacy=0 ELSE paid_on >= ${OPEN_D} END)`,
+  `SELECT COALESCE(SUM(amount),0) s FROM cl_cash_deposits WHERE ${OPEN_D} IS NULL OR deposited_on >= ${OPEN_D}`,
   'SELECT * FROM cl_cash_deposits ORDER BY deposited_on DESC, id DESC LIMIT 60',
-  "SELECT MIN(paid_on) d FROM cl_payments WHERE mode='cash' AND voided=0 AND legacy=0 AND paid_on > COALESCE((SELECT MAX(deposited_on) FROM cl_cash_deposits), '0000')",
+  `SELECT MIN(paid_on) d FROM cl_payments WHERE mode='cash' AND voided=0 AND (CASE WHEN ${OPEN_D} IS NULL THEN legacy=0 ELSE paid_on >= ${OPEN_D} END) AND paid_on > COALESCE((SELECT MAX(deposited_on) FROM cl_cash_deposits), '0000')`,
+  "SELECT key, value FROM cl_settings WHERE key IN ('cash_opening_date','cash_opening_amount','cash_opening_by')",
 ];
-function cashFrom([cash, dep, deposits, since]) {
-  const c = cash.results[0].s, d = dep.results[0].s;
-  return { in_hand: r2(c - d), received: r2(c), deposited: r2(d), deposits: deposits.results || [], oldest_undeposited: since.results[0].d };
+function cashFrom([cash, dep, deposits, since, open]) {
+  const o = Object.fromEntries((open.results || []).map(x => [x.key, x.value]));
+  const opening = o.cash_opening_date ? { date: o.cash_opening_date, amount: r2(o.cash_opening_amount), by: o.cash_opening_by || null } : null;
+  const c = cash.results[0].s, d = dep.results[0].s, ob = opening ? opening.amount : 0;
+  return { in_hand: r2(ob + c - d), opening, received: r2(c), deposited: r2(d), deposits: deposits.results || [], oldest_undeposited: opening && ob > 0 && !d ? opening.date : since.results[0].d };
+}
+async function setOpening(env, me, b) {
+  if (!me.admin && me.role !== 'manager') return R(403, 'Managers or admins only.');
+  const date = isDate(b.date) && b.date <= today() ? b.date : null, amount = r2(b.amount);
+  if (!date) return R(400, 'Choose the date the cash was counted (start of that day).');
+  if (!(amount >= 0 && amount < 10000000)) return R(400, 'Enter the cash counted.');
+  const who = `${me.name}, ${today()}`;
+  await env.DB.batch([['cash_opening_date', date], ['cash_opening_amount', String(amount)], ['cash_opening_by', who]].map(([k, v]) =>
+    env.DB.prepare('INSERT INTO cl_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').bind(k, v)));
+  await audit(env, me, 'cash.opening', 'settings', null, `Opening cash ₹${amount} at start of ${date}`);
+  return OK();
 }
 async function cashBook(env) { return cashFrom(await env.DB.batch(CASH_SQL.map(q => env.DB.prepare(q)))); }
 async function addDeposit(env, me, b) {
@@ -1030,6 +1049,7 @@ async function addDeposit(env, me, b) {
   const book = await cashBook(env);
   if (amount > book.in_hand + 0.004) return R(400, `That is more than the cash in hand (₹${book.in_hand}).`);
   const d = isDate(b.deposited_on) && b.deposited_on <= today() ? b.deposited_on : today();
+  if (book.opening && d < book.opening.date) return R(400, `The cash book starts on ${book.opening.date}. Deposits before that belong to the previous system.`);
   await env.DB.prepare('INSERT INTO cl_cash_deposits (deposited_on, amount, bank, reference, staff_id, staff_name) VALUES (?,?,?,?,?,?)').bind(d, amount, nz(clean(b.bank, 60)), ref, me.id, me.name).run();
   await audit(env, me, 'cash.deposit', 'deposit', null, `₹${amount} ${ref}`);
   return OK();
