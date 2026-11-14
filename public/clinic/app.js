@@ -15,7 +15,7 @@ const r2 = x => Math.round((Number(x) || 0) * 100) / 100;
 const dept = id => B.departments.find(d => d.id === id);
 const deptTag = id => { const d = dept(id); return d ? `<span class="dept" style="--c:${esc(d.colour)}">${esc(d.name)}</span>` : ''; };
 const staffName = id => (B.team.find(t => t.id === id) || {}).name || '';
-const clinicians = deptId => B.team.filter(t => t.active && (t.apps.includes('clinic') || t.role === 'admin') && (deptId ? t.depts.includes(deptId) : t.depts.length));
+const clinicians = deptId => B.team.filter(t => t.active && (t.apps.includes('clinic') || t.role === 'admin' || t.external) && (deptId ? t.depts.includes(deptId) : t.depts.length));
 const assistants = () => B.team.filter(t => t.active && t.skills.some(s => s === 'nurse' || s === 'dental_assistant'));
 const isAdmin = () => ME.admin;
 const isClin = () => ME.admin || (ME.skills || []).some(s2 => ['doctor', 'nurse', 'dental_assistant', 'medical_lead'].includes(s2));
@@ -500,7 +500,7 @@ async function apptModal(a = {}, after, patient = null) {
       else patientPicker(el.querySelector('[data-pp]'), p => { pat = p; }, pat);
       el.querySelector('[data-addp]') && (el.querySelector('[data-addp]').onclick = e => { e.preventDefault(); patientModal({}, p => { pat = p; patientPicker(el.querySelector('[data-pp]'), x => { pat = x; }, p); }); });
       const docSel = f.doctor_id;
-      const fillDocs = () => { const did = parseInt(f.dept_id.value, 10) || null; const list = clinicians(did); docSel.innerHTML = `<option value="">${did ? (list.length ? 'Any / not decided' : 'No clinicians for this department') : 'Choose department first'}</option>` + list.map(t => `<option value="${t.id}"${t.id === (a.doctor_id || null) ? ' selected' : ''}>${esc(t.name)}</option>`).join(''); };
+      const fillDocs = () => { const did = parseInt(f.dept_id.value, 10) || null; const list = clinicians(did); docSel.innerHTML = `<option value="">${did ? (list.length ? 'Any / not decided' : 'No clinicians for this department') : 'Choose department first'}</option>` + list.map(t => `<option value="${t.id}"${t.id === (a.doctor_id || null) ? ' selected' : ''}>${esc(t.name)}${t.external ? ' (visiting)' : ''}</option>`).join(''); };
       fillDocs(); f.dept_id.onchange = () => { fillDocs(); };
       const drawPlanned = () => {
         el.querySelector('[data-planned]').innerHTML = planned.map((x, i) => `<span class="chip">${esc(CAT.find(c => c.id === x.item_id)?.name || 'item')}${x.qty > 1 ? ' × ' + x.qty : ''} <button type="button" class="btn quiet sm icon" data-rm="${i}" style="height:20px;width:20px">${icon('x', 12)}</button></span>`).join('');
@@ -695,7 +695,7 @@ async function viewInvoice(id) {
       const ems = it && (it.code === 'EMS-PKG' || it.code === 'EMS-ACADEMY'), variable = it && !(it.price > 0) && !ems;
       return `<tr data-i="${i}"><td><b>${esc(pk ? pk.name : it && !ems ? it.name : l.name)}</b><div class="small muted">${pk ? 'Package' : ems ? (it.code === 'EMS-ACADEMY' ? 'Academy course fee · set in EMS app → Academy' : 'EMS package · price set in the EMS app') : esc(it?.dept_name || '')}${it?.kind === 'passthrough' ? ' · partner charge' : ''}</div>
           ${c.disc > 0 ? `<input class="in" data-k="discount_reason" value="${esc(l.discount_reason)}" placeholder="Reason for discount" maxlength="120" style="margin-top:6px;height:32px">${c.pct > limit + 1e-9 ? `<div class="small" style="color:var(--gold-ink);margin-top:4px">${c.pct.toFixed(0)}% — ${l._saved && l._saved.discount_by_name && l._saved.discount >= c.disc ? 'authorised by ' + esc(l._saved.discount_by_name) : 'needs ' + esc(approverText()) + ' to authorise'}</div>` : ''}` : ''}</td>
-        <td>${pk ? '' : `<select class="in" data-k="doctor_id" style="min-width:130px"><option value="">—</option>${docs.map(t => `<option value="${t.id}"${t.id === l.doctor_id ? ' selected' : ''}>${esc(t.name)}</option>`).join('')}</select>`}</td>
+        <td>${pk ? '' : `<select class="in" data-k="doctor_id" style="min-width:130px"><option value="">—</option>${docs.map(t => `<option value="${t.id}"${t.id === l.doctor_id ? ' selected' : ''}>${esc(t.name)}${t.external ? ' (visiting)' : ''}</option>`).join('')}</select>`}</td>
         <td class="n"><input class="in qty" type="number" min="1" max="999" data-k="qty" value="${l.qty}"${ems ? ' readonly title="Set in the EMS app"' : ''}></td>
         <td class="n">${variable ? `<input class="in amt" type="number" min="0" step="0.01" data-k="unit_price" value="${l.unit_price || ''}" placeholder="price">` : `<span class="money">${money(c.unit)}</span>`}</td>
         <td class="n"><input class="in amt" type="number" min="0" step="0.01" data-k="discount" value="${l.discount || ''}" placeholder="0"${ems ? ' readonly title="EMS package price and discount are set in the EMS app"' : ''}></td>
@@ -1255,7 +1255,7 @@ async function uploadFile(input) {
   const d = await res.json(); if (!d.ok) throw new Error(d.error || 'Upload failed.'); return d.file;
 }
 async function issueDocModal(opts = {}, after) {
-  const team = B.team.filter(t => t.active && t.username !== 'hasta');
+  const team = B.team.filter(t => t.active && t.username !== 'hasta' && (!t.external || t.apps.includes('clinic')));
   const forms = opts.kind === 'record' ? [] : await formDefs();
   const isRec = opts.kind === 'record';
   modal({ title: isRec ? `Add to ${opts.staff_name}'s file` : 'Issue a document', wide: true,
@@ -1309,7 +1309,7 @@ async function staffDocsTab(head, q) {
   MAIN.querySelector('[data-issueform]').onclick = () => issueDocModal({ kind: 'form' }, r => go('#/doc/' + r.id));
 }
 async function staffFilesTab(head, q) {
-  const team = B.team.filter(t => t.username !== 'hasta').sort((a, b) => a.name.localeCompare(b.name));
+  const team = B.team.filter(t => t.username !== 'hasta' && !t.external).sort((a, b) => a.name.localeCompare(b.name));
   const sid = +q.get('s') || (team[0] && team[0].id);
   const f = sid ? await api('/clinic/hr/staff-file/' + sid) : null;
   MAIN.innerHTML = head('Each person\'s records, the documents issued to them, and warning letters') + `<div class="files">
@@ -1328,7 +1328,7 @@ async function staffFilesTab(head, q) {
 
 /* ---------------- Reports ---------------- */
 async function viewReports(tab, d, m) {
-  const TABS = [['day', 'Day book'], ['month', 'Month summary']];
+  const TABS = [['day', 'Day book'], ['month', 'Month summary']].concat(canManage() ? [['consultants', 'Consultants']] : []);
   MAIN.innerHTML = `<div class="head"><div><h1>Reports</h1></div><div class="acts"><button class="btn ghost" onclick="window.print()">${icon('printer', 18)}Print</button></div></div>
     <nav class="tabs">${TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === tab ? 'on' : ''}">${l}</button>`).join('')}</nav><div data-body></div>`;
   MAIN.querySelectorAll('[data-tab]').forEach(b => b.onclick = () => go('#/reports?tab=' + b.dataset.tab));
@@ -1343,6 +1343,14 @@ async function viewReports(tab, d, m) {
       <section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><h3>Payments</h3></div>${r.payments.length ? `<table class="t"><thead><tr><th>Patient</th><th>Mode</th><th>Reference</th><th class="n">Amount</th><th>By</th></tr></thead><tbody>${r.payments.map(p => `<tr${p.voided ? ' style="opacity:.5;text-decoration:line-through"' : ''}><td>${esc(p.patient_name)}</td><td>${esc(B.modes[p.mode])}</td><td class="small">${esc(p.reference || '—')}</td><td class="n money">${money(p.amount)}</td><td class="small">${esc(p.staff_name || '')}</td></tr>`).join('')}</tbody></table>` : emptyState('wallet', 'No payments.')}</section>`;
     body.querySelector('[data-d]').onchange = e => go('#/reports?tab=day&d=' + e.target.value);
     wireInvoiceTable(body);
+  } else if (tab === 'consultants') {
+    const r = await api('/clinic/reports/consultants?month=' + (m || today().slice(0, 7)));
+    body.innerHTML = `<div style="margin-bottom:14px" class="noprint">${inp('m', r.month, 'type="month" style="width:auto" data-m')}</div>
+      ${r.consultants.map(c => `<section class="panel flush" style="margin-bottom:16px"><div class="panel-h" style="padding:16px 20px 0;flex-wrap:wrap"><div><h3>${esc(c.name)}${c.qualification ? ', ' + esc(c.qualification) : ''}</h3><p class="small muted" style="margin:2px 0 0">${esc(c.speciality || '')}${c.payout_pct || c.payout_per_visit ? ` · payout ${[c.payout_pct ? c.payout_pct + '% of net' : '', c.payout_per_visit ? money(c.payout_per_visit) + ' per visit' : ''].filter(Boolean).join(' + ')}` : ' · payout terms not set'}${c.payout_note ? ' · ' + esc(c.payout_note) : ''}</p></div>
+        <div class="kpis" style="margin:0;gap:10px"><div class="kpi"><div class="l">Visits</div><div class="v">${c.visits}</div><div class="s">${c.patients} patients</div></div><div class="kpi"><div class="l">Net billed (excl. GST)</div><div class="v money" style="font-size:20px">${money(c.net)}</div></div><div class="kpi"><div class="l">Payout</div><div class="v money" style="font-size:20px">${money(c.payout)}</div></div></div></div>
+        ${c.lines.length ? `<table class="t"><thead><tr><th>Date</th><th>Bill</th><th>Patient</th><th>Treatment</th><th class="n">Qty</th><th class="n">Net</th></tr></thead><tbody>${c.lines.map(l => `<tr><td>${fDate(l.invoice_date)}</td><td><a href="#/invoice/${l.invoice_id}">${esc(l.invoice_no)}</a></td><td>${esc(l.patient_name)}</td><td>${esc(l.name)}</td><td class="n">${l.qty}</td><td class="n">${money(l.net)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted" style="padding:0 20px 16px">No bills under this consultant this month.</p>'}</section>`).join('') || emptyState('stethoscope', 'No visiting consultants yet. Add them in Settings → Team.')}
+      <p class="small muted">Counts final bills in the month where the consultant is named on the line. Cancelled bills and partner charges are left out. Print this page as the consultant’s statement.</p>`;
+    body.querySelector('[data-m]').onchange = e => go('#/reports?tab=consultants&m=' + e.target.value);
   } else {
     const r = await api('/clinic/reports/summary?month=' + (m || today().slice(0, 7)));
     const tot = r.gst.reduce((a, x) => ({ v: a.v + x.value, c: a.c + x.cgst, s: a.s + x.sgst }), { v: 0, c: 0, s: 0 });
@@ -1506,12 +1514,37 @@ function settingsPlaces(body, reload) {
 }
 const SK = { doctor: 'Doctor', coach: 'Wellness coach', nurse: 'Nurse', dental_assistant: 'Dental assistant', front: 'Front desk', trainer: 'EMS trainer', medical_lead: 'Medical lead' };
 function settingsTeam(body, reload) {
-  body.innerHTML = `<div style="display:flex;justify-content:flex-end;margin-bottom:14px"><button class="btn gold" data-add>${icon('user-plus', 18)}Add team member</button></div>
-    <section class="panel flush"><div class="rows">${B.team.map(t => `<div class="row click" data-id="${t.id}" style="cursor:pointer${t.active ? '' : ';opacity:.5'}"><span class="avatar">${esc(initials(t.name))}</span><div class="grow"><b>${esc(t.name)}</b><span>${esc(t.username)} · ${esc(t.skills.map(s => SK[s] || s).join(', ') || 'no skills')}${t.depts.length ? ' · works in ' + esc(t.depts.map(x => (dept(x) || {}).name).join(', ')) : ''}</span></div>
+  const staff = B.team.filter(t => !t.external), ext = B.team.filter(t => t.external);
+  body.innerHTML = `<div style="display:flex;justify-content:flex-end;gap:8px;margin-bottom:14px"><button class="btn ghost" data-addext>${icon('stethoscope', 18)}Add visiting consultant</button><button class="btn gold" data-add>${icon('user-plus', 18)}Add team member</button></div>
+    <section class="panel flush" style="margin-bottom:16px"><div class="panel-h" style="padding:16px 20px 0"><h3>Visiting consultants</h3></div><div class="rows">${ext.map(t => `<div class="row click" data-ext="${t.id}" style="cursor:pointer${t.active ? '' : ';opacity:.5'}"><span class="avatar">${esc(initials(t.name))}</span><div class="grow"><b>${esc(t.name)}${t.qualification ? ', ' + esc(t.qualification) : ''}</b><span>${esc([t.speciality, t.depts.map(x => (dept(x) || {}).name).join(', '), t.phone].filter(Boolean).join(' · '))}</span></div>
+      ${t.payout_pct || t.payout_per_visit ? pill('booked', [t.payout_pct ? t.payout_pct + '% of net' : '', t.payout_per_visit ? money(t.payout_per_visit) + ' / visit' : ''].filter(Boolean).join(' + ')) : ''}${t.apps.includes('clinic') ? pill('active', 'Clinic login') : pill('closed', 'No login')}</div>`).join('') || `<div class="row"><span class="muted small">None yet. Add visiting doctors here so they can be booked and named on bills — they are kept out of payroll and attendance.</span></div>`}</div></section>
+    <section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><h3>Team</h3></div><div class="rows">${staff.map(t => `<div class="row click" data-id="${t.id}" style="cursor:pointer${t.active ? '' : ';opacity:.5'}"><span class="avatar">${esc(initials(t.name))}</span><div class="grow"><b>${esc(t.name)}</b><span>${esc(t.username)} · ${esc(t.skills.map(s => SK[s] || s).join(', ') || 'no skills')}${t.depts.length ? ' · works in ' + esc(t.depts.map(x => (dept(x) || {}).name).join(', ')) : ''}</span></div>
       ${t.apps.includes('clinic') || t.role === 'admin' ? pill('active', 'Clinic') : pill('closed', 'No clinic access')}${t.apps.includes('ems') ? pill('booked', 'EMS') : ''}</div>`).join('')}</div></section>
     <p class="small muted" style="margin-top:10px">Clinicians only appear in the calendar for the departments ticked here. The same login works in the EMS app if EMS is ticked.</p>`;
   body.querySelector('[data-add]').onclick = () => memberModal({ apps: ['clinic'], skills: [], depts: [], role: 'staff', active: true }, reload);
   body.querySelectorAll('[data-id]').forEach(r => r.onclick = () => memberModal(B.team.find(t => t.id === +r.dataset.id), reload));
+  body.querySelector('[data-addext]').onclick = () => consultantModal({ apps: [], skills: ['doctor'], depts: [], active: true, external: true }, reload);
+  body.querySelectorAll('[data-ext]').forEach(r => r.onclick = () => consultantModal(B.team.find(t => t.id === +r.dataset.ext), reload));
+}
+function consultantModal(t, reload) {
+  const isNew = !t.id, hasLogin = !isNew && t.apps.includes('clinic');
+  modal({ title: isNew ? 'Add visiting consultant' : 'Edit · ' + t.name, wide: true,
+    body: `<form data-f class="stack" style="gap:14px">
+      <div class="grid3">${field('Name', inp('name', t.name, 'placeholder="Dr Diana Stanley"'))}${field('Qualification', inp('qualification', t.qualification, 'placeholder="MDS"'))}${field('Speciality', inp('speciality', t.speciality, 'placeholder="e.g. Prosthodontics"'))}</div>
+      <div class="grid3">${field('Registration no.', inp('reg_no', t.reg_no, 'placeholder="council registration"'))}${field('Mobile', inp('phone', t.phone, 'type="tel"'))}${field('Email', inp('email', t.email, 'type="email"'))}</div>
+      <div><h4 style="margin-bottom:8px">Treats in</h4><div class="chips">${B.departments.filter(d => d.active).map(d => `<label class="chip"><input type="checkbox" name="dp.${d.id}" ${t.depts.includes(d.id) ? 'checked' : ''}>${esc(d.name)}</label>`).join('')}</div><p class="small muted" style="margin-top:6px">They appear in the calendar and on bill lines for these departments.</p></div>
+      <div><h4 style="margin-bottom:8px">Payout</h4><div class="grid3">${field('Share of net billed (%)', inp('payout_pct', t.payout_pct ?? '', 'type="number" min="0" max="100" step="0.5"'), 'of bill lines under them, excl. GST')}${field('Or fixed per visit (₹)', inp('payout_per_visit', t.payout_per_visit ?? '', 'type="number" min="0" step="1"'), 'per bill')}${field('Payout note', inp('payout_note', t.payout_note, 'maxlength="200" placeholder="e.g. lab charges deducted"'))}</div><p class="small muted">Reports → Consultants shows each month’s bills and the payout.</p></div>
+      <div><label class="check"><input type="checkbox" name="login" data-login ${hasLogin ? 'checked' : ''}><span>Give a clinic app login (to write notes and prescriptions themselves)</span></label>
+        <div class="grid2" data-loginf ${hasLogin ? '' : 'hidden'} style="margin-top:8px">${isNew ? field('Username', inp('username', '', 'autocapitalize="none"')) : field('Username', inp('username', t.username, 'disabled'))}${field(isNew || !hasLogin ? 'Password' : 'New password', inp('password', '', 'type="password" autocomplete="new-password"'), isNew || !hasLogin ? 'at least 8 characters' : 'leave blank to keep')}</div></div>
+      ${!isNew ? `<label class="check"><input type="checkbox" name="active" ${t.active ? 'checked' : ''}> Active</label>` : ''}</form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
+    onMount(el, close) {
+      const lg = el.querySelector('[data-login]'); lg.onchange = () => { el.querySelector('[data-loginf]').hidden = !lg.checked; };
+      const s = el.querySelector('[data-save]'); s.onclick = () => { const v = formData(el.querySelector('[data-f]'));
+        if (v.login && !hasLogin && String(v.password || '').length < 8) return toast('Set a password of at least 8 characters for the login.', true);
+        const body = { external: true, name: v.name, qualification: v.qualification, speciality: v.speciality, reg_no: v.reg_no, phone: v.phone, email: v.email, payout_pct: v.payout_pct, payout_per_visit: v.payout_per_visit, payout_note: v.payout_note,
+          username: v.login && isNew ? v.username : '', password: v.login ? v.password : '', role: 'staff', active: isNew ? true : v.active, apps: v.login ? ['clinic'] : [], skills: t.skills.length ? t.skills : ['doctor'], depts: Object.entries(v.dp || {}).filter(([, x]) => x).map(([k]) => +k) };
+        busy(s, () => api('/clinic/team' + (isNew ? '' : '/' + t.id), { method: isNew ? 'POST' : 'PUT', body })).then(() => { close(); toast('Saved'); reload(); }).catch(() => {}); }; } });
 }
 function memberModal(t, reload) {
   const isNew = !t.id;

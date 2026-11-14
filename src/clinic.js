@@ -121,9 +121,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
-<link rel="modulepreload" href="/clinic/app.js?v=16"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="modulepreload" href="/clinic/app.js?v=17"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=16"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=17"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -252,6 +252,7 @@ async function route(request, env, url, p, base) {
   // Reports
   if (p === '/reports/daybook' && m === 'GET') return api({ ok: true, ...(await dayBook(env, isDate(q('date')) ? q('date') : today())) });
   if (p === '/reports/summary' && m === 'GET') return api({ ok: true, ...(await summary(env, q('month'))) });
+  if (p === '/reports/consultants' && m === 'GET') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return api({ ok: true, ...(await consultants(env, /^\d{4}-\d{2}$/.test(q('month') || '') ? q('month') : today().slice(0, 7))) }); }
   if (p === '/reports/outstanding' && m === 'GET') return api({ ok: true, invoices: await outstanding(env) });
 
   // Stock & purchasing (src/stock.js)
@@ -322,36 +323,54 @@ async function saveRoom(env, b) {
   else await env.DB.prepare('INSERT INTO cl_rooms (name, dept_id) VALUES (?,?)').bind(name, dept).run();
   return OK();
 }
-const TEAM_SQL = "SELECT id, name, username, role, skills, apps, reg_no, active FROM ems_staff WHERE role <> 'trainee' ORDER BY active DESC, name";
-const teamRows = (results, d) => (results || []).map(s => ({ id: s.id, name: s.name, username: s.username, role: s.role, reg_no: s.reg_no, active: !!s.active, skills: parse(s.skills, []), apps: parse(s.apps, ['ems']), depts: (d || []).filter(x => x.staff_id === s.id).map(x => x.dept_id) }));
+const TEAM_SQL = "SELECT id, name, username, role, skills, apps, reg_no, active, external, qualification, speciality, phone, email, payout_pct, payout_per_visit, payout_note FROM ems_staff WHERE role <> 'trainee' ORDER BY active DESC, external, name";
+const teamRows = (results, d) => (results || []).map(s => ({ id: s.id, name: s.name, username: s.username, role: s.role, reg_no: s.reg_no, active: !!s.active,
+  external: !!s.external, qualification: s.qualification, speciality: s.speciality, phone: s.phone, email: s.email, payout_pct: s.payout_pct, payout_per_visit: s.payout_per_visit, payout_note: s.payout_note, skills: parse(s.skills, []), apps: parse(s.apps, ['ems']), depts: (d || []).filter(x => x.staff_id === s.id).map(x => x.dept_id) }));
 async function team(env) {
   const [a, b] = await env.DB.batch([env.DB.prepare(TEAM_SQL), env.DB.prepare('SELECT * FROM cl_staff_depts')]);
   return teamRows(a.results, b.results);
 }
 const CLINIC_SKILLS = ['trainer', 'coach', 'doctor', 'medical_lead', 'front', 'nurse', 'dental_assistant'];
 async function saveMember(env, me, id, b) {
-  const name = clean(b.name, 80), username = clean(b.username, 40).toLowerCase();
-  const role = ['admin', 'manager', 'staff'].includes(b.role) ? b.role : 'staff';
+  const name = clean(b.name, 80);
+  let username = clean(b.username, 40).toLowerCase();
+  const external = !!b.external;
+  const role = external ? 'staff' : ['admin', 'manager', 'staff'].includes(b.role) ? b.role : 'staff';
   const skills = (Array.isArray(b.skills) ? b.skills : []).filter(s => CLINIC_SKILLS.includes(s));
-  const apps = (Array.isArray(b.apps) ? b.apps : []).filter(a => a === 'ems' || a === 'clinic');
+  let apps = (Array.isArray(b.apps) ? b.apps : []).filter(a => a === 'ems' || a === 'clinic');
   const depts = (Array.isArray(b.depts) ? b.depts : []).map(Number).filter(Boolean);
   if (!name) return R(400, 'Enter the name.');
+  // External consultant details: qualification, contact and how they are paid.
+  const num = (v, max) => v === '' || v == null || isNaN(Number(v)) ? null : Math.min(max, Math.max(0, Math.round(Number(v) * 100) / 100));
+  const ext = { qualification: nz(clean(b.qualification, 80)), speciality: nz(clean(b.speciality, 80)), phone: nz(clean(b.phone, 20)), email: nz(clean(b.email, 120)),
+    payout_pct: external ? num(b.payout_pct, 100) : null, payout_per_visit: external ? num(b.payout_per_visit, 100000) : null, payout_note: external ? nz(clean(b.payout_note, 200)) : null };
+  if (external && !depts.length) return R(400, 'Tick the department(s) the consultant treats in, so they can be booked.');
+  const loginless = external && !username && !id;
+  if (loginless) {
+    // No login: a placeholder username and an unguessable password; no app access.
+    const base = 'ext.' + (name.toLowerCase().replace(/^dr\.?\s+/, '').replace(/[^a-z]+/g, '.').replace(/^\.|\.$/g, '').slice(0, 30) || 'consultant');
+    username = base;
+    for (let i = 2; await env.DB.prepare('SELECT 1 FROM ems_staff WHERE username=?').bind(username).first(); i++) username = base + i;
+    b.password = crypto.randomUUID() + crypto.randomUUID();
+    apps = [];
+  }
   if (!id) {
     if (!/^[a-z0-9._-]{3,40}$/.test(username)) return R(400, 'Username: 3–40 lowercase letters, numbers, dots or hyphens.');
     if (String(b.password || '').length < 8) return R(400, 'Set a password of at least 8 characters.');
     if (await env.DB.prepare('SELECT 1 FROM ems_staff WHERE username=?').bind(username).first()) return R(400, 'That username is taken.');
-    const res = await env.DB.prepare('INSERT INTO ems_staff (name, username, pass_hash, role, skills, apps, reg_no) VALUES (?,?,?,?,?,?,?)')
-      .bind(name, username, await hashSecret(String(b.password)), role, JSON.stringify(skills), JSON.stringify(apps.length ? apps : ['clinic']), nz(clean(b.reg_no, 40))).run();
+    const res = await env.DB.prepare('INSERT INTO ems_staff (name, username, pass_hash, role, skills, apps, reg_no, external, qualification, speciality, phone, email, payout_pct, payout_per_visit, payout_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+      .bind(name, username, await hashSecret(String(b.password)), role, JSON.stringify(skills), JSON.stringify(loginless ? [] : apps.length ? apps : ['clinic']), nz(clean(b.reg_no, 40)), external ? 1 : 0, ext.qualification, ext.speciality, ext.phone, ext.email, ext.payout_pct, ext.payout_per_visit, ext.payout_note).run();
     id = res.meta.last_row_id;
   } else {
     const s = await env.DB.prepare('SELECT id FROM ems_staff WHERE id=?').bind(id).first();
     if (!s) return R(404, 'Not found.');
-    await env.DB.prepare('UPDATE ems_staff SET name=?, role=?, skills=?, apps=?, reg_no=?, active=? WHERE id=?').bind(name, role, JSON.stringify(skills), JSON.stringify(apps), nz(clean(b.reg_no, 40)), b.active === false ? 0 : 1, id).run();
+    await env.DB.prepare('UPDATE ems_staff SET name=?, role=?, skills=?, apps=?, reg_no=?, active=?, external=?, qualification=?, speciality=?, phone=?, email=?, payout_pct=?, payout_per_visit=?, payout_note=? WHERE id=?')
+      .bind(name, role, JSON.stringify(skills), JSON.stringify(apps), nz(clean(b.reg_no, 40)), b.active === false ? 0 : 1, external ? 1 : 0, ext.qualification, ext.speciality, ext.phone, ext.email, ext.payout_pct, ext.payout_per_visit, ext.payout_note, id).run();
     if (b.password) { if (String(b.password).length < 8) return R(400, 'Passwords need at least 8 characters.'); await env.DB.prepare('UPDATE ems_staff SET pass_hash=? WHERE id=?').bind(await hashSecret(String(b.password)), id).run(); }
   }
   await env.DB.prepare('DELETE FROM cl_staff_depts WHERE staff_id=?').bind(id).run();
   for (const d of depts) await env.DB.prepare('INSERT INTO cl_staff_depts (staff_id, dept_id) VALUES (?,?)').bind(id, d).run();
-  await audit(env, me, id ? 'team.save' : 'team.add', 'staff', id, name);
+  await audit(env, me, id ? 'team.save' : 'team.add', 'staff', id, name + (external ? ' (external consultant)' : ''));
   return OK({ id });
 }
 
@@ -1072,6 +1091,21 @@ async function dayBook(env, d) {
   const sum = k => r2(fin.reduce((s, i) => s + i[k], 0));
   return { date: d, invoices: invs, payments: pays, by_mode: byMode, totals: { invoiced: sum('total'), taxable: sum('taxable'), exempt: sum('exempt'), cgst: sum('cgst'), sgst: sum('sgst'), passthrough: sum('passthrough'), collected: r2(Object.values(byMode).reduce((a, b) => a + b, 0)) } };
 }
+// External consultants: what was billed under each in the month (final bills, net of GST) and the payout due.
+async function consultants(env, month) {
+  const { results: docs } = await env.DB.prepare('SELECT id, name, qualification, speciality, payout_pct, payout_per_visit, payout_note, active FROM ems_staff WHERE external=1 ORDER BY name').all();
+  const { results: lines } = await env.DB.prepare(`SELECT l.doctor_id, l.name, l.qty, l.taxable + l.exempt net, l.total, i.id invoice_id, i.invoice_no, i.invoice_date, p.name patient_name, p.patient_no
+    FROM cl_invoice_lines l JOIN cl_invoices i ON i.id=l.invoice_id JOIN cl_patients p ON p.id=i.patient_id JOIN ems_staff s ON s.id=l.doctor_id AND s.external=1
+    WHERE i.status='final' AND substr(i.invoice_date,1,7)=? AND l.kind <> 'passthrough' ORDER BY i.invoice_date, i.invoice_no`).bind(month).all();
+  const out = (docs || []).map(d => {
+    const mine = (lines || []).filter(l => l.doctor_id === d.id);
+    const net = r2(mine.reduce((s, l) => s + l.net, 0)), visits = new Set(mine.map(l => l.invoice_id)).size;
+    const payout = r2((d.payout_pct ? net * d.payout_pct / 100 : 0) + (d.payout_per_visit ? visits * d.payout_per_visit : 0));
+    return { ...d, lines: mine, net, billed: r2(mine.reduce((s, l) => s + l.total, 0)), visits, patients: new Set(mine.map(l => l.patient_no)).size, payout };
+  }).filter(d => d.active || d.lines.length);
+  return { month, consultants: out };
+}
+
 async function summary(env, month) {
   const m = /^\d{4}-\d{2}$/.test(month || '') ? month : today().slice(0, 7);
   const from = m + '-01', to = m + '-31';

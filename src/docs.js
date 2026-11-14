@@ -91,7 +91,7 @@ async function issue(env, me, b, request) {
     staffIds = [Number(b.staff_id)].filter(Boolean);
     if (!staffIds.length) return [400, 'Choose whose file this record belongs to.'];
   } else if (b.audience === 'all') {
-    const { results } = await env.DB.prepare("SELECT id FROM ems_staff WHERE active=1 AND username <> 'hasta' AND role <> 'trainee'").all();
+    const { results } = await env.DB.prepare("SELECT id FROM ems_staff WHERE active=1 AND username <> 'hasta' AND role <> 'trainee' AND external=0").all();
     staffIds = (results || []).map(r => r.id).filter(id => id !== me.id || b.include_me);
   } else staffIds = [...new Set((b.staff_ids || []).map(Number).filter(Boolean))];
   if (!staffIds.length) return [400, 'Choose who receives this document.'];

@@ -389,13 +389,13 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/staff/team' && m === 'GET') {
     const { results } = await env.DB.prepare(`SELECT s.id, s.name, s.role, s.skills, s.reg_no, (SELECT COUNT(*) FROM ems_clients c WHERE c.coach_id=s.id AND c.status='active') clients,
       (SELECT group_concat(unit_id) FROM ems_staff_units x WHERE x.staff_id=s.id) units
-      FROM ems_staff s WHERE s.active=1 AND s.role <> 'trainee' ORDER BY s.name`).all();
+      FROM ems_staff s WHERE s.active=1 AND s.role <> 'trainee' AND s.external=0 ORDER BY s.name`).all();
     for (const t of results || []) { t.skills = safeJson(t.skills); t.units = String(t.units || '').split(',').filter(Boolean).map(Number); }
     return api({ ok: true, team: results, me: me.id });
   }
   if (p === '/staff/users' && m === 'GET') {
     if (!admin) return api({ ok: false, error: 'Admins only.' }, 403);
-    const { results } = await env.DB.prepare('SELECT id, name, username, role, active, created_at, skills, reg_no, (SELECT group_concat(unit_id) FROM ems_staff_units x WHERE x.staff_id=ems_staff.id) units FROM ems_staff WHERE role <> \'trainee\' ORDER BY active DESC, name').all();
+    const { results } = await env.DB.prepare('SELECT id, name, username, role, active, created_at, skills, reg_no, (SELECT group_concat(unit_id) FROM ems_staff_units x WHERE x.staff_id=ems_staff.id) units FROM ems_staff WHERE role <> \'trainee\' AND external=0 ORDER BY active DESC, name').all();
     for (const t of results || []) { t.skills = safeJson(t.skills); t.units = String(t.units || '').split(',').filter(Boolean).map(Number); }
     return api({ ok: true, users: results });
   }
