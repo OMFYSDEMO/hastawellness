@@ -122,9 +122,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
-<link rel="modulepreload" href="/clinic/app.js?v=18"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="modulepreload" href="/clinic/app.js?v=20"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=18"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=20"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -1167,7 +1167,9 @@ async function summary(env, month) {
   const { results: modes } = await env.DB.prepare('SELECT mode, SUM(amount) s, COUNT(*) n FROM cl_payments WHERE voided=0 AND legacy=0 AND paid_on BETWEEN ? AND ? GROUP BY mode').bind(from, to).all();
   const { results: disc } = await env.DB.prepare(`SELECT COALESCE(l.discount_by_name, 'Within limit') who, SUM(l.discount) s, COUNT(*) n FROM cl_invoice_lines l JOIN cl_invoices i ON i.id=l.invoice_id
     WHERE i.status='final' AND l.discount > 0 AND i.invoice_date BETWEEN ? AND ? GROUP BY 1 ORDER BY 2 DESC`).bind(from, to).all();
-  return { month: m, gst: Object.values(byRate).sort((a, b) => a.rate - b.rate), passthrough, departments: (dept || []).map(x => ({ ...x, net: r2(x.net) })), modes: modes || [], discounts: disc || [] };
+  const { results: exp } = await env.DB.prepare('SELECT category, SUM(amount) s, COUNT(*) n FROM cl_expenses WHERE voided=0 AND spent_on BETWEEN ? AND ? GROUP BY category ORDER BY 2 DESC').bind(from, to).all();
+  const sup = await env.DB.prepare('SELECT COALESCE(SUM(amount),0) s FROM cl_supplier_payments WHERE voided=0 AND paid_on BETWEEN ? AND ?').bind(from, to).first();
+  return { month: m, gst: Object.values(byRate).sort((a, b) => a.rate - b.rate), passthrough, departments: (dept || []).map(x => ({ ...x, net: r2(x.net) })), modes: modes || [], discounts: disc || [], expenses: (exp || []).map(x => ({ ...x, s: r2(x.s) })), supplier_paid: r2(sup.s) };
 }
 async function outstanding(env) {
   const all = await listInvoices(env, null, null, 'final');
