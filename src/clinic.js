@@ -124,9 +124,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=8"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
-<link rel="modulepreload" href="/clinic/app.js?v=25"><link rel="modulepreload" href="/ems/core.js?v=8">
+<link rel="modulepreload" href="/clinic/app.js?v=26"><link rel="modulepreload" href="/ems/core.js?v=8">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=25"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=26"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -249,6 +249,7 @@ async function route(request, env, url, p, base) {
   if ((r = p.match(/^\/invoices\/(\d+)$/)) && m === 'DELETE') return done(await deleteDraft(env, me, +r[1]));
   if ((r = p.match(/^\/invoices\/(\d+)\/finalise$/)) && m === 'POST') return done(await finalise(env, me, +r[1]));
   if ((r = p.match(/^\/invoices\/(\d+)\/round-off$/)) && m === 'POST') return done(await roundOff(env, me, +r[1]));
+  if ((r = p.match(/^\/invoices\/(\d+)\/followup$/)) && m === 'POST') return done(await payFollowup(env, me, +r[1], b));
   if ((r = p.match(/^\/invoices\/(\d+)\/cancel$/)) && m === 'POST') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return done(await cancelInvoice(env, me, +r[1], b)); }
   if ((r = p.match(/^\/invoices\/(\d+)\/pdf$/)) && m === 'GET') return invoicePdfResponse(env, request, +r[1]);
 
@@ -742,13 +743,30 @@ async function listInvoices(env, from, to, status) {
   const { results } = await env.DB.prepare(sql).bind(...bind).all();
   return (results || []).map(withBalance);
 }
+export const FU_OUTCOMES = { promised: 'Promised to pay', will_visit: 'Will pay at next visit', no_answer: 'No answer', call_later: 'Asked to call later', dispute: 'Disputes the amount', other: 'Other' };
+async function payFollowup(env, me, id, b) {
+  const inv = await env.DB.prepare(INV_SELECT + ' WHERE i.id=?').bind(id).first();
+  if (!inv || inv.status !== 'final') return [400, 'Not found.'];
+  if (inv.total - inv.paid <= 0.004) return [400, 'This bill is fully paid.'];
+  const outcome = FU_OUTCOMES[b.outcome] ? b.outcome : null;
+  if (!outcome) return [400, 'Choose what happened on the call.'];
+  const note = clean(b.note, 500);
+  if (note.length < 3) return [400, 'Write a short note of the call.'];
+  const cb = String(b.callback_on || '');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(cb) || cb < today()) return [400, 'Choose a call-back date — today or later.'];
+  if (cb > addDays(today(), 60)) return [400, 'Call back within 60 days.'];
+  await env.DB.prepare('INSERT INTO cl_pay_followups (invoice_id, patient_id, outcome, note, callback_on, by_id, by_name) VALUES (?,?,?,?,?,?,?)').bind(id, inv.patient_id, outcome, note, cb, me.id, me.name).run();
+  await audit(env, me, 'invoice.followup', 'invoice', id, `${inv.invoice_no}: ${FU_OUTCOMES[outcome]} — call back ${cb}`);
+  return [200];
+}
 async function invoiceDetail(env, id) {
   const inv = await env.DB.prepare(INV_SELECT + ' WHERE i.id=?').bind(id).first();
   if (!inv) return null;
   const { results: lines } = await env.DB.prepare('SELECT l.*, s.name doctor_name FROM cl_invoice_lines l LEFT JOIN ems_staff s ON s.id=l.doctor_id WHERE l.invoice_id=? ORDER BY l.id').bind(id).all();
   const { results: allocs } = await env.DB.prepare('SELECT a.*, p.paid_on, p.mode, p.reference, p.lender FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=? AND p.voided=0 ORDER BY p.paid_on').bind(id).all();
   const bal = await balances(env, inv.patient_id);
-  return { invoice: withBalance(inv), lines: (lines || []).map(l => ({ ...l, tax_parts: parse(l.tax_parts, null) })), payments: allocs || [], advance: bal.advance };
+  const { results: fu } = await env.DB.prepare('SELECT * FROM cl_pay_followups WHERE invoice_id=? ORDER BY id DESC').bind(id).all();
+  return { invoice: withBalance(inv), lines: (lines || []).map(l => ({ ...l, tax_parts: parse(l.tax_parts, null) })), payments: allocs || [], advance: bal.advance, followups: fu || [] };
 }
 // Used by treatment plans: a draft bill with the given lines. Returns the invoice id, or the
 // error from saveInvoice (e.g. a discount needing authorisation), in which case the draft is removed.
@@ -1119,11 +1137,19 @@ async function visitAlerts(env) {
     env.DB.prepare(APPT_SELECT + " WHERE a.status='booked' AND a.start_at >= ? AND a.start_at <= ? ORDER BY a.start_at").bind(from, late),
     env.DB.prepare(APPT_SELECT + " WHERE a.status IN ('arrived','in_treatment') AND a.start_at >= ? AND strftime('%Y-%m-%dT%H:%M', a.start_at, '+' || (a.minutes + ?) || ' minutes') <= ? ORDER BY a.start_at").bind(from, GRACE_MIN, now),
     env.DB.prepare(APPT_SELECT + " WHERE a.status='completed' AND (a.closure IS NULL OR (a.closure='billed' AND i.status='draft')) ORDER BY a.start_at DESC LIMIT 100"),
-    env.DB.prepare(`SELECT * FROM (${INV_SELECT} WHERE i.status='final' AND i.legacy=0 AND i.invoice_date=?) WHERE total - paid > 0.004 ORDER BY id`).bind(d),
+    // Balances to collect: every bill since go-live with money owing, plus older bills whose call-back is due —
+    // except those with a call-back date still in the future (they come back on that date).
+    env.DB.prepare(`SELECT * FROM (SELECT x.*, f.outcome fu_outcome, f.note fu_note, f.callback_on fu_callback, f.by_name fu_by, f.at fu_at,
+        (SELECT COUNT(*) FROM cl_pay_followups g WHERE g.invoice_id=x.id) fu_count
+        FROM (${INV_SELECT} WHERE i.status='final') x
+        LEFT JOIN cl_pay_followups f ON f.id=(SELECT MAX(id) FROM cl_pay_followups WHERE invoice_id=x.id))
+      WHERE total - paid > 0.004 AND (fu_callback IS NULL OR fu_callback <= ?) AND (legacy=0 OR fu_callback IS NOT NULL) ORDER BY (fu_callback IS NULL), fu_callback, invoice_date, id`).bind(d),
   ]);
   const tag = (rows, kind) => (rows.results || []).map(x => ({ ...x, kind }));
   const unpaid = (u.results || []).map(withBalance);
   const ems = await emsAlerts(env, now, GRACE_MIN);
+  const later = new Set(((await env.DB.prepare(`SELECT f.invoice_id FROM cl_pay_followups f WHERE f.id IN (SELECT MAX(id) FROM cl_pay_followups GROUP BY invoice_id) AND f.callback_on > ?`).bind(d).all()).results || []).map(x => x.invoice_id));
+  ems.ems_unpaid = (ems.ems_unpaid || []).filter(x => !x.invoice_id || !later.has(x.invoice_id));
   return { now, ...ems, checkin: tag(a, 'checkin'), overrun: tag(b, 'overrun'), unbilled: tag(c, 'unbilled'), unpaid, unpaid_total: r2(unpaid.reduce((s2, x) => s2 + x.balance, 0)) };
 }
 async function dayBook(env, d) {

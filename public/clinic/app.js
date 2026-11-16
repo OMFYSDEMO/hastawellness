@@ -167,7 +167,7 @@ async function checkAlerts() {
   const A = ALERTS; A.ems_unmarked ||= []; A.ems_unpaid ||= [];
   const n = A.checkin.length + A.overrun.length + A.unbilled.length + A.unpaid.length + A.ems_unmarked.length + A.ems_unpaid.length;
   const parts = [A.checkin.length && `${A.checkin.length} not checked in`, A.overrun.length && `${A.overrun.length} still in treatment past time`,
-    A.unbilled.length && `${A.unbilled.length} finished but not billed`, A.unpaid.length && `${money(A.unpaid_total)} billed today not collected`,
+    A.unbilled.length && `${A.unbilled.length} finished but not billed`, A.unpaid.length && `${money(A.unpaid_total)} balance to collect${A.unpaid.some(i => i.fu_callback) ? ` (${A.unpaid.filter(i => i.fu_callback).length} call-back${A.unpaid.filter(i => i.fu_callback).length === 1 ? '' : 's'} due)` : ''}`,
     A.ems_unmarked.length && `${A.ems_unmarked.length} EMS session${A.ems_unmarked.length === 1 ? '' : 's'} not marked`, A.ems_unpaid.length && `${A.ems_unpaid.length} EMS package${A.ems_unpaid.length === 1 ? '' : 's'} to collect`].filter(Boolean);
   const tb = app.querySelector('[data-tb]'); if (tb) { tb.hidden = !n; tb.textContent = n; }
   document.title = n ? `(${n}) Action needed · Hasta Clinic` : 'Hasta Clinic';
@@ -180,6 +180,24 @@ async function checkAlerts() {
   bar.querySelector('[data-ab-open]').onclick = alertsModal;
   bar.querySelector('[data-ab-mute]').onclick = () => { try { localStorage.setItem('hw_alert_mute', muted() ? '0' : '1'); } catch {} checkAlerts(); };
 }
+const FU_OUT = { promised: 'Promised to pay', will_visit: 'Will pay at next visit', no_answer: 'No answer', call_later: 'Asked to call later', dispute: 'Disputes the amount', other: 'Other' };
+// Balance follow-up: record the call and when to call back. The balance leaves the alert bar until that date.
+function followupModal(invId, info, after) {
+  modal({ title: 'Follow-up call' + (info.invoice_no ? ' · ' + info.invoice_no : ''), body: `<form data-f class="stack">
+      ${info.patient_name ? `<p style="margin:0"><b>${esc(info.patient_name)}</b>${info.patient_phone ? ` · <a href="tel:${esc(info.patient_phone)}">${esc(prettyPhone(info.patient_phone))}</a>` : ''}${info.balance ? ` · balance <b class="money">${money(info.balance)}</b>` : ''}</p>` : ''}
+      ${field('What happened', sel('outcome', [['', 'Choose']].concat(Object.entries(FU_OUT))))}
+      ${field('Note of the call', '<textarea class="in" name="note" rows="3" maxlength="500" placeholder="e.g. Spoke to her husband; will pay by UPI on Friday"></textarea>')}
+      ${field('Call back on', inp('callback_on', addDays(today(), 1), `type="date" min="${today()}" max="${addDays(today(), 60)}"`), 'the balance comes back to the alert bar on this date')}
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${[['Tomorrow', 1], ['In 3 days', 3], ['Next week', 7]].map(([l, n]) => `<button type="button" class="btn sm quiet" data-cb="${n}">${l}</button>`).join('')}</div></form>
+      <p class="small muted">If no call is recorded on the call-back date and the bill is still unpaid, Duty Watch records a missed call-back against the front desk.</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save follow-up</button>`,
+    onMount(el, close) {
+      el.querySelectorAll('[data-cb]').forEach(b => b.onclick = () => { el.querySelector('[name=callback_on]').value = addDays(today(), +b.dataset.cb); });
+      el.querySelector('[name=outcome]').onchange = e => { if (e.target.value === 'no_answer' || e.target.value === 'call_later') el.querySelector('[name=callback_on]').value = addDays(today(), 1); };
+      const s = el.querySelector('[data-save]');
+      s.onclick = () => busy(s, () => api(`/clinic/invoices/${invId}/followup`, { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Follow-up saved'); after && after(); }).catch(() => {});
+    } });
+}
 function alertsModal() {
   const A = ALERTS; if (!A) return;
   const late = a => { const m = Math.round((Date.parse(A.now + ':00Z') - Date.parse(a.start_at + ':00Z')) / 60000); return m < 60 ? `${m} min ago` : m < 1440 ? `${Math.floor(m / 60)} h ${m % 60} min ago` : 'on ' + fDay(a.start_at); };
@@ -190,12 +208,13 @@ function alertsModal() {
     + sec('Treatment running past time', 'If the treatment is over, mark it completed — you will be asked to bill it.', A.overrun.map(a => `<div class="row"><div class="grow">${who(a)}<div class="small" style="color:var(--alert);font-weight:600">${esc(ST[a.status])} · planned ${a.minutes} min, started ${esc(late(a))}</div></div>
         <button class="btn sm gold" data-next="${a.id}" data-s="completed">Completed</button></div>`).join(''))
     + sec('Finished but not billed', 'Bill it, take it from a package, or mark it no charge.', A.unbilled.map(a => closeRow(a)).join(''))
-    + sec('Billed today — payment not collected', 'Take the payment before the patient leaves.', A.unpaid.map(i => `<div class="row"><div class="grow"><b>${esc(i.patient_name)} <small class="muted">${esc(i.patient_no)}</small></b><span>${esc(i.invoice_no)} · total ${money(i.total)}${i.paid ? ' · paid ' + money(i.paid) : ''}</span></div>
-        <b class="money" style="color:var(--alert)">${money(i.balance)}</b><button class="btn sm gold" data-inv="${i.id}">${icon('wallet', 15)}Take payment</button></div>`).join(''))
+    + sec('Balance to collect', 'Take the payment if the patient is here. Otherwise call them, record what was said and set a call-back date — it leaves this list until that date.', A.unpaid.map(i => `<div class="row"><div class="grow"><b>${esc(i.patient_name)} <small class="muted">${esc(i.patient_no)}</small></b><span>${esc(i.invoice_no)} · ${esc(fDay(i.invoice_date))} · total ${money(i.total)}${i.paid ? ' · paid ' + money(i.paid) : ''}${i.patient_phone ? ` · <a href="tel:${esc(i.patient_phone)}">${esc(prettyPhone(i.patient_phone))}</a>` : ''}</span>
+        ${i.fu_callback ? `<div class="small" style="color:var(--alert);font-weight:600">${icon('phone', 13)} Call-back ${i.fu_callback < today() ? 'overdue since ' + esc(fDay(i.fu_callback)) : 'due today'} · last call ${esc(fDay(i.fu_at.slice(0, 10)))} by ${esc(i.fu_by || '')}: ${esc(FU_OUT[i.fu_outcome] || '')} — ${esc(i.fu_note)}</div>` : ''}</div>
+        <b class="money" style="color:var(--alert)">${money(i.balance)}</b><button class="btn sm ghost" data-fu="${i.id}">${icon('phone', 15)}Follow-up call</button><button class="btn sm gold" data-inv="${i.id}">${icon('wallet', 15)}Take payment</button></div>`).join(''))
     + sec('EMS sessions not marked', 'The session time is over. Mark whether the client came.', A.ems_unmarked.map(e => `<div class="row"><div class="grow"><b>${esc(e.client_name)}${e.patient_no ? ` <small class="muted">${esc(e.patient_no)}</small>` : ''}</b><span>${esc(fTime(e.start_at))}${e.start_at.slice(0, 10) !== today() ? ' · ' + esc(fDay(e.start_at)) : ''} · <span class="dept" style="--c:${EMS_C}">EMS</span>${e.trainer_name ? ' · ' + esc(e.trainer_name) : ''}</span></div>
         <button class="btn sm ghost" data-ems-mark="${e.id}" data-s="attended">Attended</button><button class="btn sm quiet" data-ems-mark="${e.id}" data-s="no_show">No-show</button></div>`).join(''))
     + sec('EMS packages — payment to collect', 'Sold in the EMS app. Finalise the bill and take the payment here.', A.ems_unpaid.map(x => `<div class="row"><div class="grow"><b>${esc(x.patient_name || x.client_name)}${x.patient_no ? ` <small class="muted">${esc(x.patient_no)}</small>` : ''}</b><span>${esc(x.package_name)} · ${x.invoice_no ? esc(x.invoice_no) : x.invoice_id ? 'draft bill' : 'not billed'}${x.paid ? ' · paid ' + money(x.paid) : ''}</span></div>
-        <b class="money" style="color:var(--alert)">${money(x.balance)}</b>${x.invoice_id ? `<button class="btn sm gold" data-inv="${x.invoice_id}">${icon('wallet', 15)}Open bill</button>` : ''}</div>`).join(''));
+        <b class="money" style="color:var(--alert)">${money(x.balance)}</b>${x.invoice_no ? `<button class="btn sm ghost" data-fu="${x.invoice_id}">${icon('phone', 15)}Follow-up call</button>` : ''}${x.invoice_id ? `<button class="btn sm gold" data-inv="${x.invoice_id}">${icon('wallet', 15)}Open bill</button>` : ''}</div>`).join(''));
   modal({ title: 'Front desk — action needed', body: `<div style="max-height:65vh;overflow:auto">${body || emptyState('check-circle', 'All clear.')}</div>`, actions: '<button class="btn ghost" data-close>Close</button>',
     onMount(el, close) {
       const after = () => { close(); checkAlerts(); if (!parseHash().parts[0]) route(); };
@@ -206,6 +225,7 @@ function alertsModal() {
       }).catch(() => {}));
       el.querySelectorAll('[data-ns]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/appointments/${b.dataset.ns}/status`, { method: 'POST', body: { status: 'no_show' } })).then(() => { toast('Marked no-show'); after(); }).catch(() => {}));
       el.querySelectorAll('[data-inv]').forEach(b => b.onclick = () => { close(); go('#/invoice/' + b.dataset.inv); });
+      el.querySelectorAll('[data-fu]').forEach(b => b.onclick = () => { const i = A.unpaid.find(x => x.id === +b.dataset.fu) || {}; close(); followupModal(+b.dataset.fu, i, () => { checkAlerts(); if (!parseHash().parts[0]) route(); }); });
       el.querySelectorAll('[data-ems-mark]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/ems/appointments/${b.dataset.emsMark}/status`, { method: 'POST', body: { status: b.dataset.s } })).then(() => { toast('EMS session marked'); after(); }).catch(() => {}));
       wireApptRows(el, list, after);
       el.querySelectorAll('[data-bill]').forEach(b => { const f = b.onclick; b.onclick = () => { close(); f(); }; });
@@ -677,6 +697,11 @@ async function viewInvoice(id) {
         <div>${draft ? field('Note on invoice', inp('notes', inv.notes || '', 'maxlength="300" data-notes')) : inv.notes ? `<p class="small muted">${esc(inv.notes)}</p>` : ''}${draft ? `<p class="small muted" style="margin-top:8px">Discounts above ${limit}% need ${esc(approverText())} to authorise. Prices exclude GST.</p>` : ''}</div>
         <div class="inv-tot" data-tot></div></div></section>
     ${!draft ? `<section class="panel" style="margin-top:16px"><div class="panel-h"><div class="t">${icon('wallet', 20)}<h3>Payments on this invoice</h3></div></div>${d.payments.length ? `<table class="t"><tbody>${d.payments.map(x => `<tr><td>${esc(fDate(x.paid_on))}</td><td>${esc(B.modes[x.mode])}${x.lender ? ' · ' + esc(x.lender) : ''}</td><td class="small">${esc(x.reference || '')}</td><td class="n money">${money(x.amount)}</td></tr>`).join('')}</tbody></table>` : '<p class="muted">No payments yet.</p>'}</section>` : ''}`;
+  if (!draft && inv.status === 'final' && (inv.balance > 0.004 || (d.followups || []).length)) {
+    MAIN.insertAdjacentHTML('beforeend', `<section class="panel" style="margin-top:16px"><div class="panel-h"><div class="t">${icon('phone', 20)}<h3>Balance follow-up</h3></div>${inv.balance > 0.004 ? `<button class="btn sm ghost" data-fu>${icon('phone', 15)}Record a call</button>` : ''}</div>
+      ${(d.followups || []).length ? `<div class="rows">${d.followups.map((f, k) => `<div class="row"><div class="grow"><b>${esc(FU_OUT[f.outcome] || f.outcome)} <small class="muted">${esc(fDay(f.at.slice(0, 10)))} · ${esc(f.by_name || '')}</small></b><span>${esc(f.note)}</span>${k === 0 && inv.balance > 0.004 ? `<div class="small" style="font-weight:600;${f.callback_on <= today() ? 'color:var(--alert)' : ''}">Call back ${f.callback_on < today() ? 'was due ' : f.callback_on === today() ? 'today' : 'on '}${f.callback_on === today() ? '' : esc(fDay(f.callback_on))}</div>` : ''}</div></div>`).join('')}</div>` : '<p class="small muted" style="margin:0">No calls recorded yet.</p>'}</section>`);
+    const fb = MAIN.querySelector('[data-fu]'); if (fb) fb.onclick = () => followupModal(id, { invoice_no: inv.invoice_no, patient_name: inv.patient_name, patient_phone: inv.patient_phone, balance: inv.balance }, () => { route(); checkAlerts(); });
+  }
   const tbody = MAIN.querySelector('[data-lines]'), totEl = MAIN.querySelector('[data-tot]');
   const drawTotals = () => {
     let gross = 0, disc = 0, tax = 0, total = 0, partner = 0;

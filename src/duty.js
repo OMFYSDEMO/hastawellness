@@ -52,7 +52,8 @@ export const CODES = {
   not_completed: { label: 'Treatment not marked complete', who: 'front', points: 2, help: 'The patient was marked arrived or in treatment and never marked completed.' },
   not_billed: { label: 'Not billed on the day', who: 'front', points: 3, help: 'A completed visit was not billed, put on a package or marked no charge on the day.' },
   still_unbilled: { label: 'Still not billed', who: 'front', points: 2, help: 'A visit from an earlier day was still not closed at the end of this day.' },
-  unpaid: { label: 'Payment not collected', who: 'front', points: 1, help: 'A bill finalised on the day was left with money not collected.' },
+  unpaid: { label: 'Payment not collected', who: 'front', points: 1, help: 'A bill finalised on the day was left with money not collected and no follow-up call (with a call-back date) was recorded.' },
+  callback_missed: { label: 'Balance call-back missed', who: 'front', points: 1, help: 'A balance follow-up call was due on the day and no call was recorded (and the bill was not paid).' },
   ems_unmarked: { label: 'EMS session not marked', who: 'front', points: 2, help: 'An EMS session was not marked attended or no-show.' },
   notes_missing: { label: 'Clinical notes not written', who: 'doctor', points: 1, help: 'A completed visit had no clinical note from the treating doctor by the end of the day.' },
   ems_coach: { label: 'EMS session not closed by the coach', who: 'coach', points: 1, help: 'As the EMS coach of the session, it was not marked attended or no-show.' },
@@ -141,8 +142,15 @@ async function findings(env, day, cf, cut) {
     for (const a of older) out.push({ code: 'still_unbilled', ...ref('appointment', a.id), detail: `${pt(a)} · visit of ${fd(a.start_at)} ${ft(a.start_at)}` });
   }
   const unpaid = await env.DB.prepare(`SELECT i.id, i.invoice_no, i.total, COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments pay ON pay.id=a.payment_id WHERE a.invoice_id=i.id AND pay.voided=0),0) paid, p.name patient_name, p.patient_no
-      FROM cl_invoices i JOIN cl_patients p ON p.id=i.patient_id WHERE i.status='final' AND i.legacy=0 AND i.invoice_date=?`).bind(day).all().then(r => (r.results || []).filter(x => x.total - x.paid >= 1));
+      FROM cl_invoices i JOIN cl_patients p ON p.id=i.patient_id WHERE i.status='final' AND i.legacy=0 AND i.invoice_date=?
+        AND NOT EXISTS (SELECT 1 FROM cl_pay_followups f WHERE f.invoice_id=i.id AND substr(datetime(f.at, '+330 minutes'),1,10)=i.invoice_date)`).bind(day).all().then(r => (r.results || []).filter(x => x.total - x.paid >= 1));
   if (!cut || cut.slice(11) >= '20:00') for (const i of unpaid) out.push({ code: 'unpaid', ...ref('invoice', i.id), detail: `${i.invoice_no} · ${pt(i)} · Rs. ${Math.round(i.total - i.paid)} not collected` });
+  // Call-backs due on the day with no call recorded that day (and still unpaid).
+  const due = await env.DB.prepare(`SELECT f.invoice_id, f.callback_on, i.invoice_no, i.total, p.name patient_name, p.patient_no,
+        COALESCE((SELECT SUM(a.amount) FROM cl_allocations a JOIN cl_payments pay ON pay.id=a.payment_id WHERE a.invoice_id=i.id AND pay.voided=0),0) paid
+      FROM cl_pay_followups f JOIN cl_invoices i ON i.id=f.invoice_id JOIN cl_patients p ON p.id=i.patient_id
+      WHERE f.id IN (SELECT MAX(id) FROM cl_pay_followups GROUP BY invoice_id) AND f.callback_on=? AND substr(datetime(f.at, '+330 minutes'),1,10) < ?`).bind(day, day).all().then(r => (r.results || []).filter(x => x.total - x.paid >= 1));
+  if (!cut || cut.slice(11) >= '18:00') for (const i of due) out.push({ code: 'callback_missed', ...ref('invoice', i.invoice_id), detail: `${i.invoice_no} · ${pt(i)} · Rs. ${Math.round(i.total - i.paid)} — call-back was due` });
   const units = String(cf.s.ems_calendar_units || '1').split(',').map(Number).filter(Boolean);
   const ems = await env.DB.prepare(`SELECT a.id, a.start_at, a.duration minutes, a.trainer_id, COALESCE(c.name, a.guest_name, 'Guest') client_name FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id
       WHERE substr(a.start_at,1,10)=? AND a.status='booked' AND a.unit_id IN (${units.join(',') || 0})`).bind(day).all().then(r => r.results || []);
