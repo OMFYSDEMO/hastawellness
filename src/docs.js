@@ -20,10 +20,10 @@ const isDate = s => /^\d{4}-\d{2}-\d{2}$/.test(s || '');
 const HEADERS = { 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'x-content-type-options': 'nosniff' };
 const api = (data, status = 200) => json(data, status, HEADERS);
 const canManage = u => u.admin || u.role === 'manager';
-export const DOC_KINDS = { memo: 'Memo', notice: 'Notice', policy: 'Policy', training: 'Training record', form: 'Form', warning: 'Warning letter', payslip: 'Payslip', record: 'Staff record', discipline: 'Disciplinary letter' };
-const PREFIX = { memo: 'MEMO', notice: 'NOTICE', policy: 'POL', training: 'TRN', form: 'FORM', warning: 'WL', payslip: 'PAY', record: 'REC', discipline: 'DISC' };
+export const DOC_KINDS = { memo: 'Memo', notice: 'Notice', policy: 'Policy', training: 'Training record', form: 'Form', warning: 'Warning letter', payslip: 'Payslip', record: 'Staff record', discipline: 'Disciplinary letter', duty: 'Duty lapse notice' };
+const PREFIX = { memo: 'MEMO', notice: 'NOTICE', policy: 'POL', training: 'TRN', form: 'FORM', warning: 'WL', payslip: 'PAY', record: 'REC', discipline: 'DISC', duty: 'DUTY' };
 // Warning letters and payslips can be acknowledged with a dispute ("received, but I do not agree").
-const DISPUTABLE = ['warning', 'payslip', 'discipline'];
+const DISPUTABLE = ['warning', 'payslip', 'discipline', 'duty'];
 const safe = t => String(t == null ? '' : t).replace(/₹/g, 'Rs.').replace(/[^\x20-\x7E\xA0-\xFF–—‘’“”•…\n]/g, '?');
 const parse = (t, d) => { try { return t ? JSON.parse(t) : d; } catch { return d; } };
 export const RECORD_TYPES = { contract: 'Appointment letter / contract', id_proof: 'ID proof', certificate: 'Qualification certificate', registration: 'Professional registration', experience: 'Experience / relieving letter', bank: 'Bank / PF / ESI details', medical: 'Medical fitness', appraisal: 'Appraisal', other: 'Other' };
@@ -71,7 +71,7 @@ export async function nextRef(env, kind) {
 }
 
 async function issue(env, me, b, request) {
-  const kind = DOC_KINDS[b.kind] && !['warning', 'payslip', 'discipline'].includes(b.kind) ? b.kind : null;
+  const kind = DOC_KINDS[b.kind] && !['warning', 'payslip', 'discipline', 'duty'].includes(b.kind) ? b.kind : null;
   if (!kind) return [400, 'Choose the type of document.'];
   let form = null, prefill = null;
   if (kind === 'form') {

@@ -210,7 +210,7 @@ function payFor(prof, month, days) {
     paid_hours: r2(paidH), short_hours: shortH, projected_hours: upcomingH, deductions: ded, net,
   };
 }
-async function monthData(env, month, staffIds) {
+export async function monthData(env, month, staffIds) {
   const from = month + '-01', to = month + '-31', s = await settings(env);
   const where = staffIds ? `WHERE p.staff_id IN (${staffIds.map(() => '?').join(',')})` : 'WHERE p.attendance_required=1';
   const [profs, att, leaves, hol, abs] = await env.DB.batch([

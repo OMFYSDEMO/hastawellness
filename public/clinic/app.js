@@ -175,7 +175,7 @@ async function checkAlerts() {
   ALERT_N = n;
   bar.hidden = !n;
   if (!n) { bar.innerHTML = ''; return; }
-  bar.innerHTML = `${icon('alert-triangle', 22)}<div class="grow"><b>${n === 1 ? '1 item needs' : n + ' items need'} action at the front desk</b><span>${parts.join(' · ')}</span></div>
+  bar.innerHTML = `${icon('alert-triangle', 22)}<div class="grow"><b>${n === 1 ? '1 item needs' : n + ' items need'} action at the front desk</b><span>${parts.join(' · ')}${B.settings.duty_watch_from && B.settings.duty_watch_from <= today() ? ' — <b>anything left at day close is recorded against the person on duty</b>' : ''}</span></div>
     <button class="btn sm" data-ab-open>Review now</button><button class="ab-mute" data-ab-mute title="${muted() ? 'Turn the alert sound on' : 'Turn the alert sound off'}" aria-label="Alert sound">${icon(muted() ? 'bell-off' : 'bell', 18)}</button>`;
   bar.querySelector('[data-ab-open]').onclick = alertsModal;
   bar.querySelector('[data-ab-mute]').onclick = () => { try { localStorage.setItem('hw_alert_mute', muted() ? '0' : '1'); } catch {} checkAlerts(); };
@@ -227,6 +227,7 @@ async function viewToday() {
       <div class="kpi"><div class="l">${icon('wallet', 16)}Collected today</div><div class="v money">${money(collected)}</div><div class="s">${d.collections.map(c => `${esc(B.modes[c.mode])} ${money(c.s)}`).join(' · ') || 'nothing yet'}</div></div>
       <div class="kpi"><div class="l">${icon('badge-indian-rupee', 16)}Cash in hand</div><div class="v money">${money(d.cash.in_hand)}</div><div class="s">${d.cash.in_hand > 0 && d.cash.oldest_undeposited ? 'since ' + esc(fDay(d.cash.oldest_undeposited)) : 'all deposited'}</div></div>
       <div class="kpi"><div class="l">${icon('alert-triangle', 16)}Outstanding</div><div class="v money">${money(d.outstanding.amount)}</div><div class="s"><a href="#/billing?f=due">${d.outstanding.count} invoice${d.outstanding.count === 1 ? '' : 's'}</a></div></div></div>
+    <div data-duty></div>
     ${d.stock && (d.stock.low || d.stock.expiring || d.stock.draft_pos) ? `<div class="notice">${icon('package', 18)}<span>${[d.stock.low && `<a href="#/stock?f=low">${d.stock.low} product${d.stock.low === 1 ? '' : 's'} at or below reorder level</a>`, d.stock.expiring && `<a href="#/stock?f=exp">${d.stock.expiring} batch${d.stock.expiring === 1 ? '' : 'es'} expiring within 60 days</a>`, d.stock.draft_pos && `<a href="#/stock?tab=orders">${d.stock.draft_pos} purchase order${d.stock.draft_pos === 1 ? '' : 's'} waiting for approval</a>`].filter(Boolean).join(' · ')}</span></div>` : ''}
     ${d.unclosed.length ? `<section class="panel flush" style="margin-bottom:18px;border-color:#e6c3bc"><div class="panel-h" style="padding:16px 20px 0"><div class="t">${icon('alert-triangle', 20)}<div><h3>Visits to close</h3><p class="small muted">Completed visits must be billed, covered by a package, or marked no charge.</p></div></div></div>
       <div class="rows">${d.unclosed.map(a => closeRow(a)).join('')}</div></section>` : ''}
@@ -237,6 +238,7 @@ async function viewToday() {
   MAIN.querySelector('[data-newa]').onclick = () => apptModal({}, () => route());
   wireApptRows(MAIN, d.appointments.concat(d.unclosed), () => route());
   const rc = MAIN.querySelector('[data-recalls]'); if (rc) recallRows(rc, d.recalls, () => route(), true);
+  dutyStrip(MAIN.querySelector('[data-duty]'));
 }
 function closeRow(a) {
   return `<div class="row"><div class="grow"><b>${esc(a.patient_name)} <small class="muted">${esc(a.patient_no)}</small></b><span>${esc(fDay(a.start_at))} ${esc(fTime(a.start_at))} · ${deptTag(a.dept_id)} ${a.doctor_name ? '· ' + esc(a.doctor_name) : ''}${a.invoice_status === 'draft' ? ' · draft invoice not finalised' : ''}</span></div>
@@ -946,10 +948,11 @@ function renderMyAttendance(d) {
       <section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>Warnings & payslips</h3></div></div>
         ${d.warnings.length ? `<div class="rows">${d.warnings.map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')}</span></div>${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">No warnings.</p>'}
         <div data-slips class="rows" style="margin-top:10px"></div></section>
-    </div>`;
+    </div><div data-myduty></div>`;
   MAIN.querySelector('[data-pm]').onclick = () => go('#/attendance?m=' + prevMonth(d.month));
   MAIN.querySelector('[data-nm]').onclick = () => go('#/attendance?m=' + nextMonth(d.month));
   MAIN.querySelector('[data-apply]').onclick = () => leaveModal(d, null, () => route());
+  myDuty(MAIN.querySelector('[data-myduty]'), d.month);
   MAIN.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/hr/leave/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} })).then(() => { toast('Application withdrawn'); route(); }).catch(() => {}));
   api('/clinic/hr/payslips').then(r => { const el = MAIN.querySelector('[data-slips]'); if (el && r.payslips.length) el.innerHTML = r.payslips.map(p => `<div class="row"><div class="grow"><b>Payslip · ${esc(fMonth(p.month))}</b></div>${pdfLink(`/hr/payslip/${p.month}.pdf`, 'PDF')}</div>`).join(''); }).catch(() => {});
 }
@@ -968,13 +971,14 @@ function leaveModal(d, staff, after) {
 
 // ---- Staff (managers & leave approver) ----
 function staffTabs(tab) {
-  const T = hrUser() ? [['today', 'Today'], ['month', 'Attendance'], ['leave', 'Leave'], ['absences', 'Absences & warnings'], ['discipline', 'Discipline'], ...(isMgr() ? [['docs', 'Documents'], ['files', 'Staff files'], ['pay', 'Pay'], ['setup', 'Setup']] : [])] : [['discipline', 'Discipline']];
+  const T = hrUser() ? [['today', 'Today'], ['month', 'Attendance'], ['leave', 'Leave'], ['absences', 'Absences & warnings'], ['discipline', 'Discipline'], ['duty', 'Duty & scores'], ...(isMgr() ? [['docs', 'Documents'], ['files', 'Staff files'], ['pay', 'Pay'], ['setup', 'Setup']] : [])] : [['discipline', 'Discipline']];
   return `<nav class="tabs">${T.map(([k, l]) => `<a href="#/staff?tab=${k}" class="${k === tab ? 'on' : ''}" style="text-decoration:none">${l}</a>`).join('')}</nav>`;
 }
 async function viewStaff(tab, q) {
   if (!hrUser() && !(isDoc() && tab === 'discipline')) { if (isDoc()) return go('#/staff?tab=discipline'); MAIN.innerHTML = emptyState('lock', 'Only managers and the leave approver can see this.'); return; }
   const head = (sub, acts = '') => `<div class="head"><div><h1>Staff</h1><p>${sub}</p></div><div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${acts}</div></div>${staffTabs(tab)}`;
   if (tab === 'discipline') return q.get('case') ? viewDiscCase(+q.get('case'), head) : viewDiscipline(head);
+  if (tab === 'duty') return viewDuty(head, q);
   if (tab === 'today') {
     const d = await api('/clinic/hr/today');
     const lab = x => x.status === 'in' ? pill('final', 'In') : x.status === 'present' ? pill('billed', 'Finished') : x.status === 'leave' ? pill('package', LEAVE_KIND[x.kind]) : x.status === 'off' ? pill('no_charge', 'Weekly off') : x.status === 'holiday' ? pill('no_charge', 'Holiday') : x.status === 'pending' ? pill('draft', 'Leave pending') : pill('no_show', 'Not in yet');
@@ -2252,4 +2256,84 @@ async function viewDiscCase(id, head) {
       actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Sign and send</button>', onMount(el, close) { submit(el, close, () => ({ action: 'appeal', ...formData(el.querySelector('[data-f]')) }), 'Appeal decided'); } }),
   };
   MAIN.querySelectorAll('[data-a]').forEach(b => b.onclick = () => b.dataset.a === 'decide' ? forms.decide(b.dataset.stage) : forms[b.dataset.a]());
+}
+
+/* ---------------- Duty Watch ---------------- */
+const BANDPILL = { good: 'final', attention: 'draft', poor: 'cancelled' };
+// Today page: who has the front desk, and what would be recorded if the day closed now.
+async function dutyStrip(el) {
+  let d; try { d = await api('/clinic/hr/duty/today'); } catch { return; }
+  if (!d.started) { el.innerHTML = d.from ? `<div class="notice">${icon('shield-check', 18)}<div>Duty Watch starts on <b>${esc(fDay(d.from))}</b>. From then, every appointment not marked, treatment not completed, visit not billed and payment not collected by the end of the day is recorded against the front desk, with points on the monthly score.</div></div>` : ''; return; }
+  const names = l => l.map(x => esc(x.name)).join(', ') || '<span class="muted">nobody</span>';
+  const me = d.signed.filter(x => x.staff_id === ME.id).map(x => x.role);
+  const pts = d.pending.points_each[ME.id] || 0;
+  const by = Object.entries(d.pending.by).map(([k, n]) => `${n} ${esc(d.labels[k].toLowerCase())}`).join(' · ');
+  el.innerHTML = `<section class="panel" style="margin-bottom:18px;${d.pending.items ? 'border-color:#e6c3bc' : ''}"><div class="panel-h"><div class="t">${icon('shield-check', 20)}<div><h3>Duty Watch</h3>
+      <p class="small muted">Front desk: <b>${names(d.front)}</b>${d.front_how !== 'signed on' ? ` <span class="small">(${esc(d.front_how)})</span>` : ''} · Duty manager: <b>${names(d.mgr)}</b>${d.mgr_how !== 'signed on' ? ` <span class="small">(${esc(d.mgr_how)})</span>` : ''}</p></div></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap">${d.can_front ? (me.includes('front') ? `<button class="btn sm quiet" data-off="front">Hand over front desk</button>` : `<button class="btn sm ghost" data-on="front">${icon('shield-check', 15)}Sign on: front desk</button>`) : ''}
+      ${d.can_mgr ? (me.includes('manager') ? `<button class="btn sm quiet" data-off="manager">Hand over duty manager</button>` : `<button class="btn sm ghost" data-on="manager">${icon('shield-check', 15)}Sign on: duty manager</button>`) : ''}
+      ${isMgr() ? `<a class="btn sm quiet" href="#/staff?tab=duty">Scores ${icon('chevron-right', 15)}</a>` : ''}</div></div>
+    ${d.pending.items ? `<p style="margin:0;color:var(--alert);font-weight:600;display:flex;gap:8px;align-items:flex-start">${icon('alert-triangle', 16)}<span>If the day closed now: ${by} — ${Object.values(d.pending.points_each).reduce((a, b) => Math.max(a, b), 0)} point(s) for the person on duty${pts ? ` (you: ${pts})` : ''}. Clear them in the flashing bar before you leave.</span></p>`
+      : `<p class="small" style="margin:0;color:var(--ok,#2e7d5b);display:flex;gap:6px;align-items:center">${icon('check-circle', 15)}<span>Nothing outstanding so far today.</span></p>`}</section>`;
+  el.querySelectorAll('[data-on]').forEach(b => b.onclick = () => busy(b, () => api('/clinic/hr/duty/signon', { method: 'POST', body: { role: b.dataset.on } })).then(() => { toast('Signed on — today\'s items are now yours'); dutyStrip(el); }).catch(() => {}));
+  el.querySelectorAll('[data-off]').forEach(b => b.onclick = () => busy(b, () => api('/clinic/hr/duty/signoff', { method: 'POST', body: { role: b.dataset.off } })).then(() => { toast('Handed over'); dutyStrip(el); }).catch(() => {}));
+}
+
+async function viewDuty(head, q) {
+  const month = q.get('m') || today().slice(0, 7);
+  const d = await api('/clinic/hr/duty?month=' + month);
+  const sid = +q.get('s') || 0, row = d.rows.find(r => r.staff_id === sid);
+  const lab = k => esc((d.codes[k] || {}).label || k);
+  const acts = `<button class="btn ghost icon" data-pm>${icon('chevron-left', 18)}</button><button class="btn ghost icon" data-nm>${icon('chevron-right', 18)}</button>${d.sup ? `<button class="btn ghost" data-closeday>${icon('calendar-check', 18)}Close a day</button><button class="btn ghost" data-set>${icon('settings', 18)}Rules & points</button>` : ''}`;
+  const lapseRow = l => `<div class="row"><div class="grow"><b>${esc(fDay(l.day))} · ${lab(l.code)} <small class="muted">${l.status === 'excused' ? 'excused' : l.points + ' pt'}</small></b><span>${esc(l.detail || '')}${l.how ? ` · <i>${esc(l.how)}</i>` : ''}</span>
+      ${l.notice_ref ? `<div class="small">Notice <a href="#/doc/${l.notice_doc_id}">${esc(l.notice_ref)}</a> · ${l.notice_ack ? (l.notice_response === 'disputed' ? `<b style="color:var(--alert)">disputed: ${esc(l.notice_comment || '')}</b>` : 'signed') : 'not signed yet'}</div>` : ''}
+      ${l.status === 'excused' ? `<div class="small muted">Excused by ${esc(l.excused_by_name)}: ${esc(l.excused_reason)}</div>` : ''}${l.case_no ? `<div class="small"><b>Referred: ${esc(l.case_no)}</b></div>` : ''}</div>
+    ${l.staff_id === 0 ? `<button class="btn sm ghost" data-assign="${l.id}">Assign</button>` : ''}${l.status === 'open' && !l.case_id && l.staff_id !== ME.id ? `<button class="btn sm quiet" data-excuse="${l.id}">Excuse</button>` : ''}${l.status === 'excused' && l.staff_id !== ME.id ? `<button class="btn sm quiet" data-reinstate="${l.id}">Reinstate</button>` : ''}</div>`;
+  if (row) {
+    const mine = d.lapses.filter(l => l.staff_id === sid);
+    MAIN.innerHTML = head(`${esc(row.name)} · ${esc(fMonth(month))}`, acts + pdfLink(`/hr/duty/report?staff_id=${sid}&month=${month}`, 'Performance report')) + `
+      <div class="kpis"><div class="kpi"><div class="l">Duty score</div><div class="v">${row.score}</div><div class="s">${pill(BANDPILL[row.band.key], row.band.label)}</div></div>
+        <div class="kpi"><div class="l">Points</div><div class="v">${row.points}</div><div class="s">${row.lapses} lapse(s) · ${row.excused} excused</div></div>
+        <div class="kpi"><div class="l">Last 30 days, not referred</div><div class="v">${row.rolling}</div><div class="s">referral to discipline at ${row.escalate_at}</div></div>
+        <div class="kpi"><div class="l">Disputed</div><div class="v">${row.disputed}</div><div class="s">${row.unsigned} notice(s) not signed</div></div></div>
+      <section class="panel flush"><div class="panel-h" style="padding:16px 20px 0"><h3>Lapses</h3><a class="btn sm quiet" href="#/staff?tab=duty&m=${month}">${icon('chevron-left', 15)}All staff</a></div><div class="rows">${mine.map(lapseRow).join('') || `<div class="row">${emptyState('shield-check', 'No lapses this month.')}</div>`}</div></section>`;
+  } else {
+    const k = d.kpi;
+    MAIN.innerHTML = head(`Duty & scores · ${esc(fMonth(month))}${d.from ? ` · watching since ${esc(fDay(d.from))}` : ' · not started'}${d.last_closed ? ` · last day closed ${esc(fDay(d.last_closed))}` : ''}`, acts) + `
+      <div class="notice">${icon('info', 18)}<div>Every day at 3 am the app closes the previous day: appointments not marked, treatments not completed, visits not billed, payments not collected and EMS sessions not marked are recorded against the front desk; unresolved items also count against the duty manager; late arrival, absence, missing clock-out and unsigned documents against the person. Each person gets a signed notice. Score = 100 − points. ${d.escalate} points in 30 days or the same lapse ${d.repeat} times opens a disciplinary case automatically. No money is deducted.</div></div>
+      ${k ? `<div class="kpis"><div class="kpi"><div class="l">Appointments</div><div class="v">${k.appointments}</div><div class="s">${esc(fDay(k.from))} – ${esc(fDay(k.to))}</div></div><div class="kpi"><div class="l">Arrival marked</div><div class="v">${k.arrival_ok ?? '—'}%</div><div class="s">${k.marked_on_time ?? '—'}% on time</div></div><div class="kpi"><div class="l">Billed the same day</div><div class="v">${k.billed_same_day ?? '—'}%</div><div class="s">of ${k.completed} completed visits</div></div></div>` : ''}
+      ${d.unassigned.length ? `<section class="panel flush" style="margin-bottom:16px;border-color:#e6c3bc"><div class="panel-h" style="padding:16px 20px 0"><div><h3>Nobody on duty identified</h3><p class="small muted">No one signed on and nobody with front-desk duties clocked in. Assign each to the person who was on the desk.</p></div></div><div class="rows">${d.unassigned.map(lapseRow).join('')}</div></section>` : ''}
+      <section class="panel flush"><div class="table-wrap"><table class="t"><thead><tr><th>Staff</th><th class="num">Score</th><th>Band</th><th class="num">Points</th><th>Main lapses</th><th class="num">30-day</th><th></th></tr></thead><tbody>
+      ${d.rows.map(r => `<tr><td><a href="#/staff?tab=duty&m=${month}&s=${r.staff_id}"><b>${esc(r.name)}</b></a><div class="small muted">${esc(r.designation || r.role)}${r.front ? ' · front desk' : ''}</div></td><td class="num"><b style="font-size:1.15em">${r.score}</b></td><td>${pill(BANDPILL[r.band.key], r.band.label)}</td><td class="num">${r.points}</td>
+        <td class="small">${Object.entries(r.by).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([c, n]) => `${n}× ${lab(c)}`).join('<br>') || '<span class="muted">—</span>'}${r.disputed ? `<div style="color:var(--alert)">${r.disputed} disputed</div>` : ''}${r.cases.length ? `<div><b>Referred: ${esc(r.cases.join(', '))}</b></div>` : ''}</td>
+        <td class="num">${r.rolling}/${r.escalate_at}</td><td>${pdfLink(`/hr/duty/report?staff_id=${r.staff_id}&month=${month}`, 'Report')}</td></tr>`).join('')}</tbody></table></div></section>`;
+  }
+  MAIN.querySelector('[data-pm]').onclick = () => go(`#/staff?tab=duty&m=${prevMonth(month)}${sid ? '&s=' + sid : ''}`);
+  MAIN.querySelector('[data-nm]').onclick = () => go(`#/staff?tab=duty&m=${nextMonth(month)}${sid ? '&s=' + sid : ''}`);
+  MAIN.querySelectorAll('[data-excuse]').forEach(b => b.onclick = () => modal({ title: 'Excuse this lapse', body: `<form data-f class="stack">${field('Reason', `<textarea class="in" name="reason" rows="3" maxlength="300" placeholder="e.g. the patient left without telling the desk; the doctor billed it at home; the app was down"></textarea>`, 'kept on record; the points are removed')}</form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Excuse</button>`,
+    onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api(`/clinic/hr/duty/lapses/${b.dataset.excuse}/excuse`, { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Excused'); route(); }).catch(() => {}); } }));
+  MAIN.querySelectorAll('[data-reinstate]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/hr/duty/lapses/${b.dataset.reinstate}/reinstate`, { method: 'POST', body: {} })).then(() => route()).catch(() => {}));
+  MAIN.querySelectorAll('[data-assign]').forEach(b => b.onclick = () => modal({ title: 'Who was on the front desk?', body: `<form data-f class="stack">${field('Staff member', sel('staff_id', [['', 'Choose']].concat(d.rows.map(r => [r.staff_id, r.name]))))}</form><p class="small muted">They will receive a duty lapse notice at the next day close.</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Assign</button>`,
+    onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api(`/clinic/hr/duty/lapses/${b.dataset.assign}/assign`, { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Assigned'); route(); }).catch(() => {}); } }));
+  MAIN.querySelector('[data-closeday]')?.addEventListener('click', () => modal({ title: 'Close a day now', body: `<form data-f class="stack">${field('Day', inp('day', addDays(today(), -1), `type="date" max="${addDays(today(), -1)}"`))}</form><p class="small muted">Normally done automatically at 3 am. Running it again for the same day only adds what is new; notices go out for new lapses.</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Close the day</button>`,
+    onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api('/clinic/hr/duty/close', { method: 'POST', body: formData(el.querySelector('[data-f]')) })).then(r => { close(); toast(r.skipped || `${r.recorded} lapse(s) recorded · ${r.notices.length} notice(s) · ${r.cases.length} case(s) opened`); route(); }).catch(() => {}); } }));
+  MAIN.querySelector('[data-set]')?.addEventListener('click', () => modal({ title: 'Duty Watch rules', wide: true,
+    body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('Start counting from', inp('from', d.from || '', 'type="date"'), 'announce it to staff first')}${field('Refer to discipline at (points in 30 days)', inp('escalate', d.escalate, 'type="number" min="3" max="50"'))}</div>
+      ${field('…or when the same lapse happens (times in 30 days)', inp('repeat', d.repeat, 'type="number" min="2" max="10"'))}
+      <div class="table-wrap"><table class="t"><thead><tr><th>Lapse</th><th>Who</th><th class="num">Points</th></tr></thead><tbody>${Object.entries(d.codes).map(([k, c]) => `<tr><td><b>${esc(c.label)}</b><div class="small muted">${esc(c.help)}</div></td><td class="small">${esc({ front: 'Front desk', manager: 'Duty manager', approver: 'Leave approver', all: 'Everyone' }[c.who])}</td><td class="num"><input class="in" style="width:70px" type="number" min="0" max="10" data-pt="${k}" value="${d.points[k]}"></td></tr>`).join('')}</tbody></table></div></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
+    onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => { const v = formData(el.querySelector('[data-f]')); v.points = Object.fromEntries([...el.querySelectorAll('[data-pt]')].map(i => [i.dataset.pt, i.value])); return api('/clinic/hr/duty/settings', { method: 'POST', body: v }); }).then(() => { close(); toast('Saved'); route(); }).catch(() => {}); } }));
+}
+// My attendance: my duty score this month.
+async function myDuty(el, month) {
+  let d; try { d = await api('/clinic/hr/duty/me?month=' + month); } catch { return; }
+  if (!d.started || !d.row) return;
+  const r = d.row;
+  el.innerHTML = `<section class="panel"><div class="panel-h"><div class="t">${icon('shield-check', 20)}<h3>My duty score · ${esc(fMonth(month))}</h3></div>${pdfLink(`/hr/duty/report?month=${month}`, 'My report')}</div>
+    <div class="kpis small-kpis"><div><span>Score</span><b>${r.score}</b><small>${esc(r.band.label)}</small></div><div><span>Points</span><b>${r.points}</b><small>${r.lapses} lapse(s)</small></div><div><span>Excused</span><b>${r.excused}</b><small>after review</small></div></div>
+    ${d.lapses.length ? `<div class="rows" style="margin-top:8px">${d.lapses.map(l => `<div class="row"><div class="grow"><b>${esc(fDay(l.day))} · ${esc(d.labels[l.code])} <small class="muted">${l.status === 'excused' ? 'excused' : l.points + ' pt'}</small></b><span>${esc(l.detail || '')}</span></div>${l.notice_doc_id ? `<a class="btn sm quiet" href="#/doc/${l.notice_doc_id}">Notice</a>` : ''}</div>`).join('')}</div>` : '<p class="muted">No lapses — well done.</p>'}
+    <p class="small muted" style="margin-top:8px">Every month starts at 100. If a lapse is wrong, open its notice, choose "I disagree" and explain — your manager reviews it.</p></section>`;
 }
