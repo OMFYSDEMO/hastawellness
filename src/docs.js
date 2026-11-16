@@ -26,7 +26,7 @@ const PREFIX = { memo: 'MEMO', notice: 'NOTICE', policy: 'POL', training: 'TRN',
 const DISPUTABLE = ['warning', 'payslip', 'discipline', 'duty'];
 const safe = t => String(t == null ? '' : t).replace(/₹/g, 'Rs.').replace(/[^\x20-\x7E\xA0-\xFF–—‘’“”•…\n]/g, '?');
 const parse = (t, d) => { try { return t ? JSON.parse(t) : d; } catch { return d; } };
-export const RECORD_TYPES = { contract: 'Appointment letter / contract', id_proof: 'ID proof', certificate: 'Qualification certificate', registration: 'Professional registration', experience: 'Experience / relieving letter', bank: 'Bank / PF / ESI details', medical: 'Medical fitness', appraisal: 'Appraisal', other: 'Other' };
+export const RECORD_TYPES = { jd: 'Job description', contract: 'Appointment letter / contract', id_proof: 'ID proof', certificate: 'Qualification certificate', registration: 'Professional registration', experience: 'Experience / relieving letter', bank: 'Bank / PF / ESI details', medical: 'Medical fitness', appraisal: 'Appraisal', other: 'Other' };
 const FILE_TYPES = ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'];
 const MAX_FILE = 10 * 1024 * 1024;
 const hex = buf => [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');

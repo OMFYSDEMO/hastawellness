@@ -54,13 +54,19 @@ export const CODES = {
   still_unbilled: { label: 'Still not billed', who: 'front', points: 2, help: 'A visit from an earlier day was still not closed at the end of this day.' },
   unpaid: { label: 'Payment not collected', who: 'front', points: 1, help: 'A bill finalised on the day was left with money not collected.' },
   ems_unmarked: { label: 'EMS session not marked', who: 'front', points: 2, help: 'An EMS session was not marked attended or no-show.' },
+  notes_missing: { label: 'Clinical notes not written', who: 'doctor', points: 1, help: 'A completed visit had no clinical note from the treating doctor by the end of the day.' },
+  ems_coach: { label: 'EMS session not closed by the coach', who: 'coach', points: 1, help: 'As the EMS coach of the session, it was not marked attended or no-show.' },
   mgr_no_action: { label: 'Front-desk lapses not acted on', who: 'manager', points: 2, help: 'As duty manager, front-desk items were left unresolved at the end of the day.' },
-  leave_pending: { label: 'Leave application not decided', who: 'approver', points: 1, help: 'A leave application waited more than 48 hours for a decision.' },
+  leave_pending: { label: 'Leave application not decided', who: 'ops', points: 1, help: 'A leave application waited more than 48 hours for a decision.' },
+  review_pending: { label: 'Disputed duty notice not reviewed', who: 'ops', points: 1, help: 'A staff member disputed a duty lapse and it was not reviewed (excused or upheld) within 3 days.' },
+  case_overdue: { label: 'Disciplinary case left waiting', who: 'ops', points: 1, help: 'A disciplinary case had no next step for 7 days after the reply period ended (or after it was opened).' },
   late: { label: 'Late arrival', who: 'all', points: 1, help: 'Clocked in after the shift start plus the grace period.' },
   absent: { label: 'Absent without approved leave', who: 'all', points: 3, help: 'A working day with no attendance and no approved leave.' },
   no_clock_out: { label: 'No clock-out', who: 'all', points: 1, help: 'Clocked in but did not clock out.' },
   doc_overdue: { label: 'Document not signed on time', who: 'all', points: 1, help: 'A memo, policy or notice was not signed by its sign-by date.' },
 };
+// Recorded once per item (not again every day it stays open).
+const ONCE = ['leave_pending', 'review_pending', 'case_overdue', 'doc_overdue'];
 const BANDS = [[90, 'good', 'Good'], [75, 'attention', 'Needs attention'], [-1, 'poor', 'Poor']];
 const band = score => { const b = BANDS.find(([min]) => score >= min); return { key: b[1], label: b[2] }; };
 
@@ -70,7 +76,9 @@ async function config(env) {
   const points = Object.fromEntries(Object.entries(CODES).map(([k, c]) => [k, Number.isFinite(+over[k]) && +over[k] >= 0 ? +over[k] : c.points]));
   return { s, from: isDate(s.duty_watch_from) ? s.duty_watch_from : null, points,
     escalate: Number(s.duty_escalate_points) > 0 ? Number(s.duty_escalate_points) : 10, repeat: Number(s.duty_repeat) > 0 ? Number(s.duty_repeat) : 3,
-    writtenBy: String(s.disc_written_by || s.leave_approvers || '').split(',').map(Number).filter(Boolean) };
+    writtenBy: String(s.disc_written_by || s.leave_approvers || '').split(',').map(Number).filter(Boolean),
+    // Roles: the Front Office Executive(s) hold the desk and the Duty Manager(s) supervise it, unless someone else signs on.
+    frontStaff: String(s.duty_front_staff || '').split(',').map(Number).filter(Boolean), mgrStaff: String(s.duty_manager_staff || '').split(',').map(Number).filter(Boolean) };
 }
 const isMgr = u => !!u.admin || u.role === 'manager';
 const skillsOf = r => parse(r.skills, []);
@@ -87,12 +95,17 @@ async function rosterFor(env, day, cf) {
   const all = (staff.results || []).filter(x => !sup(x.id));
   const present = new Set((att.results || []).map(a => a.staff_id));
   const signed = sign.results || [];
+  const at = id => present.has(id) && all.some(x => x.id === id);
   let front = signed.filter(x => x.role === 'front').map(x => x.staff_id);
   let frontHow = 'signed on';
-  if (!front.length) { front = all.filter(x => present.has(x.id) && skillsOf(x).includes('front')).map(x => x.id); frontHow = 'front-desk staff at work (nobody signed on)'; }
-  if (!front.length) { front = all.filter(x => present.has(x.id) && x.role === 'manager').map(x => x.id); frontHow = 'manager at work (nobody signed on as front desk)'; }
+  if (!front.length) { front = cf.frontStaff.filter(at); frontHow = 'Front Office Executive at work (nobody signed on)'; }
+  if (!front.length) { front = all.filter(x => at(x.id) && skillsOf(x).includes('front')).map(x => x.id); frontHow = 'front-office staff at work (nobody signed on)'; }
+  if (!front.length) { front = cf.mgrStaff.filter(at); frontHow = 'Duty Manager at work (no front-office staff in)'; }
+  if (!front.length) { front = all.filter(x => at(x.id) && x.role === 'manager').map(x => x.id); frontHow = 'manager at work (no front-office staff in)'; }
   let mgr = signed.filter(x => x.role === 'manager').map(x => x.staff_id), mgrHow = 'signed on';
-  if (!mgr.length) { mgr = all.filter(x => present.has(x.id) && x.role === 'manager' && !front.includes(x.id)).map(x => x.id); mgrHow = 'manager at work (nobody signed on as duty manager)'; }
+  if (!mgr.length) { mgr = cf.mgrStaff.filter(id => at(id) && !front.includes(id)); mgrHow = 'Duty Manager at work (nobody signed on)'; }
+  if (!mgr.length) { mgr = cf.writtenBy.filter(id => at(id) && !front.includes(id)); mgrHow = 'Operations Head at work (Duty Manager not in)'; }
+  if (!mgr.length) { mgr = all.filter(x => at(x.id) && x.role === 'manager' && !front.includes(x.id)).map(x => x.id); mgrHow = 'manager at work (nobody signed on as duty manager)'; }
   return { front: [...new Set(front)], frontHow, mgr: [...new Set(mgr)], mgrHow, signed, staff: all };
 }
 
@@ -105,7 +118,8 @@ async function findings(env, day, cf, cut) {
   const ref = (type, id) => ({ ref_type: type, ref_id: id });
   const out = [];
   const pt = a => `${a.patient_name}${a.patient_no ? ' (' + a.patient_no + ')' : ''}`;
-  const appts = await env.DB.prepare(`SELECT a.id, a.start_at, a.minutes, a.status, a.closure, a.invoice_id, i.status inv_status, p.name patient_name, p.patient_no, d.name doctor_name
+  const appts = await env.DB.prepare(`SELECT a.id, a.patient_id, a.doctor_id, a.start_at, a.minutes, a.status, a.closure, a.invoice_id, i.status inv_status, p.name patient_name, p.patient_no, d.name doctor_name, d.external doc_external,
+        (SELECT COUNT(*) FROM cl_notes n WHERE n.appointment_id=a.id OR (n.patient_id=a.patient_id AND n.visit_date=substr(a.start_at,1,10))) notes
       FROM cl_appointments a JOIN cl_patients p ON p.id=a.patient_id LEFT JOIN cl_invoices i ON i.id=a.invoice_id LEFT JOIN ems_staff d ON d.id=a.doctor_id
       WHERE substr(a.start_at,1,10)=? ORDER BY a.start_at`).bind(day).all().then(r => r.results || []);
   const finished = a => addMin(a.start_at, a.minutes + GRACE) <= end;
@@ -130,9 +144,12 @@ async function findings(env, day, cf, cut) {
       FROM cl_invoices i JOIN cl_patients p ON p.id=i.patient_id WHERE i.status='final' AND i.legacy=0 AND i.invoice_date=?`).bind(day).all().then(r => (r.results || []).filter(x => x.total - x.paid >= 1));
   if (!cut || cut.slice(11) >= '20:00') for (const i of unpaid) out.push({ code: 'unpaid', ...ref('invoice', i.id), detail: `${i.invoice_no} · ${pt(i)} · Rs. ${Math.round(i.total - i.paid)} not collected` });
   const units = String(cf.s.ems_calendar_units || '1').split(',').map(Number).filter(Boolean);
-  const ems = await env.DB.prepare(`SELECT a.id, a.start_at, a.duration minutes, COALESCE(c.name, a.guest_name, 'Guest') client_name FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id
+  const ems = await env.DB.prepare(`SELECT a.id, a.start_at, a.duration minutes, a.trainer_id, COALESCE(c.name, a.guest_name, 'Guest') client_name FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id
       WHERE substr(a.start_at,1,10)=? AND a.status='booked' AND a.unit_id IN (${units.join(',') || 0})`).bind(day).all().then(r => r.results || []);
-  for (const a of ems) if (addMin(a.start_at, (a.minutes || 30) + GRACE) <= end) out.push({ code: 'ems_unmarked', ...ref('ems_appointment', a.id), detail: `${a.client_name} · EMS ${ft(a.start_at)}` });
+  for (const a of ems) if (addMin(a.start_at, (a.minutes || 30) + GRACE) <= end) {
+    out.push({ code: 'ems_unmarked', ...ref('ems_appointment', a.id), detail: `${a.client_name} · EMS ${ft(a.start_at)}` });
+    if (a.trainer_id) out.push({ code: 'ems_coach', staff_id: a.trainer_id, ...ref('ems_appointment', a.id), detail: `${a.client_name} · EMS ${ft(a.start_at)}` });
+  }
   return out;
 }
 
@@ -140,6 +157,30 @@ async function findings(env, day, cf, cut) {
 async function personal(env, day, cf, roster) {
   const out = [];
   const ids = new Set(roster.staff.map(x => x.id));
+  // Doctors: a clinical note for every completed visit they treated.
+  const done = await env.DB.prepare(`SELECT a.id, a.start_at, a.doctor_id, p.name, p.patient_no FROM cl_appointments a JOIN cl_patients p ON p.id=a.patient_id
+      WHERE substr(a.start_at,1,10)=? AND a.status='completed' AND a.doctor_id IS NOT NULL
+        AND NOT EXISTS (SELECT 1 FROM cl_notes n WHERE n.appointment_id=a.id OR (n.patient_id=a.patient_id AND n.visit_date=substr(a.start_at,1,10)))`).bind(day).all().then(r => r.results || []);
+  for (const a of done) if (ids.has(a.doctor_id)) out.push({ staff_id: a.doctor_id, code: 'notes_missing', ref_type: 'appointment', ref_id: a.id, detail: `${a.name}${a.patient_no ? ' (' + a.patient_no + ')' : ''} · ${ft(a.start_at)}` });
+  // Operations Head: disputed duty notices not reviewed in 3 days; disciplinary cases left without a next step.
+  const ops = cf.writtenBy.filter(id => ids.has(id));
+  if (ops.length) {
+    const before = new Date(Date.parse(day + 'T23:59:00Z') - IST - 3 * 86400000).toISOString().slice(0, 19) + 'Z';
+    const { results: disp } = await env.DB.prepare(`SELECT l.notice_doc_id, d.ref_no, l.staff_id, s.name, COUNT(*) n FROM cl_duty_lapses l JOIN ems_staff s ON s.id=l.staff_id JOIN cl_docs d ON d.id=l.notice_doc_id
+        JOIN cl_doc_recipients r ON r.doc_id=l.notice_doc_id AND r.staff_id=l.staff_id
+        WHERE l.status='open' AND l.case_id IS NULL AND r.response='disputed' AND r.ack_at <= ? GROUP BY l.notice_doc_id`).bind(before).all();
+    for (const l of disp || []) for (const o of ops) if (o !== l.staff_id) out.push({ staff_id: o, code: 'review_pending', ref_type: 'notice', ref_id: l.notice_doc_id, detail: `${l.name} disputed ${l.ref_no} (${l.n} lapse(s)) — not reviewed within 3 days` });
+    const week = addDays(day, -7);
+    const { results: cs } = await env.DB.prepare(`SELECT c.id, c.case_no, c.staff_id, s.name, c.created_at,
+        (SELECT a.stage FROM cl_disc_actions a WHERE a.case_id=c.id ORDER BY a.id DESC LIMIT 1) last_stage,
+        (SELECT a.reply_due FROM cl_disc_actions a WHERE a.case_id=c.id AND a.stage='show_cause' ORDER BY a.id DESC LIMIT 1) reply_due,
+        (SELECT MAX(a.created_at) FROM cl_disc_actions a WHERE a.case_id=c.id) last_at
+        FROM cl_disc_cases c JOIN ems_staff s ON s.id=c.staff_id WHERE c.status='open'`).all();
+    for (const c of cs || []) {
+      const since = c.last_stage === 'show_cause' ? c.reply_due : istOf(c.last_at || c.created_at).slice(0, 10);
+      if (since && since <= week) for (const o of ops) if (o !== c.staff_id) out.push({ staff_id: o, code: 'case_overdue', ref_type: 'case', ref_id: c.id, detail: `${c.case_no} (${c.name}) — no step since ${fd(since)}` });
+    }
+  }
   const { rows } = await monthData(env, day.slice(0, 7));
   for (const r of rows) {
     if (!ids.has(r.staff_id)) continue;
@@ -188,13 +229,15 @@ export async function closeDay(env, day, opts = {}) {
   const front = await findings(env, day, cf, null);
   const list = attribute(front, roster);
   // The duty manager: once a day, when front-desk items were left unresolved.
-  if (front.filter(f => f.code !== 'late_mark').length) {
-    const n = front.filter(f => f.code !== 'late_mark').length;
-    list.push(...attribute([{ code: 'mgr_no_action', ref_type: 'day', ref_id: 0, detail: `${n} front-desk item(s) left unresolved: ${[...new Set(front.map(f => CODES[f.code].label.toLowerCase()))].join(', ')}` }], roster));
+  if (roster.mgr.length && front.filter(f => f.code !== 'late_mark' && CODES[f.code].who === 'front').length) {
+    const n = front.filter(f => f.code !== 'late_mark' && CODES[f.code].who === 'front').length;
+    list.push(...attribute([{ code: 'mgr_no_action', ref_type: 'day', ref_id: 0, detail: `${n} front-desk item(s) left unresolved: ${[...new Set(front.filter(f => CODES[f.code].who === 'front').map(f => CODES[f.code].label.toLowerCase()))].join(', ')}` }], roster));
   }
   list.push(...await personal(env, day, cf, roster));
-  const stmts = list.map(f => env.DB.prepare(`INSERT OR IGNORE INTO cl_duty_lapses (day, staff_id, code, ref_type, ref_id, detail, points, how) VALUES (?,?,?,?,?,?,?,?)`)
-    .bind(day, f.staff_id, f.code, f.ref_type, f.ref_id || 0, clean(f.detail, 300), cf.points[f.code], CODES[f.code].who === 'front' ? roster.frontHow : CODES[f.code].who === 'manager' ? roster.mgrHow : null));
+  const how = f => ({ front: roster.frontHow, manager: roster.mgrHow, doctor: 'treating doctor', coach: 'EMS coach of the session', ops: 'Operations Head' })[CODES[f.code].who] || null;
+  const stmts = list.filter(f => cf.points[f.code] > 0).map(f => env.DB.prepare(`INSERT OR IGNORE INTO cl_duty_lapses (day, staff_id, code, ref_type, ref_id, detail, points, how)
+      SELECT ?,?,?,?,?,?,?,? WHERE NOT (? AND EXISTS (SELECT 1 FROM cl_duty_lapses WHERE staff_id=? AND code=? AND ref_type=? AND ref_id=?))`)
+    .bind(day, f.staff_id, f.code, f.ref_type, f.ref_id || 0, clean(f.detail, 300), cf.points[f.code], how(f), ONCE.includes(f.code) ? 1 : 0, f.staff_id, f.code, f.ref_type, f.ref_id || 0));
   let recorded = 0;
   for (let i = 0; i < stmts.length; i += 50) for (const r of await env.DB.batch(stmts.slice(i, i + 50))) recorded += r.meta.changes || 0;
   await env.DB.prepare("INSERT INTO cl_settings (key, value) VALUES ('duty_last_closed', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE excluded.value > cl_settings.value").bind(day).run();
@@ -286,7 +329,7 @@ async function noticePdf(env, cf, { ref, staff, lapses, pts, score, month }) {
 async function escalate(env, cf, day) {
   const from = addDays(day, -29);
   const { results } = await env.DB.prepare(`SELECT l.*, s.name FROM cl_duty_lapses l JOIN ems_staff s ON s.id=l.staff_id
-      WHERE l.staff_id > 0 AND l.status='open' AND l.case_id IS NULL AND l.day BETWEEN ? AND ? AND s.active=1 ORDER BY l.day, l.id`).bind(from, day).all();
+      WHERE l.staff_id > 0 AND l.status <> 'excused' AND l.case_id IS NULL AND l.day BETWEEN ? AND ? AND s.active=1 ORDER BY l.day, l.id`).bind(from, day).all();
   const by = new Map();
   for (const l of results || []) { if (!by.has(l.staff_id)) by.set(l.staff_id, []); by.get(l.staff_id).push(l); }
   const opened = [];
@@ -330,7 +373,7 @@ async function board(env, cf, month, onlyId) {
       LEFT JOIN cl_disc_cases c ON c.id=l.case_id WHERE substr(l.day,1,7)=? ${onlyId != null ? 'AND l.staff_id=?' : ''} ORDER BY l.day DESC, l.id DESC`).bind(...[month, ...(onlyId != null ? [onlyId] : [])]).all();
   const L = lapses || [];
   const d30 = addDays(today(), -30);
-  const roll = await env.DB.prepare("SELECT staff_id, SUM(points) p FROM cl_duty_lapses WHERE status='open' AND case_id IS NULL AND day > ? GROUP BY staff_id").bind(d30).all().then(r => Object.fromEntries((r.results || []).map(x => [x.staff_id, x.p])));
+  const roll = await env.DB.prepare("SELECT staff_id, SUM(points) p FROM cl_duty_lapses WHERE status <> 'excused' AND case_id IS NULL AND day > ? GROUP BY staff_id").bind(d30).all().then(r => Object.fromEntries((r.results || []).map(x => [x.staff_id, x.p])));
   const sup = id => isSuper({ id, username: '' }, cf.s);
   const rows = (staff || []).filter(x => !sup(x.id) && (onlyId == null || x.id === onlyId)).map(x => {
     const mine = L.filter(l => l.staff_id === x.id);
@@ -338,7 +381,7 @@ async function board(env, cf, month, onlyId) {
     const points = counted.reduce((a, l) => a + l.points, 0), score = Math.max(0, 100 - points);
     const by = {}; for (const l of counted) by[l.code] = (by[l.code] || 0) + 1;
     return { staff_id: x.id, name: x.name, role: x.role, designation: x.designation, front: skillsOf(x).includes('front'), points, score, band: band(score), by,
-      lapses: counted.length, excused: mine.length - counted.length, disputed: mine.filter(l => l.notice_response === 'disputed' && l.status === 'open').length,
+      lapses: counted.length, excused: mine.length - counted.length, disputed: mine.filter(l => l.notice_response === 'disputed' && l.status === 'open').length, upheld: mine.filter(l => l.status === 'upheld').length,
       unsigned: new Set(mine.filter(l => l.notice_doc_id && !l.notice_ack).map(l => l.notice_doc_id)).size,
       rolling: roll[x.id] || 0, escalate_at: cf.escalate, cases: [...new Set(mine.filter(l => l.case_no).map(l => l.case_no))] };
   }).sort((a, b) => a.score - b.score || a.name.localeCompare(b.name));
@@ -382,7 +425,7 @@ async function reportPdf(env, cf, staffId, month) {
   for (const l of mine) {
     if (k.y < 80) k.newPage();
     k.text(fd(l.day), k.L, 8.5); k.text(safe(CODES[l.code].label), k.L + 62, 8.5, k.bold); k.right(l.status === 'excused' ? 'excused' : String(l.points), k.L + k.W, 8.5, k.bold);
-    k.wrap(safe(l.detail || '') + (l.notice_ref ? ` · notice ${l.notice_ref}${l.notice_response === 'disputed' ? ' (disputed)' : ''}` : '') + (l.status === 'excused' ? ` · excused by ${l.excused_by_name}: ${l.excused_reason}` : ''), 8.5, k.reg, k.L + 200, k.W - 230, 11);
+    k.wrap(safe(l.detail || '') + (l.notice_ref ? ` · notice ${l.notice_ref}${l.notice_response === 'disputed' ? ' (disputed)' : ''}` : '') + (l.status === 'excused' ? ` · excused by ${l.excused_by_name}: ${l.excused_reason}` : '') + (l.status === 'upheld' ? ` · dispute reviewed, upheld by ${l.reviewed_by_name}: ${l.review_note}` : ''), 8.5, k.reg, k.L + 200, k.W - 230, 11);
     k.y -= 2;
   }
   k.y -= 12; if (k.y < 100) k.newPage();
@@ -447,10 +490,10 @@ export async function dutyRoute(request, env, url, me, p, m, b) {
   if (!mgr) return err('Managers only.', 403);
   if (p === '/hr/duty' && m === 'GET') {
     const bd = await board(env, cf, month, null);
-    return json({ ok: true, ...bd, from: cf.from, last_closed: cf.s.duty_last_closed || null, points: cf.points, escalate: cf.escalate, repeat: cf.repeat, sup,
+    return json({ ok: true, ...bd, from: cf.from, last_closed: cf.s.duty_last_closed || null, points: cf.points, escalate: cf.escalate, repeat: cf.repeat, sup, front_staff: cf.frontStaff, manager_staff: cf.mgrStaff, ops: cf.writtenBy,
       codes: Object.fromEntries(Object.entries(CODES).map(([k, c]) => [k, { label: c.label, who: c.who, help: c.help, default: c.points }])) });
   }
-  if ((mm = p.match(/^\/hr\/duty\/lapses\/(\d+)\/(excuse|reinstate|assign)$/)) && m === 'POST') {
+  if ((mm = p.match(/^\/hr\/duty\/lapses\/(\d+)\/(excuse|uphold|reinstate|assign)$/)) && m === 'POST') {
     const l = await env.DB.prepare('SELECT l.*, s.role, s.name FROM cl_duty_lapses l LEFT JOIN ems_staff s ON s.id=l.staff_id WHERE l.id=?').bind(+mm[1]).first();
     if (!l) return err('Not found.', 404);
     if (l.staff_id === me.id) return err('You cannot decide on your own lapses — the clinic admin or the Operations Head does.', 403);
@@ -461,6 +504,12 @@ export async function dutyRoute(request, env, url, me, p, m, b) {
       if (l.case_id) return err('This lapse is part of a disciplinary case — deal with it in the case.');
       await env.DB.prepare("UPDATE cl_duty_lapses SET status='excused', excused_by=?, excused_by_name=?, excused_reason=?, excused_at=? WHERE id=?").bind(me.id, me.name, reason, nowIso(), l.id).run();
       await audit(env, me, 'duty.excuse', 'duty_lapse', l.id, `${l.name || 'unassigned'} ${l.day} ${l.code}: ${reason}`);
+    } else if (mm[2] === 'uphold') {
+      const note = clean(b.reason, 300);
+      if (note.length < 8) return err('Say why the lapse stands (e.g. the appointment log shows you were signed on at the desk).');
+      if (l.status !== 'open') return err('Only an open lapse can be upheld.');
+      await env.DB.prepare("UPDATE cl_duty_lapses SET status='upheld', reviewed_by_name=?, review_note=?, reviewed_at=? WHERE id=?").bind(me.name, note, nowIso(), l.id).run();
+      await audit(env, me, 'duty.uphold', 'duty_lapse', l.id, `${l.name} ${l.day} ${l.code}: ${note}`);
     } else if (mm[2] === 'reinstate') {
       await env.DB.prepare("UPDATE cl_duty_lapses SET status='open', excused_by=NULL, excused_by_name=NULL, excused_reason=NULL, excused_at=NULL WHERE id=?").bind(l.id).run();
       await audit(env, me, 'duty.reinstate', 'duty_lapse', l.id, `${l.name} ${l.day} ${l.code}`);
@@ -485,6 +534,7 @@ export async function dutyRoute(request, env, url, me, p, m, b) {
     if (b.from !== undefined) { if (b.from && !isDate(b.from)) return err('Check the start date.'); sets.push(['duty_watch_from', b.from || '']); }
     if (b.escalate !== undefined) sets.push(['duty_escalate_points', String(Math.max(3, Math.min(50, parseInt(b.escalate, 10) || 10)))]);
     if (b.repeat !== undefined) sets.push(['duty_repeat', String(Math.max(2, Math.min(10, parseInt(b.repeat, 10) || 3)))]);
+    for (const [k, key] of [['front_staff', 'duty_front_staff'], ['manager_staff', 'duty_manager_staff']]) if (b[k] !== undefined) sets.push([key, (Array.isArray(b[k]) ? b[k] : String(b[k]).split(',')).map(Number).filter(Boolean).join(',')]);
     if (b.points && typeof b.points === 'object') sets.push(['duty_points', JSON.stringify(Object.fromEntries(Object.keys(CODES).filter(k => b.points[k] !== undefined).map(k => [k, Math.max(0, Math.min(10, parseInt(b.points[k], 10) || 0))])))]);
     await env.DB.batch(sets.map(([k, v]) => env.DB.prepare('INSERT INTO cl_settings (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value').bind(k, v)));
     await audit(env, me, 'duty.settings', 'settings', null, sets.map(x => x.join('=')).join('; '));
