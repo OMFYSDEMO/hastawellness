@@ -123,7 +123,7 @@ function shell(base) {
 <title>Hasta Clinic</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=9"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
+<link rel="stylesheet" href="/ems/app.css?v=10"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
 <link rel="modulepreload" href="/clinic/app.js?v=27"><link rel="modulepreload" href="/ems/core.js?v=9">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
 <script type="module" src="/clinic/app.js?v=27"></script></body></html>`;
@@ -133,7 +133,7 @@ function shell(base) {
 function kioskShell(base) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><meta name="ems-base" content="${h(base)}"><title>Staff attendance · Hasta</title>
-<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=9"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
+<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=10"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
 </head><body class="kiosk-body"><div id="kiosk" class="kiosk"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
 <script type="module" src="/clinic/kiosk.js?v=1"></script></body></html>`;
 }

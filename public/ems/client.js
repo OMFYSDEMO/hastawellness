@@ -20,7 +20,19 @@ export function mount(app, me) {
   route();
 }
 
-async function load() { DATA = await api('/client/overview'); return DATA; }
+async function load() {
+  const before = DATA && DATA.game ? { xp: DATA.game.xp, lvl: DATA.game.level.n, badges: DATA.game.earned } : null;
+  DATA = await api('/client/overview');
+  if (before && DATA.game) setTimeout(() => celebrate(before, DATA.game), 300);
+  return DATA;
+}
+// Reload without jumping to the top (used after quick taps like meal logging).
+async function soft() { const y = window.scrollY, k = location.hash.replace(/^#\/?/, '').split('?')[0]; await load(); ({ '': home, progress, book, plan, account, admission, quest }[k] || home)(); window.scrollTo(0, y); }
+function celebrate(b, g) {
+  if (g.level.n > b.lvl) modal({ title: 'Level up!', body: `<div style="text-align:center;padding:10px 0"><div class="lvl big">${g.level.n}</div><h2 style="margin-top:10px">You're now a ${esc(g.level.name)}</h2><p class="muted">${g.xp.toLocaleString('en-IN')} XP earned. Keep showing up — it's working.</p></div>`, actions: '<button class="btn" data-close>Keep going</button>' });
+  else if (g.earned > b.badges) { const nb = g.badges.find(x => x.on); toast(`New badge: ${nb ? nb.name : ''} 🏅`); }
+  else if (g.xp > b.xp) toast(`+${g.xp - b.xp} XP`);
+}
 
 async function route(refetch = true) {
   const k = location.hash.replace(/^#\/?/, '').split('?')[0];
@@ -29,7 +41,7 @@ async function route(refetch = true) {
   window.scrollTo(0, 0);
   try {
     if (refetch || !DATA) await load();
-    ({ '': home, progress, book, plan, account, admission }[k] || home)();
+    ({ '': home, progress, book, plan, account, admission, quest }[k] || home)();
   } catch (e) { BODY.innerHTML = `<div class="panel"><p class="err">${esc(e.message)}</p></div>`; }
 }
 const refresh = () => route(true);
@@ -43,7 +55,7 @@ function home() {
   const M = DATA.insights.metrics, p = current(), next = upcoming()[0];
   const w = M.change.weight, wa = M.change.waist;
   const hr = new Date(Date.now() + 330 * 60000).getUTCHours();
-  const checkedToday = DATA.checkins.some(c => c.day === today());
+  const checkedToday = DATA.checkins.some(c => c.day === today() && (c.water != null || c.steps != null || c.sleep != null || c.energy != null));
   BODY.innerHTML = `
     <section class="hero">
       <p class="hi">${hr < 12 ? 'Good morning' : hr < 17 ? 'Good afternoon' : 'Good evening'}</p><h1>${esc(first(ME.name))}</h1>${DATA.client.coach_name ? `<p class="hi" style="margin-top:2px">Your coach: ${esc(DATA.client.coach_name)}</p>` : ''}
@@ -58,11 +70,14 @@ function home() {
     </section>
     ${admCard()}
     ${!checkedToday && DATA.access.diet_plan ? `<a href="#/plan" class="panel" style="display:flex;gap:14px;align-items:center;text-decoration:none;background:var(--gold-soft);border-color:transparent">${icon('clipboard-check', 24)}<div style="flex:1"><b>Log today's check-in</b><p class="small muted">Water, steps, sleep and meals — 20 seconds.</p></div>${icon('chevron-right', 20)}</a>` : ''}
-    <section class="panel"><div class="panel-h"><div class="t">${icon('flame', 20)}<h3>Your momentum</h3></div></div>
-      <div class="score"><b>${M.score}</b><div class="meter"><i style="width:${M.score}%"></i></div></div>
-      <p class="small muted" style="margin-top:8px">Based on your sessions, daily habits and progress over the last few weeks.${M.target && M.target.eta ? ` At this pace you could reach ${M.target.value} kg around ${fDate(M.target.eta)}.` : ''}</p></section>
+    ${questCard()}
+    ${weighInCard()}
+    ${goalBoard()}
+    ${questList(true)}
+    ${M.target && M.target.eta ? `<p class="small muted" style="text-align:center">At this pace you could reach ${M.target.value} kg around ${fDate(M.target.eta)}.</p>` : ''}
     <section class="panel"><div class="panel-h"><div class="t">${icon('sparkles', 20)}<h3>Guidance for you</h3></div></div>${insightList(DATA.insights.items, 5)}</section>
     ${DATA.measurements.filter(m => m.weight != null).length > 1 ? `<section class="panel"><div class="panel-h"><div class="t">${icon('line-chart', 20)}<h3>Weight trend</h3></div><a class="btn sm quiet" href="#/progress">All progress</a></div><div data-w></div></section>` : ''}`;
+  wireWeighIn();
   const wEl = BODY.querySelector('[data-w]');
   wEl && lineChart(wEl, { series: [{ name: 'Weight', color: '#34595e', points: measureSeries(DATA.measurements, 'weight') }], unit: ' kg', target: DATA.client.target_weight, height: 200 });
 }
@@ -144,18 +159,20 @@ function plan() {
   const week = DATA.checkins.filter(x => dayDiff(x.day, today()) < 7);
   BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>My plan</h1><p>Daily habits and food guidance from your coach</p></div></div>
     ${P.focus ? `<section class="panel" style="background:var(--teal-deep);border-color:transparent;color:#fff"><div style="display:flex;gap:12px">${icon('message-circle', 22)}<div><b style="font-family:Manrope">From your coach</b><p style="color:#d8e6e3;margin-top:4px">${esc(P.focus)}</p></div></div></section>` : ''}
-    <section class="panel"><div class="panel-h"><div class="t">${icon('clipboard-check', 20)}<h3>Today's check-in</h3></div>${c.day ? pill('good', 'Saved') : ''}</div>
+    ${mealCard()}
+    <section class="panel"><div class="panel-h"><div class="t">${icon('clipboard-check', 20)}<h3>Today's check-in</h3></div>${c.water != null || c.steps != null ? pill('good', 'Saved') : ''}</div>
       <form data-f>
         <div class="habit"><span class="hic">${icon('droplet', 20)}</span><div><b>Water</b><div class="small muted">Target ${P.water_target} glasses</div></div><div class="stepper" data-k="water" data-step="1" data-min="0" data-max="30"><button type="button" data-d="-1" aria-label="Less">−</button><output>${v.water}</output><button type="button" data-d="1" aria-label="More">+</button></div></div>
         <div class="habit"><span class="hic">${icon('footprints', 20)}</span><div><b>Steps</b><div class="small muted">Target ${P.steps_target.toLocaleString('en-IN')}</div></div><input class="in" name="steps" type="number" inputmode="numeric" min="0" max="60000" step="100" value="${c.steps ?? ''}" placeholder="0" style="width:110px;text-align:right"></div>
         <div class="habit"><span class="hic">${icon('moon', 20)}</span><div><b>Sleep last night</b><div class="small muted">Target ${P.sleep_target} hours</div></div><div class="stepper" data-k="sleep" data-step="0.5" data-min="0" data-max="16"><button type="button" data-d="-1" aria-label="Less">−</button><output>${v.sleep}</output><button type="button" data-d="1" aria-label="More">+</button></div></div>
-        <div class="habit"><span class="hic">${icon('utensils', 20)}</span><div><b>Meals on plan</b><div class="small muted">Out of 4 today</div></div><div class="stepper" data-k="meals" data-step="1" data-min="0" data-max="4"><button type="button" data-d="-1" aria-label="Less">−</button><output>${v.meals}</output><button type="button" data-d="1" aria-label="More">+</button></div></div>
+        <div class="habit"><span class="hic">${icon('utensils', 20)}</span><div><b>Meals on plan</b><div class="small muted">${todayMeals().length ? 'From your meal log above' : 'Out of 4 today'}</div></div><div class="stepper${todayMeals().length ? ' locked' : ''}" data-k="meals" data-step="1" data-min="0" data-max="4"><button type="button" data-d="-1" aria-label="Less">−</button><output>${v.meals}</output><button type="button" data-d="1" aria-label="More">+</button></div></div>
         <div class="habit" style="grid-template-columns:auto minmax(0,1fr)"><span class="hic">${icon('battery-charging', 20)}</span><div><b>Energy today</b><div class="energy" style="margin-top:8px">${[1, 2, 3, 4, 5].map(n => `<button type="button" data-e="${n}" class="${v.energy === n ? 'on' : ''}" aria-label="Energy ${n} of 5">${n}</button>`).join('')}</div></div></div>
         <div style="margin-top:12px">${field('Anything to tell your coach?', inp('note', c.note || '', 'maxlength="300" placeholder="Optional"'))}</div>
         <button class="btn" data-save style="width:100%;height:46px;margin-top:14px">${icon('check', 18)}Save check-in</button></form></section>
     ${week.length ? `<section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>This week</h3></div><span class="small muted">${week.length} of 7 days logged</span></div>
       <div class="metrics">${[['Water', 'water', ' gl'], ['Steps', 'steps', ''], ['Sleep', 'sleep', ' h'], ['Meals', 'meals', '/4']].map(([l, k, u]) => { const a = DATA.insights.metrics.habits[k]; return `<div class="metric"><div class="l">${l}</div><div class="v">${a == null ? '—' : k === 'steps' ? Math.round(a).toLocaleString('en-IN') : Math.round(a * 10) / 10}<small>${a == null ? '' : u}</small></div><span class="small faint">daily average</span></div>`; }).join('')}</div></section>` : ''}
     <section class="panel">${dietView(P.diet, P.kcal_target ? { kcal: P.kcal_target, protein: P.protein_g, carbs: P.carbs_g, fat: P.fat_g, fibre: P.fibre_g, protein_per_meal: Math.round((P.protein_g || 0) / 4) } : null)}</section>`;
+  wireMeals();
   const f = BODY.querySelector('[data-f]');
   f.addEventListener('click', e => {
     const b = e.target.closest('[data-d]');
@@ -166,7 +183,72 @@ function plan() {
   f.addEventListener('submit', e => e.preventDefault());
   const save = f.querySelector('[data-save]');
   save.addEventListener('click', () => busy(save, () => api('/client/checkins', { method: 'POST', body: { day: today(), water: v.water, sleep: v.sleep, meals: v.meals, energy: v.energy || null, steps: f.steps.value, note: f.note.value } }))
-    .then(() => { toast('Check-in saved'); refresh(); }).catch(() => {}));
+    .then(() => soft()).catch(() => {}));
+}
+
+/* ---------- Hasta Quest ---------- */
+const RAG = { green: ['#2f7d58', 'On track'], amber: ['#c48a1b', 'Watch'], red: ['#c0453a', 'Act now'], grey: ['#9aa5a4', 'Start'] };
+function questCard() {
+  const g = DATA.game; if (!g) return '';
+  return `<a href="#/quest" class="panel quest" style="text-decoration:none;color:inherit;display:block">
+    <div style="display:flex;gap:14px;align-items:center"><div class="lvl">${g.level.n}</div>
+      <div style="flex:1;min-width:0"><b style="font-family:Manrope;font-size:17px">${esc(g.level.name)}</b><span class="small muted"> · ${g.xp.toLocaleString('en-IN')} XP</span>
+        <div class="xpbar"><i style="width:${g.level.pct}%"></i></div>
+        <span class="small muted">${g.level.next ? `${(g.level.to - g.xp).toLocaleString('en-IN')} XP to ${esc(g.level.next)}` : 'Top level reached!'} · +${g.week_xp} XP this week</span></div></div>
+    <div class="streaks"><div>${icon('flame', 20)}<b>${g.streak}</b><span>day streak</span></div><div>${icon('zap', 20)}<b>${g.session_streak}</b><span>week rhythm</span></div><div>${icon('trophy', 20)}<b>${g.earned}</b><span>badges</span></div></div></a>`;
+}
+function goalBoard(staff) {
+  const r = DATA.game && DATA.game.rag; if (!r) return '';
+  return `<section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>My goal board</h3></div><span class="ragpill" style="--c:${RAG[r.overall][0]}">${RAG[r.overall][1]}</span></div>
+    <div class="ragrid">${r.items.map(x => `<div class="rag" style="--c:${RAG[x.status][0]}"><span class="dot"></span><div><b>${esc(x.label)}</b><span class="v">${esc(x.value)}</span><small>${esc(x.tip)}</small></div></div>`).join('')}</div></section>`;
+}
+function questList(compact) {
+  const g = DATA.game; if (!g) return '';
+  const days = 7 - ((new Date(Date.now() + 330 * 60000).getUTCDay() + 6) % 7) - 1;
+  return `<section class="panel"><div class="panel-h"><div class="t">${icon('trophy', 20)}<h3>This week's quests</h3></div><span class="small muted">${days ? `${days} day${days > 1 ? 's' : ''} left` : 'last day'}</span></div>
+    ${g.quests.map(q => `<div class="qrow${q.done ? ' done' : ''}"><span class="hic">${icon(q.done ? 'check-circle' : q.icon, 18)}</span><div style="flex:1"><b>${esc(q.label)}</b><div class="xpbar sm"><i style="width:${q.pct}%"></i></div></div><span class="small"><b>${Math.min(q.have, q.need)}/${q.need}</b><br><span class="muted">+${q.xp} XP</span></span></div>`).join('')}
+    ${compact ? '<a class="btn sm quiet" href="#/quest" style="margin-top:8px">Badges and how to earn XP →</a>' : ''}</section>`;
+}
+function quest() {
+  const g = DATA.game;
+  BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>Hasta Quest</h1><p>Every healthy step earns XP</p></div></div>
+    ${questCard()}${goalBoard()}${questList(false)}
+    <section class="panel"><div class="panel-h"><div class="t">${icon('trophy', 20)}<h3>Badges</h3></div><span class="small muted">${g.earned} of ${g.badges.length}</span></div>
+      <div class="badges">${g.badges.map(b => `<div class="badge${b.on ? ' on' : ''}"><span>${icon(b.icon, 22)}</span><b>${esc(b.name)}</b><small>${b.on ? 'Earned ' + esc(fDay(b.on)) : esc(b.text)}</small></div>`).join('')}</div></section>
+    <section class="panel"><div class="panel-h"><div class="t">${icon('sparkles', 20)}<h3>How to earn XP</h3></div></div>
+      <div class="rows">${[['zap', 'Attend an EMS session', 30], ['calendar-check', '2 or more sessions in a week', 20], ['clipboard-check', 'Log your daily check-in', 10], ['salad', 'Log a meal (on plan +3 more)', 2], ['droplet', 'Hit your water, steps or sleep target', '5 each'], ['star', 'Perfect day — water, steps and 3 meals on plan', 15], ['activity', 'Weekly weigh-in at home', 15], ['ruler', 'Measurement check at the clinic', 25], ['package', 'Renew before your package runs out', 50]].map(([ic, l, n]) => `<div class="row"><span class="hic">${icon(ic, 18)}</span><div class="grow"><b>${l}</b></div><b>+${n}</b></div>`).join('')}</div>
+      <p class="small faint" style="margin-top:8px">Levels: ${['Starter', 'Mover', 'Regular', 'Committed', 'Strong', 'Champion', 'Elite', 'Legend'].join(' → ')}. Your goal board turns green when your sessions, meals, logging and weigh-ins are on track.</p></section>`;
+}
+const todayMeals = () => (DATA.meal_logs || []).filter(m => m.day === today());
+const MEAL_LIST = [['breakfast', 'Breakfast', 'sun'], ['lunch', 'Lunch', 'utensils'], ['snack', 'Snack', 'coffee'], ['dinner', 'Dinner', 'soup']];
+const MEAL_ST = [['on', 'On plan'], ['partly', 'Partly'], ['off', 'Off plan'], ['skipped', 'Skipped']];
+function mealCard() {
+  const tm = todayMeals();
+  return `<section class="panel" data-meals><div class="panel-h"><div class="t">${icon('salad', 20)}<h3>Today's meals</h3></div><span class="small muted">${tm.filter(m => m.status === 'on').length}/4 on plan</span></div>
+    <p class="small muted" style="margin:-4px 0 8px">Tap after each meal. Honest answers help your coach help you.</p>
+    ${MEAL_LIST.map(([k, l, ic]) => { const m = tm.find(x => x.meal === k) || {}; return `<div class="mealrow"><span class="hic">${icon(ic, 18)}</span><div style="flex:1;min-width:0"><b>${l}</b>
+      <div class="mchips">${MEAL_ST.map(([s, sl]) => `<button type="button" class="mchip s-${s}${m.status === s ? ' sel' : ''}" data-meal="${k}" data-s="${s}">${sl}</button>`).join('')}</div>
+      ${m.status && m.status !== 'skipped' ? `<label class="small" style="display:flex;gap:6px;align-items:center;margin-top:6px"><input type="checkbox" data-prot="${k}" ${m.protein ? 'checked' : ''}> Had a protein food (egg, fish, chicken, dal, paneer, curd)</label>` : ''}</div></div>`; }).join('')}</section>`;
+}
+function wireMeals() {
+  const el = BODY.querySelector('[data-meals]'); if (!el) return;
+  const save = (meal, status, protein) => api('/client/meals', { method: 'POST', body: { day: today(), meal, status, protein } }).then(soft).catch(() => {});
+  el.querySelectorAll('[data-meal]').forEach(b => b.onclick = () => { const cur = todayMeals().find(x => x.meal === b.dataset.meal) || {}; b.disabled = true; save(b.dataset.meal, cur.status === b.dataset.s ? 'clear' : b.dataset.s, cur.protein); });
+  el.querySelectorAll('[data-prot]').forEach(c => c.onchange = () => { const cur = todayMeals().find(x => x.meal === c.dataset.prot) || {}; save(c.dataset.prot, cur.status, c.checked); });
+}
+function weighInCard() {
+  if (!DATA.access.measurements) return '';
+  const v = DATA.game && DATA.game.rag.items.find(x => x.key === 'vitals');
+  if (v && v.status === 'green') return '';
+  return `<section class="panel" data-weigh style="background:var(--gold-soft);border-color:transparent"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>Weekly weigh-in</h3></div><span class="small muted">+15 XP</span></div>
+    <p class="small muted" style="margin:-4px 0 10px">Morning, after the toilet, before breakfast, same scale each week.</p>
+    <div class="grid2" style="grid-template-columns:1fr 1fr">${field('Weight (kg)', inp('weight', '', 'type="number" step="0.1" inputmode="decimal"'))}${field('Waist (cm) — optional', inp('waist', '', 'type="number" step="0.1" inputmode="decimal"'))}</div>
+    <button class="btn" data-wsave style="width:100%;margin-top:10px">Save my weigh-in</button></section>`;
+}
+function wireWeighIn() {
+  const el = BODY.querySelector('[data-weigh]'); if (!el) return;
+  const b = el.querySelector('[data-wsave]');
+  b.onclick = () => busy(b, () => api('/client/weigh-in', { method: 'POST', body: { weight: el.querySelector('[name=weight]').value, waist: el.querySelector('[name=waist]').value } })).then(soft).catch(() => {});
 }
 
 /* ---------- Account ---------- */

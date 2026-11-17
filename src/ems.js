@@ -28,6 +28,7 @@ const APPT_STATUSES = ['booked', 'attended', 'no_show', 'cancelled'];
 const APPT_KINDS = ['session', 'consultation', 'review', 'wm_consult'];
 const PAY_METHODS = ['UPI', 'Cash', 'Card', 'Bank transfer'];
 const LEAD_STATUSES = ['new', 'contacted', 'booked', 'not interested'];
+import { game } from './emsgame.js';
 const DIETS = ['kerala-balanced', 'vegetarian', 'high-protein', 'low-gi', 'calorie-smart', 'fish-forward', 'eggetarian', 'veg-high-protein', 'vegan', 'healthy-gain'];
 const SCREENING = ['pacemaker', 'pregnancy', 'epilepsy', 'heart', 'surgery', 'implants', 'cancer', 'diabetes', 'bp', 'skin'];
 
@@ -182,9 +183,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=9">
+<link rel="stylesheet" href="/ems/app.css?v=10">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=12"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=13"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -266,6 +267,8 @@ async function route(request, env, url, ctx, base, p) {
     let r;
     if ((r = p.match(/^\/client\/appointments\/(\d+)\/cancel$/)) && m === 'POST') return clientCancel(env, me, +r[1]);
     if (p === '/client/checkins' && m === 'POST') return saveCheckin(env, me.id, body);
+    if (p === '/client/meals' && m === 'POST') return saveMeal(env, me.id, body);
+    if (p === '/client/weigh-in' && m === 'POST') return selfWeighIn(env, me.id, body);
     if (p === '/client/admission/screening' && m === 'PUT') { const a = await latestAdmission(env, me.id); return done(await saveScreening(env, a, body, 'client (app)')); }
     if (p === '/client/admission/sign' && m === 'POST') {
       const a = await latestAdmission(env, me.id), c = await env.DB.prepare('SELECT * FROM ems_clients WHERE id=?').bind(me.id).first();
@@ -860,6 +863,37 @@ async function saveCheckin(env, clientId, b) {
   await env.DB.prepare(`INSERT INTO ems_checkins (client_id, day, water, steps, sleep, meals, energy, note) VALUES (?,?,?,?,?,?,?,?)
     ON CONFLICT(client_id, day) DO UPDATE SET water=excluded.water, steps=excluded.steps, sleep=excluded.sleep, meals=excluded.meals, energy=excluded.energy, note=excluded.note`)
     .bind(clientId, day, v.water, v.steps, v.sleep, v.meals, v.energy, nz(clean(b.note, 300))).run();
+  // When meals are logged one by one, the count comes from those logs.
+  await env.DB.prepare(`UPDATE ems_checkins SET meals=(SELECT COUNT(*) FROM ems_meal_logs WHERE client_id=? AND day=? AND status='on')
+    WHERE client_id=? AND day=? AND EXISTS (SELECT 1 FROM ems_meal_logs WHERE client_id=? AND day=?)`).bind(clientId, day, clientId, day, clientId, day).run();
+  return api({ ok: true });
+}
+
+const MEALS = ['breakfast', 'lunch', 'snack', 'dinner'];
+async function saveMeal(env, clientId, b) {
+  if (!access(await packagesFor(env, clientId)).diet_plan) return bad('Meal logging comes with the diet and lifestyle plan.');
+  const day = isDate(b.day) && b.day <= today() && b.day >= addDays(today(), -2) ? b.day : today();
+  if (!MEALS.includes(b.meal)) return bad('Choose the meal.');
+  if (b.status === 'clear') { await env.DB.prepare('DELETE FROM ems_meal_logs WHERE client_id=? AND day=? AND meal=?').bind(clientId, day, b.meal).run(); }
+  else {
+    if (!['on', 'partly', 'off', 'skipped'].includes(b.status)) return bad('Choose how the meal went.');
+    await env.DB.prepare(`INSERT INTO ems_meal_logs (client_id, day, meal, status, protein, note) VALUES (?,?,?,?,?,?)
+      ON CONFLICT(client_id, day, meal) DO UPDATE SET status=excluded.status, protein=excluded.protein, note=excluded.note, at=strftime('%Y-%m-%dT%H:%M:%SZ','now')`)
+      .bind(clientId, day, b.meal, b.status, b.protein ? 1 : 0, nz(clean(b.note, 200))).run();
+  }
+  // Keep the check-in's "meals on plan" count in step.
+  const n = await env.DB.prepare("SELECT COUNT(*) n FROM ems_meal_logs WHERE client_id=? AND day=? AND status='on'").bind(clientId, day).first();
+  await env.DB.prepare('INSERT INTO ems_checkins (client_id, day, meals) VALUES (?,?,?) ON CONFLICT(client_id, day) DO UPDATE SET meals=excluded.meals').bind(clientId, day, n.n).run();
+  return api({ ok: true });
+}
+async function selfWeighIn(env, clientId, b) {
+  if (!access(await packagesFor(env, clientId)).measurements) return bad('Progress measurements aren\'t part of your package.');
+  const w = num(b.weight, 25, 300), waist = num(b.waist, 40, 250);
+  if (w === undefined || waist === undefined || (w == null && waist == null)) return bad('Enter your weight in kg (and waist in cm if you measured it).');
+  const last = await env.DB.prepare('SELECT weight FROM ems_measurements WHERE client_id=? AND weight IS NOT NULL ORDER BY measured_on DESC, id DESC LIMIT 1').bind(clientId).first();
+  if (w != null && last && Math.abs(w - last.weight) > 8) return bad(`That is ${Math.abs(r1(w - last.weight))} kg from your last weight — please check the number.`);
+  await env.DB.prepare('DELETE FROM ems_measurements WHERE client_id=? AND measured_on=? AND self=1').bind(clientId, today()).run();
+  await env.DB.prepare('INSERT INTO ems_measurements (client_id, measured_on, weight, waist, notes, self) VALUES (?,?,?,?,?,1)').bind(clientId, today(), w, waist, 'Weighed at home').run();
   return api({ ok: true });
 }
 
@@ -874,8 +908,9 @@ async function clientView(env, id, staff) {
     env.DB.prepare('SELECT * FROM ems_measurements WHERE client_id=? ORDER BY measured_on, id').bind(id).all(),
     env.DB.prepare('SELECT p.*, cp.name package_name FROM ems_receipts p LEFT JOIN ems_client_packages cp ON cp.id=p.client_package_id WHERE p.client_id=? ORDER BY p.paid_on DESC, p.id DESC').bind(id).all(),
     env.DB.prepare('SELECT * FROM ems_plans WHERE client_id=?').bind(id).first(),
-    env.DB.prepare('SELECT * FROM ems_checkins WHERE client_id=? AND day >= ? ORDER BY day DESC').bind(id, addDays(today(), -60)).all(),
+    env.DB.prepare('SELECT * FROM ems_checkins WHERE client_id=? AND day >= ? ORDER BY day DESC').bind(id, addDays(today(), -365)).all(),
   ]);
+  const { results: mealLogs } = await env.DB.prepare('SELECT day, meal, status, protein, note FROM ems_meal_logs WHERE client_id=? AND day >= ? ORDER BY day').bind(id, addDays(today(), -365)).all();
   const client = { ...c, screening: safeJson(c.screening) };
   delete client.pin_hash;
   const coach = c.coach_id ? await env.DB.prepare('SELECT name FROM ems_staff WHERE id=?').bind(c.coach_id).first() : null;
@@ -891,6 +926,8 @@ async function clientView(env, id, staff) {
   data.screen_questions = SCREEN_QS;
   data.access = access(pkgs);
   data.insights = insights(data, staff);
+  data.meal_logs = mealLogs || [];
+  data.game = game(data);
   if (!staff) {
     delete client.staff_notes; delete client.screening; delete client.lead_id;
     data.appointments = data.appointments.map(({ staff_id, notes, device_id, ...a }) => a);

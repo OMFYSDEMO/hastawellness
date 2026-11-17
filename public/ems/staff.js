@@ -424,6 +424,18 @@ function metricStrip(d) {
   return `<div class="metrics">${m('Weight', 'weight', 'kg')}${m('Waist', 'waist', 'cm')}${m('Hips', 'hips', 'cm')}${m('Body fat', 'body_fat', '%')}</div>`;
 }
 
+const RAGC = { green: ['#2f7d58', 'On track'], amber: ['#c48a1b', 'Watch'], red: ['#c0453a', 'Act now'], grey: ['#9aa5a4', 'No data'] };
+// The client's game and goal board, as they see it — red items are what to chase this week.
+function questPanel(d) {
+  const g = d.game; if (!g) return '';
+  const r = g.rag;
+  return `<section class="panel"><div class="panel-h"><div class="t">${icon('trophy', 20)}<h3>Hasta Quest</h3></div><span class="ragpill" style="--c:${RAGC[r.overall][0]}">${RAGC[r.overall][1]}</span></div>
+    <div style="display:flex;gap:12px;align-items:center"><div class="lvl">${g.level.n}</div><div style="flex:1"><b>${esc(g.level.name)}</b> <span class="small muted">· ${g.xp.toLocaleString('en-IN')} XP · +${g.week_xp} this week</span><div class="xpbar"><i style="width:${g.level.pct}%"></i></div>
+      <span class="small muted">${icon('flame', 13)} ${g.streak}-day logging streak · ${g.session_streak}-week session rhythm · ${g.earned} badges</span></div></div>
+    <div style="margin-top:12px">${r.items.map(x => `<div style="display:flex;gap:10px;align-items:flex-start;padding:7px 0;border-top:1px solid var(--line-soft)"><span style="width:10px;height:10px;border-radius:50%;background:${RAGC[x.status][0]};margin-top:5px;flex:none"></span><div style="flex:1"><b class="small">${esc(x.label)}</b> <span class="small" style="color:${RAGC[x.status][0]};font-weight:700">${esc(x.value)}</span><div class="small muted">${esc(x.tip)}</div></div></div>`).join('')}</div>
+    <p class="small faint" style="margin-top:6px">Quests this week: ${g.quests.map(q => `${esc(q.label.replace(/^(Do|Log|Hit|Weigh) /, m => m))} ${Math.min(q.have, q.need)}/${q.need}`).join(' · ')}</p></section>`;
+}
+
 function tabOverview(el, d, after) {
   const M = d.insights.metrics;
   const upcoming = d.appointments.filter(a => a.status === 'booked' && a.start_at >= nowLocal()).reverse();
@@ -432,6 +444,7 @@ function tabOverview(el, d, after) {
         <div class="panel-h" style="margin-top:18px"><div class="t">${icon('line-chart', 20)}<h3>Weight</h3></div>${M.weeklyRate != null ? `<span class="small muted">${M.weeklyRate > 0 ? '+' : ''}${M.weeklyRate} kg / week lately</span>` : ''}</div><div data-w></div>
         <div class="panel-h" style="margin-top:18px"><div class="t">${icon('ruler', 20)}<h3>Waist and hips</h3></div>${M.whr ? `<span class="small ${M.whr.ok ? 'muted' : ''}" style="${M.whr.ok ? '' : 'color:var(--warn)'}">Waist-to-hip ${M.whr.value} (aim ≤ ${M.whr.limit})</span>` : ''}</div><div data-wh></div></section>
     </div><div class="stack">
+      ${questPanel(d)}
       ${clinicPanel(d)}
       <section class="panel"><div class="panel-h"><div class="t">${icon('flame', 20)}<h3>Momentum score</h3></div></div>
         <div class="score"><b>${M.score}</b><div class="meter"><i style="width:${M.score}%"></i></div></div>
