@@ -18,7 +18,7 @@ async function team(fresh = false) { if (!TEAM || fresh) TEAM = (await api('/sta
 const coachOptions = (list, value) => [['', 'Not allocated']].concat(list.map(t => [t.id, t.name + (t.role === 'admin' ? ' (admin)' : '')]));
 const NAV = [
   ['', 'layout-dashboard', 'Dashboard'], ['schedule', 'calendar-days', 'Schedule'], ['clients', 'users', 'Clients'],
-  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['payments', 'wallet', 'Payments'], ['academy', 'graduation-cap', 'Academy'],
+  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['payments', 'wallet', 'Payments'], ['quest', 'trophy', 'Quest demo'], ['academy', 'graduation-cap', 'Academy'],
 ];
 
 export function mount(app, me) {
@@ -75,6 +75,7 @@ async function route() {
     else if (top === 'payments') await viewPayments(q);
     else if (top === 'rota') await viewRota();
     else if (top === 'settings') await viewSettings();
+    else if (top === 'quest') await viewQuestDemo();
     else if (top === 'academy') await viewAcademy(MAIN, ME, MACHINES, q.get('tab') || 'overview', go);
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
   } catch (e) { MAIN.innerHTML = `<div class="panel"><p class="err">${esc(e.message)}</p></div>`; }
@@ -1217,4 +1218,65 @@ async function renderCerts(el, tm) {
     onMount(m, close) { const b = m.querySelector('[data-save]'); b.addEventListener('click', () => busy(b, () => api('/staff/certifications', { method: 'POST', body: formData(m.querySelector('[data-f]')) })).then(() => { close(); toast('Certificate issued'); renderCerts(el, tm); }).catch(() => {})); },
   }));
   el.querySelectorAll('[data-revoke]').forEach(b => b.addEventListener('click', () => { const reason = prompt('Reason for revoking this certificate?'); if (reason === null) return; busy(b, () => api(`/staff/certifications/${b.dataset.revoke}/revoke`, { method: 'POST', body: { reason } })).then(() => { toast('Certificate revoked'); renderCerts(el, tm); }).catch(() => {}); }));
+}
+
+/* ================= Quest demo (for coaches to show clients) ================= */
+const QSTEPS = [
+  { view: 'home', hl: '.quest', title: 'Your progress is a game', say: ['Everything healthy you do earns XP — points.', 'XP builds your level: Starter → Mover → Regular → Committed → Strong → Champion → Elite → Legend.', 'The bar shows how close you are to the next level.'] },
+  { view: 'quest', hl: '[data-earn]', title: 'How to earn XP', say: ['A session is worth the most: +30.', 'Two sessions in a week: +20 bonus — that rhythm is what makes EMS work.', 'Daily check-in +10, each meal logged +2 (+3 more if on plan), water / steps / sleep target +5 each, a weekly weigh-in +15.'] },
+  { view: 'home', hl: '.streaks', title: 'Streaks', say: ['Day streak: how many days in a row you logged your day. Miss a day and it starts again.', 'Week rhythm: weeks in a row with 2 or more sessions.', 'Badges: milestones you have unlocked.'] },
+  { view: 'home', hl: '[data-board]', title: 'Your goal board — Red, Amber, Green', say: ['Each part of your goal gets a colour: weight progress, sessions, package, meals, check-ins and weigh-ins.', 'Green = on track. Amber = watch it. Red = act now — and it tells you exactly what to do.', 'Try the buttons at the top: "Slipping" and "Off track" show how the board changes.'] },
+  { view: 'home', hl: '[data-quests]', title: 'Weekly quests', say: ['Five small goals every week — they reset each Monday.', 'Do 2 sessions, log 5 days, 15 meals on plan, hit water 5 days, weigh in once.', 'Each quest pays extra XP when it is done.'] },
+  { view: 'meals', hl: '[data-meals]', title: 'Log your meals — try it', say: ['After each meal, tap: On plan, Partly, Off plan or Skipped.', 'Honest answers are what count — "Off plan" is fine; it helps your coach help you.', 'Tap a few now and watch the XP pop up.'], interactive: true },
+  { view: 'home', hl: '[data-weigh]', title: 'Weekly weigh-in at home', profile: 'amber', say: ['Once a week: morning, after the toilet, before breakfast, same scale.', 'When it is due, this card appears on your home screen.', 'Type a weight and save — +15 XP.'], interactive: true },
+  { view: 'quest', hl: '.badges', title: 'Badges and level-ups', say: ['17 badges: first session, 10 / 25 / 50 sessions, 7- and 30-day streaks, Hydration hero, First kilo, Inches off, Never miss a beat (renewing on time) and more.', 'Grey ones are still to unlock.', 'When you reach a new level you get a celebration screen.'] },
+  { view: 'home', hl: '[data-board]', title: 'Your coach sees it too', say: ['I see the same goal board on my screen, so we talk about what is red at each session.', 'No one else sees your data. Nothing here is about being perfect — it is about showing up.', 'Let\'s set up your app now: your mobile number and the 6-digit PIN.'] },
+];
+async function viewQuestDemo() {
+  const C = await import('./client.js?v=11');
+  let step = 0, profile = 'green', view = 'home', extra = { meals: [] }, data = null, forced = false;
+  MAIN.innerHTML = `<div class="head"><div><h1>Hasta Quest — client demo</h1><p>Walk a client through how the game works. This is a sample client; nothing is saved.</p></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap"><div class="seg" data-prof>${[['green', 'On track'], ['amber', 'Slipping'], ['red', 'Off track']].map(([k, l]) => `<button data-p="${k}">${l}</button>`).join('')}</div><button class="btn ghost" data-reset>${icon('refresh-cw', 16)}Reset</button></div></div>
+    <div class="qdemo"><section class="panel qsteps"><div data-step></div>
+        <div style="display:flex;gap:8px;margin-top:16px"><button class="btn ghost" data-back>${icon('chevron-left', 16)}Back</button><button class="btn" data-next>Next${icon('chevron-right', 16)}</button></div>
+        <div class="qdots" data-dots></div>
+        <div class="seg" style="margin-top:16px" data-views>${[['home', 'Home'], ['meals', 'Meals'], ['quest', 'Badges & XP']].map(([k, l]) => `<button data-v="${k}">${l}</button>`).join('')}</div>
+        <p class="small faint" style="margin-top:8px">Tap anything in the phone — it works like the real app.</p></section>
+      <div class="phone"><div class="phone-notch"></div><div class="capp"><main class="cbody" data-screen></main></div></div></div>`;
+  const screen = MAIN.querySelector('[data-screen]');
+  const load = async (before) => {
+    data = await api('/staff/quest-demo', { method: 'POST', body: { profile, extra } });
+    draw(before);
+  };
+  const draw = (before) => {
+    C.renderDemo(screen, data, view, {
+      meal: (meal, status, protein) => { const b = snap(); extra.meals = extra.meals.filter(m => m.meal !== meal); if (status !== 'clear') extra.meals.push({ meal, status, protein }); load(b); },
+      weigh: kg => { if (!(+kg > 25)) return toast('Type a weight first', true); const b = snap(); extra.weigh = +kg; load(b); },
+      nav: v => { view = v; draw(); },
+    }, before);
+    MAIN.querySelectorAll('[data-v]').forEach(b => b.classList.toggle('on', b.dataset.v === view));
+    MAIN.querySelectorAll('[data-p]').forEach(b => b.classList.toggle('on', b.dataset.p === profile));
+    const hl = QSTEPS[step].hl && screen.querySelector(QSTEPS[step].hl);
+    screen.querySelectorAll('.demo-hl').forEach(x => x.classList.remove('demo-hl'));
+    if (hl) { hl.classList.add('demo-hl'); const top = hl.offsetTop - 12; screen.parentElement.scrollTo({ top, behavior: 'smooth' }); }
+  };
+  const snap = () => data && data.game ? { xp: data.game.xp, lvl: data.game.level.n, badges: data.game.earned } : null;
+  const show = async () => {
+    const S = QSTEPS[step];
+    MAIN.querySelector('[data-step]').innerHTML = `<span class="small muted">Step ${step + 1} of ${QSTEPS.length}</span><h2 style="margin:6px 0 10px">${esc(S.title)}</h2>
+      <ul class="dots">${S.say.map(x => `<li>${esc(x)}</li>`).join('')}</ul>${S.interactive ? `<p class="note" style="margin-top:10px">${icon('zap', 16)} Let the client try this on the phone screen.</p>` : ''}`;
+    MAIN.querySelector('[data-dots]').innerHTML = QSTEPS.map((_, i) => `<i class="${i === step ? 'on' : ''}" data-go="${i}"></i>`).join('');
+    MAIN.querySelectorAll('[data-go]').forEach(d => d.onclick = () => { step = +d.dataset.go; show(); });
+    MAIN.querySelector('[data-back]').disabled = step === 0;
+    MAIN.querySelector('[data-next]').innerHTML = step === QSTEPS.length - 1 ? `Finish${icon('check', 16)}` : `Next${icon('chevron-right', 16)}`;
+    view = S.view;
+    const want = S.profile || (forced ? 'green' : profile); forced = !!S.profile;
+    if (want !== profile || !data) { profile = want; await load(); } else draw();
+  };
+  MAIN.querySelector('[data-next]').onclick = () => { if (step < QSTEPS.length - 1) { step++; show(); } else { step = 0; extra = { meals: [] }; profile = 'green'; data = null; show(); toast('Demo finished — ready for the next client'); } };
+  MAIN.querySelector('[data-back]').onclick = () => { if (step) { step--; show(); } };
+  MAIN.querySelectorAll('[data-p]').forEach(b => b.onclick = () => { profile = b.dataset.p; extra = { meals: [] }; load(); });
+  MAIN.querySelectorAll('[data-v]').forEach(b => b.onclick = () => { view = b.dataset.v; draw(); });
+  MAIN.querySelector('[data-reset]').onclick = () => { extra = { meals: [] }; load(); };
+  await show();
 }

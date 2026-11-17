@@ -162,8 +162,35 @@ export function goalBoard(d, { attended, checks, meals, meas }) {
   if (acc.measurements) {
     const lw = [...meas].reverse().find(m => m.weight != null);
     const age = lw ? days(lw.measured_on, t) : null;
-    add('vitals', 'Weigh-in', age == null ? 'red' : age <= 7 ? 'green' : age <= 14 ? 'amber' : 'red', age == null ? 'Never' : age === 0 ? 'Today' : `${age} days ago`, age != null && age <= 7 ? 'Up to date.' : 'Weigh in this week — same scale, morning, before breakfast.');
+    add('vitals', 'Weigh-in', age == null ? 'red' : age <= 7 ? 'green' : age <= 14 ? 'amber' : 'red', age == null ? 'Never' : age === 0 ? 'Today' : age === 1 ? 'Yesterday' : `${age} days ago`, age != null && age <= 7 ? 'Up to date.' : 'Weigh in this week — same scale, morning, before breakfast.');
   }
   const reds = out.filter(x => x.status === 'red').length, ambers = out.filter(x => x.status === 'amber').length;
   return { overall: reds >= 2 ? 'red' : reds || ambers >= 2 ? 'amber' : 'green', items: out };
+}
+
+// Sample client for the coach's demo screen — dates are relative to today so the game always looks live.
+// profile: green (on track) | amber (slipping) | red (off track). extra: {meals:[{meal,status,protein}], weigh: kg}
+export function demoData(profile = 'green', extra = {}) {
+  const t = today(), D = n => addDays(t, -n);
+  const P = { green: { sessDays: [1, 4, 8, 11, 15, 18, 22, 25, 29, 32, 36, 39], logDays: 21, mealsOn: 3, water: 10, weights: [[42, 74.5], [35, 74.0], [28, 73.3], [21, 72.8], [14, 72.1], [7, 71.6], [1, 71.0]] },
+    amber: { sessDays: [6, 13, 15, 22, 27, 34], logDays: 4, mealsOn: 2, water: 7, weights: [[42, 74.5], [28, 74.0], [14, 73.9], [9, 73.9]] },
+    red: { sessDays: [19, 26, 33, 40], logDays: 1, mealsOn: 1, water: 5, weights: [[42, 74.5], [30, 74.2], [20, 74.8]] } }[profile] || {};
+  const appts = P.sessDays.map((n, i) => ({ id: i + 1, kind: 'session', status: 'attended', start_at: D(n) + 'T10:00' }));
+  if (profile !== 'red') appts.push({ id: 99, kind: 'session', status: 'booked', start_at: addDays(t, 2) + 'T10:00' });
+  const checkins = [], meals = [];
+  for (let n = 0; n < 30; n++) {
+    const on = profile === 'green' ? n < P.logDays : profile === 'amber' ? [1, 3, 5, 8, 12, 15].includes(n) : [10].includes(n);
+    if (!on || n === 0) continue;
+    checkins.push({ day: D(n), water: P.water + (n % 3 === 0 ? 1 : 0), steps: profile === 'green' ? 7500 + (n % 4) * 400 : 5200, sleep: profile === 'red' ? 6 : 7, meals: P.mealsOn, energy: 4 });
+    ['breakfast', 'lunch', 'snack', 'dinner'].forEach((m, i) => meals.push({ day: D(n), meal: m, status: i < P.mealsOn ? 'on' : i === P.mealsOn ? 'partly' : 'off', protein: i < 2 ? 1 : 0 }));
+  }
+  for (const m of extra.meals || []) if (['breakfast', 'lunch', 'snack', 'dinner'].includes(m.meal) && ['on', 'partly', 'off', 'skipped'].includes(m.status)) meals.push({ day: t, meal: m.meal, status: m.status, protein: m.protein ? 1 : 0 });
+  if (extra.checkin) checkins.push({ day: t, water: 10, steps: 8000, sleep: 7, meals: meals.filter(m => m.day === t && m.status === 'on').length, energy: 4 });
+  const measurements = P.weights.map(([n, w], i) => ({ id: i + 1, measured_on: D(n), weight: w, waist: i === 0 ? 92 : null, self: i % 2 ? 1 : 0 }));
+  if (profile === 'green') measurements.push({ id: 50, measured_on: D(3), weight: null, waist: 87.5, self: 0 });
+  if (extra.weigh) measurements.push({ id: 60, measured_on: t, weight: +extra.weigh, self: 1 });
+  const used = P.sessDays.length;
+  const packages = [{ id: 1, name: 'EMS 24 sessions', state: 'active', start_date: D(45), expiry_date: addDays(t, profile === 'red' ? 20 : profile === 'amber' ? 90 : 45), sessions_total: 24, used, remaining: 24 - used, available: 24 - used - (profile !== 'red' ? 1 : 0), balance: profile === 'red' ? 5000 : 0 }];
+  return { client: { id: 0, name: 'Anjali (sample)', gender: 'female', birth_year: 1992, height_cm: 160, target_weight: 66 }, plan: { water_target: 10, steps_target: 7000, sleep_target: 7 },
+    appointments: appts, checkins, meal_logs: meals, measurements, packages, payments: [], access: { diet_plan: true, measurements: true } };
 }

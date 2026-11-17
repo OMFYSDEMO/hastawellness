@@ -28,7 +28,7 @@ const APPT_STATUSES = ['booked', 'attended', 'no_show', 'cancelled'];
 const APPT_KINDS = ['session', 'consultation', 'review', 'wm_consult'];
 const PAY_METHODS = ['UPI', 'Cash', 'Card', 'Bank transfer'];
 const LEAD_STATUSES = ['new', 'contacted', 'booked', 'not interested'];
-import { game } from './emsgame.js';
+import { game, demoData } from './emsgame.js';
 const DIETS = ['kerala-balanced', 'vegetarian', 'high-protein', 'low-gi', 'calorie-smart', 'fish-forward', 'eggetarian', 'veg-high-protein', 'vegan', 'healthy-gain'];
 const SCREENING = ['pacemaker', 'pregnancy', 'epilepsy', 'heart', 'surgery', 'implants', 'cancer', 'diabetes', 'bp', 'skin'];
 
@@ -183,9 +183,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=10">
+<link rel="stylesheet" href="/ems/app.css?v=11">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=13"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=14"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -327,6 +327,8 @@ async function route(request, env, url, ctx, base, p) {
     return api({ ok: true, from, to, rows: await settlement(env, from, to) });
   }
   if (p === '/staff/dashboard' && m === 'GET') return api({ ok: true, ...(await dashboard(env, sc, admin)) });
+  // Coach's demo of the client game: a sample client, recomputed with whatever the coach taps in the demo.
+  if (p === '/staff/quest-demo' && m === 'POST') { const d = demoData(body.profile, body.extra || {}); d.insights = insights(d, false); d.game = game(d); return api({ ok: true, ...d }); }
   if (p === '/staff/clients' && m === 'GET') return listClients(env, url, sc);
   if (p === '/staff/clients' && m === 'POST') return createClient(env, me, body, sc);
   if ((r = p.match(/^\/staff\/clients\/(\d+)/)) && !scope.all) {

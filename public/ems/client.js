@@ -5,7 +5,7 @@ import {
   toIn, cmIn } from './core.js?v=9';
 import { bodyComp, latestMerged } from './body.js?v=1';
 
-let ME, APP, BODY, DATA;
+let ME, APP, BODY, DATA, DEMO = null;
 const TABS = [['', 'home', 'Home'], ['progress', 'line-chart', 'Progress'], ['book', 'calendar-plus', 'Book', true], ['plan', 'salad', 'My plan'], ['account', 'user', 'Account']];
 
 export function mount(app, me) {
@@ -199,13 +199,13 @@ function questCard() {
 }
 function goalBoard(staff) {
   const r = DATA.game && DATA.game.rag; if (!r) return '';
-  return `<section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>My goal board</h3></div><span class="ragpill" style="--c:${RAG[r.overall][0]}">${RAG[r.overall][1]}</span></div>
+  return `<section class="panel" data-board><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>My goal board</h3></div><span class="ragpill" style="--c:${RAG[r.overall][0]}">${RAG[r.overall][1]}</span></div>
     <div class="ragrid">${r.items.map(x => `<div class="rag" style="--c:${RAG[x.status][0]}"><span class="dot"></span><div><b>${esc(x.label)}</b><span class="v">${esc(x.value)}</span><small>${esc(x.tip)}</small></div></div>`).join('')}</div></section>`;
 }
 function questList(compact) {
   const g = DATA.game; if (!g) return '';
   const days = 7 - ((new Date(Date.now() + 330 * 60000).getUTCDay() + 6) % 7) - 1;
-  return `<section class="panel"><div class="panel-h"><div class="t">${icon('trophy', 20)}<h3>This week's quests</h3></div><span class="small muted">${days ? `${days} day${days > 1 ? 's' : ''} left` : 'last day'}</span></div>
+  return `<section class="panel" data-quests><div class="panel-h"><div class="t">${icon('trophy', 20)}<h3>This week's quests</h3></div><span class="small muted">${days ? `${days} day${days > 1 ? 's' : ''} left` : 'last day'}</span></div>
     ${g.quests.map(q => `<div class="qrow${q.done ? ' done' : ''}"><span class="hic">${icon(q.done ? 'check-circle' : q.icon, 18)}</span><div style="flex:1"><b>${esc(q.label)}</b><div class="xpbar sm"><i style="width:${q.pct}%"></i></div></div><span class="small"><b>${Math.min(q.have, q.need)}/${q.need}</b><br><span class="muted">+${q.xp} XP</span></span></div>`).join('')}
     ${compact ? '<a class="btn sm quiet" href="#/quest" style="margin-top:8px">Badges and how to earn XP →</a>' : ''}</section>`;
 }
@@ -215,7 +215,7 @@ function quest() {
     ${questCard()}${goalBoard()}${questList(false)}
     <section class="panel"><div class="panel-h"><div class="t">${icon('trophy', 20)}<h3>Badges</h3></div><span class="small muted">${g.earned} of ${g.badges.length}</span></div>
       <div class="badges">${g.badges.map(b => `<div class="badge${b.on ? ' on' : ''}"><span>${icon(b.icon, 22)}</span><b>${esc(b.name)}</b><small>${b.on ? 'Earned ' + esc(fDay(b.on)) : esc(b.text)}</small></div>`).join('')}</div></section>
-    <section class="panel"><div class="panel-h"><div class="t">${icon('sparkles', 20)}<h3>How to earn XP</h3></div></div>
+    <section class="panel" data-earn><div class="panel-h"><div class="t">${icon('sparkles', 20)}<h3>How to earn XP</h3></div></div>
       <div class="rows">${[['zap', 'Attend an EMS session', 30], ['calendar-check', '2 or more sessions in a week', 20], ['clipboard-check', 'Log your daily check-in', 10], ['salad', 'Log a meal (on plan +3 more)', 2], ['droplet', 'Hit your water, steps or sleep target', '5 each'], ['star', 'Perfect day — water, steps and 3 meals on plan', 15], ['activity', 'Weekly weigh-in at home', 15], ['ruler', 'Measurement check at the clinic', 25], ['package', 'Renew before your package runs out', 50]].map(([ic, l, n]) => `<div class="row"><span class="hic">${icon(ic, 18)}</span><div class="grow"><b>${l}</b></div><b>+${n}</b></div>`).join('')}</div>
       <p class="small faint" style="margin-top:8px">Levels: ${['Starter', 'Mover', 'Regular', 'Committed', 'Strong', 'Champion', 'Elite', 'Legend'].join(' → ')}. Your goal board turns green when your sessions, meals, logging and weigh-ins are on track.</p></section>`;
 }
@@ -232,7 +232,7 @@ function mealCard() {
 }
 function wireMeals() {
   const el = BODY.querySelector('[data-meals]'); if (!el) return;
-  const save = (meal, status, protein) => api('/client/meals', { method: 'POST', body: { day: today(), meal, status, protein } }).then(soft).catch(() => {});
+  const save = (meal, status, protein) => DEMO ? DEMO.meal(meal, status, protein) : api('/client/meals', { method: 'POST', body: { day: today(), meal, status, protein } }).then(soft).catch(() => {});
   el.querySelectorAll('[data-meal]').forEach(b => b.onclick = () => { const cur = todayMeals().find(x => x.meal === b.dataset.meal) || {}; b.disabled = true; save(b.dataset.meal, cur.status === b.dataset.s ? 'clear' : b.dataset.s, cur.protein); });
   el.querySelectorAll('[data-prot]').forEach(c => c.onchange = () => { const cur = todayMeals().find(x => x.meal === c.dataset.prot) || {}; save(c.dataset.prot, cur.status, c.checked); });
 }
@@ -248,6 +248,7 @@ function weighInCard() {
 function wireWeighIn() {
   const el = BODY.querySelector('[data-weigh]'); if (!el) return;
   const b = el.querySelector('[data-wsave]');
+  if (DEMO) { b.onclick = () => DEMO.weigh(el.querySelector('[name=weight]').value); return; }
   b.onclick = () => busy(b, () => api('/client/weigh-in', { method: 'POST', body: { weight: el.querySelector('[name=weight]').value, waist: el.querySelector('[name=waist]').value } })).then(soft).catch(() => {});
 }
 
@@ -336,4 +337,15 @@ function admission() {
         .then(() => { toast('Consent signed — welcome to your programme!'); refresh(); }).catch(() => {});
     });
   }
+}
+
+// The coach's demo screen (staff app) draws the same client screens from sample data.
+// view: home | meals | quest. hooks: { meal(meal, status, protein), weigh(kg), nav(view) }
+export function renderDemo(el, data, view, hooks, before) {
+  DEMO = hooks; DATA = data; BODY = el; ME = ME || { name: data.client.name };
+  if (view === 'quest') quest();
+  else if (view === 'meals') { el.innerHTML = mealCard(); wireMeals(); }
+  else { el.innerHTML = `<section class="hero" style="padding:18px 18px 14px"><p class="hi">Good evening</p><h1>${esc(first(data.client.name))}</h1></section>${questCard()}${weighInCard()}${goalBoard()}${questList(true)}`; wireWeighIn(); }
+  el.querySelectorAll('a[href^="#/"]').forEach(a => a.addEventListener('click', e => { e.preventDefault(); hooks.nav(a.getAttribute('href').includes('quest') ? 'quest' : a.getAttribute('href').includes('plan') ? 'meals' : 'home'); }));
+  if (before) celebrate(before, data.game);
 }
