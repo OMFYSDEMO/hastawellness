@@ -313,13 +313,93 @@ export const DIETS = {
     ],
     swaps: ['White rice → smaller portion of matta rice or broken wheat', 'Banana, mango, jackfruit → small portions, with a meal', 'Sweets → keep for occasions, and share'],
   },
+  'calorie-smart': {
+    name: 'Calorie-smart Kerala plate', icon: 'scale',
+    intro: 'Portion-controlled Kerala food for steady fat loss — the same meals you know, measured, with the evening kept light.',
+    plate: ['Half the plate: vegetables — thoran, salad, clear soups', 'A palm-sized protein at every meal — fish, egg whites, chicken, dal, kadala', 'Carbs measured: ½–¾ cup matta rice, or 1–2 chapatis, never both'],
+    day: [
+      ['sun', 'Breakfast', '2 idli or 1 dosa with sambar and an egg or a small bowl of kadala. No sugar in tea.'],
+      ['apple', 'Mid-morning', 'Guava, papaya or an orange — whole fruit, not juice.'],
+      ['utensils', 'Lunch', '½–¾ cup matta rice, fish curry (not fried), a big bowl of thoran and salad. Eat the vegetables first.'],
+      ['coffee', 'Evening', 'Buttermilk, cucumber or a small handful of roasted kadala — skip bakery snacks completely.'],
+      ['soup', 'Dinner (by 7:30 pm)', 'Vegetable soup with grilled fish, egg or paneer, or 1 chapati with dal. Nothing after dinner except water.'],
+    ],
+    swaps: ['Rice refill → extra thoran', 'Coconut in every curry → once a day', 'Tea with sugar and biscuits → black tea or sugar-free', 'Weekend biriyani → half portion with raita and salad', 'Coconut oil: about 2–3 teaspoons a day in total'],
+  },
+  'fish-forward': {
+    name: 'Fish-forward (pescatarian)', icon: 'fish',
+    intro: 'Kerala\'s best protein — fish — at lunch and dinner, with no red meat and little fried food. Good for heart health and fat loss.',
+    plate: ['Half the plate: vegetables and greens', 'A quarter: fish (mathi, ayala, choora, karimeen) curried, steamed or as pollichathu', 'A quarter: matta rice, kappa (small portion) or chapati'],
+    day: [
+      ['sun', 'Breakfast', 'Puttu (small) with kadala, or appam with egg curry, or oats with milk.'],
+      ['apple', 'Mid-morning', 'A fruit or a glass of sambharam.'],
+      ['utensils', 'Lunch', '¾ cup matta rice, meen curry (sardine or mackerel 3–4 times a week), thoran and moru curry.'],
+      ['coffee', 'Evening', 'Black tea with sprouts or a few nuts.'],
+      ['soup', 'Dinner (by 8 pm)', 'Steamed or grilled fish with vegetables, or fish curry with 1–2 chapatis.'],
+    ],
+    swaps: ['Fish fry → curry, pollichathu or steamed', 'Kappa with fish curry → small kappa, more fish and salad', 'Prawn/crab fry → occasional, curried', 'Pickles and papadam → once a week'],
+  },
+  eggetarian: {
+    name: 'Vegetarian + egg', icon: 'egg',
+    intro: 'Vegetarian food with eggs for easy, cheap protein — two eggs a day covers a good part of the protein target.',
+    plate: ['Half the plate: vegetables', 'A quarter: eggs, dal, kadala, paneer or curd', 'A quarter: matta rice, chapati, ragi or oats'],
+    day: [
+      ['sun', 'Breakfast', '2-egg omelette with vegetables and 1 chapati, or appam with egg curry.'],
+      ['apple', 'Mid-morning', 'Curd with fruit, or buttermilk.'],
+      ['utensils', 'Lunch', '¾ cup matta rice, sambar or dal, thoran and an egg roast (less oil) or paneer.'],
+      ['coffee', 'Evening', 'Boiled egg or sprouts with black tea.'],
+      ['soup', 'Dinner (by 8 pm)', 'Chapati with dal and vegetables, or egg bhurji with a salad.'],
+    ],
+    swaps: ['Egg puffs → boiled eggs', 'Fried egg in a lot of oil → boiled, poached or a non-stick omelette', 'Sweet curd → plain curd with fruit'],
+  },
+  'veg-high-protein': {
+    name: 'Vegetarian high-protein', icon: 'dumbbell',
+    intro: 'For vegetarians toning with EMS: a protein food at every meal — dal, legumes, paneer, curd, soya, tofu — and a protein snack after each session.',
+    plate: ['Protein first: paneer, tofu, soya chunks, curd, dal, kadala, cherupayar, rajma', 'Plenty of vegetables', 'Moderate carbs — matta rice, chapati, ragi or oats'],
+    day: [
+      ['sun', 'Breakfast', 'Moong dal chilla or besan dosa with curd, or oats cooked in milk with nuts.'],
+      ['apple', 'Mid-morning', 'Thick curd or a glass of milk with a fruit.'],
+      ['utensils', 'Lunch', '¾ cup matta rice, dal, a paneer or soya curry and thoran.'],
+      ['zap', 'After your EMS session', 'Within an hour: sprouts chaat, roasted chana, or a paneer sandwich with buttermilk.'],
+      ['soup', 'Dinner (by 8 pm)', 'Chapati with tofu or paneer bhurji and a vegetable, or a big bowl of dal with salad.'],
+    ],
+    swaps: ['Potato sabzi → paneer, soya or dal', 'Biscuits → roasted chana or makhana', 'Rice with only sambar → add curd or a legume side'],
+  },
+  vegan: {
+    name: 'Plant-based (no dairy)', icon: 'leaf',
+    intro: 'A fully plant-based plan with enough protein from legumes, soya and nuts. Ask about vitamin B12 — it is not found in plant foods.',
+    plate: ['Half the plate: vegetables and greens', 'A quarter: legumes, tofu, soya chunks, peanuts', 'A quarter: matta rice, ragi, oats or chapati'],
+    day: [
+      ['sun', 'Breakfast', 'Puttu with kadala curry, or ragi dosa with peanut chutney and sambar.'],
+      ['apple', 'Mid-morning', 'A fruit with a few almonds or walnuts.'],
+      ['utensils', 'Lunch', '¾ cup matta rice, dal or rajma, soya or tofu curry, thoran.'],
+      ['coffee', 'Evening', 'Sprouts, roasted chana or a small handful of peanuts with black tea.'],
+      ['soup', 'Dinner (by 8 pm)', 'Chapati with chana or tofu masala and vegetables.'],
+    ],
+    swaps: ['Coconut milk curries → lighter, tomato- or dal-based', 'Packaged snacks → roasted legumes or fruit', 'Tea with milk → black tea, or a small amount of soya milk'],
+  },
+  'healthy-gain': {
+    name: 'Healthy weight gain', icon: 'trending-up',
+    intro: 'For clients who are underweight or building muscle: more meals, more protein and good fats — not junk food.',
+    plate: ['Three meals and two to three snacks a day', 'Protein at every meal — eggs, fish, chicken, paneer, curd, dal', 'Generous carbs — rice, chapati, banana, oats — and nuts, seeds and ghee in small amounts'],
+    day: [
+      ['sun', 'Breakfast', 'Puttu with kadala and a banana, or 3 idli with sambar and 2 eggs. Milk or coffee.'],
+      ['apple', 'Mid-morning', 'Banana or nendran banana with a handful of nuts, or a milkshake (no added sugar).'],
+      ['utensils', 'Lunch', '1½ cups rice, fish or chicken curry, dal, thoran and curd.'],
+      ['zap', 'After your EMS session', 'Within an hour: milk with banana, or curd rice with egg.'],
+      ['soup', 'Dinner (by 8:30 pm)', '3 chapatis with paneer or chicken curry and vegetables. A glass of milk before bed.'],
+    ],
+    swaps: ['Skipping breakfast → never; eat within an hour of waking', 'Chips and bakery → nuts, banana, peanut chikki', 'Tea only → milk, buttermilk or a smoothie'],
+  },
 };
 export const DIET_NOTE = 'General lifestyle guidance from the Hasta team, not a medical diet. If you have a medical condition, are pregnant or take regular medicines, follow your doctor\'s advice first.';
 
-export function dietView(key) {
+export function dietView(key, t) {
   const d = DIETS[key] || DIETS['kerala-balanced'];
+  const tg = t && t.kcal ? `<div class="targets"><h4 style="margin-bottom:8px">Your daily targets</h4><div class="tgrid">${[['Energy', t.kcal.toLocaleString('en-IN'), 'kcal'], ['Protein', t.protein, 'g'], ['Carbs', t.carbs, 'g'], ['Fat', t.fat, 'g'], ['Fibre', t.fibre, 'g']].map(([l, v, u]) => `<div><span>${l}</span><b>${v}<small> ${u}</small></b></div>`).join('')}</div>
+    <p class="small muted" style="margin-top:6px">About ${t.protein_per_meal} g protein at each of 4 meals${t.protein_per_meal ? ` — e.g. 2 eggs ≈ 12 g, a fish piece (100 g) ≈ 20 g, 1 cup dal ≈ 9 g, 100 g paneer ≈ 18 g, 1 cup curd ≈ 8 g` : ''}.</p></div>` : '';
   return `<div class="stack" style="gap:14px">
-    <div><h3>${esc(d.name)}</h3><p class="muted" style="margin-top:4px">${esc(d.intro)}</p></div>
+    <div><h3>${esc(d.name)}</h3><p class="muted" style="margin-top:4px">${esc(d.intro)}</p></div>${tg}
     <div><h4 style="margin-bottom:8px">Build your plate</h4><ul class="dots">${d.plate.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>
     <div><h4 style="margin-bottom:4px">A day on this plan</h4>${d.day.map(([ic, t, x]) => `<div class="meal"><span class="hic">${icon(ic, 18)}</span><div><b>${esc(t)}</b><p>${esc(x)}</p></div></div>`).join('')}</div>
     <div><h4 style="margin-bottom:8px">Easy swaps</h4><ul class="dots">${d.swaps.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>

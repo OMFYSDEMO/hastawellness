@@ -3,8 +3,9 @@ import {
   measureSeries, dietView, DIETS, SCREENING, today, nowLocal, addDays, dayDiff, fDay, fDate, fWeekday, fLong, fTime, fWhen, inr, kg, initials, first,
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
   includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
-  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=8';
-import { viewAcademy } from './academy.js?v=10';
+  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=9';
+import { bodyComp, latestMerged, nutritionTargets, suggestDiets, defaultAim, TAPE, BIA, ACTIVITY, AIMS, FOOD_PREF } from './body.js?v=1';
+import { viewAcademy } from './academy.js?v=11';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
 const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';
@@ -573,40 +574,78 @@ function managePackage(p, after) {
 }
 
 function measureModal(c, after) {
+  const missing = ['gender', 'birth_year', 'height_cm'].filter(k => !c[k]);
   modal({
-    title: 'Add measurements · ' + c.name,
-    body: `<form class="stack" style="gap:14px" data-f>${field('Date', inp('measured_on', today(), `type="date" max="${today()}"`))}
-      <div class="grid2">${field('Weight (kg)', inp('weight', '', 'type="number" step="0.1" inputmode="decimal"'))}${field('Body fat (%)', inp('body_fat', '', 'type="number" step="0.1" inputmode="decimal"'))}</div>
-      <div class="grid3">${lenField('Waist', 'waist', '')}${lenField('Hips', 'hips', '')}${field('Muscle mass (kg)', inp('muscle_mass', '', 'type="number" step="0.1" inputmode="decimal"'), 'optional')}</div>
-      ${field('Note', inp('notes', '', 'maxlength="300" placeholder="e.g. measured before session, same scale"'))}</form>
-      <p class="small muted">Measure at the same time of day, on the same scale, for comparable results.</p>`,
+    title: 'Add measurements · ' + c.name, wide: true,
+    body: `<form class="stack" style="gap:14px" data-f>
+      ${missing.length ? `<p class="note">${icon('info', 16)} Add ${missing.map(k => ({ gender: 'gender', birth_year: 'year of birth', height_cm: 'height' })[k]).join(', ')} in the client's Profile so body fat can be estimated from the tape measurements.</p>` : ''}
+      <div class="grid3">${field('Date', inp('measured_on', today(), `type="date" max="${today()}"`))}${field('Weight (kg)', inp('weight', '', 'type="number" step="0.1" inputmode="decimal"'))}${field('Analyser used', inp('device', '', 'maxlength="60" placeholder="e.g. InBody 270 / Tanita"'), 'optional')}</div>
+      <h4 class="h-ic">${icon('ruler', 16)}<span>Tape measurements</span></h4>
+      <div class="grid4">${TAPE.map(([k, l, h]) => lenField(l, k, '', h)).join('')}</div>
+      <h4 class="h-ic">${icon('activity', 16)}<span>Body-composition analyser (BIA) — if used</span></h4>
+      <div class="grid4">${BIA.map(([k, l, u, mn, mx]) => field(`${l}${u ? ` (${u})` : ''}`, inp(k, '', `type="number" step="0.1" min="${mn}" max="${mx}" inputmode="decimal"`))).join('')}</div>
+      ${field('Note', inp('notes', '', 'maxlength="300" placeholder="e.g. measured before session, same scale, morning, after toilet"'))}</form>
+      <section class="panel" style="margin-top:14px;background:var(--bg-soft,#f6f8f7)" data-calc></section>
+      <p class="small muted">Measure at the same time of day, before eating or exercise, on the same machine — impedance readings change with water, food and exercise.</p>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save measurements</button>`,
     onMount(el, close) {
-      const save = el.querySelector('[data-save]');
+      const save = el.querySelector('[data-save]'), f = el.querySelector('[data-f]');
       wireLen(el);
-      save.addEventListener('click', () => busy(save, () => api('/staff/measurements', { method: 'POST', body: { ...lenToCm(el, formData(el.querySelector('[data-f]'))), client_id: c.id } })).then(() => { close(); toast('Measurements saved'); after(); }).catch(() => {}));
+      const calc = () => { const v = lenToCm(el, formData(f)); el.querySelector('[data-calc]').innerHTML = compPanel(bodyComp(c, v, v.measured_on), true); };
+      f.addEventListener('input', calc); el.querySelectorAll('[data-u]').forEach(b => b.addEventListener('click', () => setTimeout(calc)));
+      calc();
+      save.addEventListener('click', () => busy(save, () => api('/staff/measurements', { method: 'POST', body: { ...lenToCm(el, formData(f)), client_id: c.id } })).then(() => { close(); toast('Measurements saved'); after(); }).catch(() => {}));
     },
   });
 }
 
+// Body composition summary: what the body is made of, the estimates behind it and the risk ratios.
+const TONE = { good: 'var(--ok,#2f7d58)', warn: 'var(--warn,#a8642c)', neutral: 'var(--muted)' };
+function compPanel(k, live) {
+  if (!k.weight && !k.estimates.length) return `<p class="small muted">${live ? 'Enter weight and tape measurements to see the body-composition estimate here.' : 'No measurements yet.'}</p>`;
+  const tile = (l, v, u, sub, tone) => `<div class="metric"><div class="l">${l}</div><div class="v">${v ?? '—'}<small>${v != null ? u : ''}</small></div>${sub ? `<span class="small" style="color:${TONE[tone] || 'var(--muted)'}">${esc(sub)}</span>` : ''}</div>`;
+  const M = k.mass;
+  return `<div class="panel-h" style="margin-bottom:10px"><div class="t">${icon('activity', 20)}<h3>Body composition${live ? ' (live estimate)' : ''}</h3></div>${k.bf ? `<span class="small muted">body fat from: ${esc(k.bf.source)}</span>` : ''}</div>
+    <div class="metrics" style="grid-template-columns:repeat(5,minmax(0,1fr))">${tile('Body fat', k.bf && k.bf.value, '%', k.bf && k.bf.band && k.bf.band.label, k.bf && k.bf.band && k.bf.band.tone)}${tile('Fat mass', M && M.fat, 'kg')}${tile('Lean mass', M && M.lean, 'kg', M && M.muscle != null ? `muscle ${M.muscle} kg (analyser)` : 'everything but fat')}
+      ${tile('Body water', M && M.water, 'kg', M ? `${M.water_pct}% · ${M.water_src}` : '')}${tile('Protein', M && M.protein, 'kg', M ? `${M.protein_pct}% · ${M.protein_src}` : '')}</div>
+    <div class="grid2" style="margin-top:12px;gap:16px"><div>
+      <h4 style="margin-bottom:6px">Body fat estimates</h4>${k.estimates.length ? `<table class="t compact"><tbody>${k.estimates.map(e => `<tr><td>${esc(e.label)}<div class="small faint">${esc(e.uses)}</div></td><td class="n"><b>${e.value}%</b></td></tr>`).join('')}</tbody></table>` : `<p class="small muted">Needs ${esc(k.missing.join(', ') || 'neck and waist')}.</p>`}
+      ${k.missing.length ? `<p class="small faint">Missing for full estimate: ${esc(k.missing.join(', '))}.</p>` : ''}</div>
+    <div><h4 style="margin-bottom:6px">Ratios and energy</h4><table class="t compact"><tbody>
+      ${k.ratios.bmi ? `<tr><td>BMI</td><td class="n"><b>${k.ratios.bmi.value}</b></td><td class="small" style="color:${TONE[k.ratios.bmi.tone]}">${esc(k.ratios.bmi.label)}</td></tr>` : ''}
+      ${k.ratios.whtr ? `<tr><td>Waist-to-height</td><td class="n"><b>${k.ratios.whtr.value}</b></td><td class="small" style="color:${TONE[k.ratios.whtr.tone]}">${esc(k.ratios.whtr.label)}</td></tr>` : ''}
+      ${k.ratios.whr ? `<tr><td>Waist-to-hip</td><td class="n"><b>${k.ratios.whr.value}</b></td><td class="small" style="color:${TONE[k.ratios.whr.tone]}">${esc(k.ratios.whr.label)}</td></tr>` : ''}
+      ${k.visceral ? `<tr><td>Visceral fat</td><td class="n"><b>${k.visceral.value}</b></td><td class="small" style="color:${TONE[k.visceral.tone]}">${esc(k.visceral.label)}</td></tr>` : ''}
+      ${k.ratios.ffmi ? `<tr><td>Lean mass index</td><td class="n"><b>${k.ratios.ffmi.value}</b></td><td class="small muted">kg/m²</td></tr>` : ''}
+      ${k.bmr ? `<tr><td>BMR (at rest)</td><td class="n"><b>${k.bmr.value.toLocaleString('en-IN')}</b></td><td class="small muted">kcal/day · ${esc(k.bmr.source)}</td></tr>` : ''}
+    </tbody></table></div></div>
+    <p class="small faint" style="margin-top:8px">Estimates for coaching, not a diagnosis. Tape formulas are typically within 3–4 % body fat of a lab scan; an analyser reading is used when entered.</p>`;
+}
+
 function tabProgress(el, d, after) {
   const ms = d.measurements.slice().reverse();
+  const lm = latestMerged(d.measurements), comp = bodyComp(d.client, lm.m, lm.date);
+  const tapeKeys = TAPE.map(t => t[0]).filter(k => d.measurements.some(m => m[k] != null));
   el.innerHTML = `<div class="stack">
     <section class="panel">${metricStrip(d)}</section>
+    <section class="panel">${compPanel(comp)}${lm.date ? `<p class="small faint">Latest values up to ${esc(fDate(lm.date))}.</p>` : ''}</section>
     <div class="grid2" style="gap:18px">
       <section class="panel"><div class="panel-h"><div class="t">${icon('line-chart', 20)}<h3>Weight</h3></div></div><div data-w></div></section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('ruler', 20)}<h3>Waist and hips</h3></div></div><div data-wh></div></section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>Body fat</h3></div></div><div data-bf></div></section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('dumbbell', 20)}<h3>Muscle mass</h3></div></div><div data-mm></div></section>
+      ${tapeKeys.some(k => !['waist', 'hips'].includes(k)) ? `<section class="panel"><div class="panel-h"><div class="t">${icon('ruler', 20)}<h3>Belly and body</h3></div></div><div data-tape></div></section>` : ''}
     </div>
     <section class="panel flush"><div class="panel-h" style="padding:18px 20px 4px"><div class="t">${icon('clipboard-check', 20)}<h3>All measurements</h3></div><button class="btn sm gold" data-add>${icon('plus', 16)}Add</button></div>
-      ${ms.length ? `<table class="t"><thead><tr><th>Date</th><th class="n">Weight</th><th class="n">Waist</th><th class="n">Hips</th><th class="n">Body fat</th><th class="n">Muscle</th><th></th></tr></thead><tbody>
-      ${ms.map(m => `<tr><td>${esc(fDate(m.measured_on))}${m.notes ? `<div class="small muted">${esc(m.notes)}</div>` : ''}</td><td class="n">${m.weight != null ? kg(m.weight) + ' kg' : '—'}</td><td class="n">${cmIn(m.waist)}</td><td class="n">${cmIn(m.hips)}</td><td class="n">${m.body_fat != null ? m.body_fat + '%' : '—'}</td><td class="n">${m.muscle_mass ?? '—'}</td>
+      ${ms.length ? `<table class="t"><thead><tr><th>Date</th><th class="n">Weight</th><th class="n">Waist</th><th class="n">Hips</th><th class="n">Body fat</th><th class="n">Muscle</th>${tapeKeys.filter(k => !['waist', 'hips'].includes(k)).map(k => `<th class="n">${esc(TAPE.find(t => t[0] === k)[1])}</th>`).join('')}<th class="n">Water / visceral</th><th></th></tr></thead><tbody>
+      ${ms.map(m => `<tr><td>${esc(fDate(m.measured_on))}${m.device ? `<div class="small muted">${esc(m.device)}</div>` : ''}${m.notes ? `<div class="small muted">${esc(m.notes)}</div>` : ''}</td><td class="n">${m.weight != null ? kg(m.weight) + ' kg' : '—'}</td><td class="n">${cmIn(m.waist)}</td><td class="n">${cmIn(m.hips)}</td><td class="n">${m.body_fat != null ? m.body_fat + '%' : '—'}</td><td class="n">${m.muscle_mass ?? '—'}</td>${tapeKeys.filter(k => !['waist', 'hips'].includes(k)).map(k => `<td class="n">${m[k] != null ? +m[k] + ' cm' : '—'}</td>`).join('')}<td class="n small">${m.water_pct != null ? m.water_pct + '%' : '—'} / ${m.visceral_fat ?? '—'}</td>
         <td class="n"><button class="btn sm quiet icon" data-del="${m.id}" aria-label="Delete">${icon('trash-2', 16)}</button></td></tr>`).join('')}</tbody></table>` : emptyState('ruler', 'No measurements yet. Record a baseline before the first session.')}</section></div>`;
   lineChart(el.querySelector('[data-w]'), { series: [{ name: 'Weight', color: '#34595e', points: measureSeries(d.measurements, 'weight') }], unit: ' kg', target: d.client.target_weight, height: 200 });
   lineChart(el.querySelector('[data-wh]'), { series: [{ name: 'Waist', color: '#34595e', points: measureSeries(d.measurements, 'waist') }, { name: 'Hips', color: '#c4a45b', points: measureSeries(d.measurements, 'hips') }], unit: ' cm', height: 200 });
   lineChart(el.querySelector('[data-bf]'), { series: [{ name: 'Body fat', color: '#a8642c', points: measureSeries(d.measurements, 'body_fat') }], unit: '%', height: 200 });
   lineChart(el.querySelector('[data-mm]'), { series: [{ name: 'Muscle', color: '#2f7d58', points: measureSeries(d.measurements, 'muscle_mass') }], unit: ' kg', height: 200 });
+  const COLS = { neck: '#7a8a8a', chest: '#5b7fa6', arm: '#9a6fb0', belly: '#a8642c', lower_belly: '#c4a45b', thigh: '#2f7d58' };
+  if (el.querySelector('[data-tape]')) lineChart(el.querySelector('[data-tape]'), { series: tapeKeys.filter(k => COLS[k]).map(k => ({ name: TAPE.find(t => t[0] === k)[1], color: COLS[k], points: measureSeries(d.measurements, k) })), unit: ' cm', height: 200 });
   el.querySelector('[data-add]').addEventListener('click', () => d.access.measurements ? measureModal(d.client, after) : toast('Progress measurements are not included in this client\'s package.', true));
   el.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { if (confirm('Delete this measurement?')) busy(b, () => api('/staff/measurements/' + b.dataset.del, { method: 'DELETE', body: {} })).then(() => { toast('Deleted'); after(); }).catch(() => {}); }));
 }
@@ -632,10 +671,17 @@ function tabPlan(el, d, after) {
     return;
   }
   const p = d.plan;
+  const lm = latestMerged(d.measurements), comp = bodyComp(d.client, lm.m, lm.date), dAim = defaultAim(comp, d.client);
+  const scr = (() => { try { return typeof d.client.screening === 'string' ? JSON.parse(d.client.screening) : d.client.screening || {}; } catch { return {}; } })();
   const ck = d.checkins.slice(0, 14);
   el.innerHTML = `<div class="cols"><div class="stack">
       <section class="panel"><div class="panel-h"><div class="t">${icon('salad', 20)}<h3>Plan the client sees</h3></div></div>
         <form class="stack" style="gap:14px" data-f>
+          <h4 class="h-ic">${icon('flame', 16)}<span>Nutrition targets</span></h4>
+          <div class="grid3">${field('Aim', sel('aim', Object.entries(AIMS), p.aim || dAim))}${field('Activity', sel('activity', Object.entries(ACTIVITY).map(([k, v]) => [k, v[0]]), p.activity || 'light'))}${field('Food preference', sel('food_pref', Object.entries(FOOD_PREF), p.food_pref || 'nonveg'))}</div>
+          <div data-tcalc></div>
+          <div class="grid5" style="display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px">${[['kcal_target', 'Calories (kcal)'], ['protein_g', 'Protein (g)'], ['carbs_g', 'Carbs (g)'], ['fat_g', 'Fat (g)'], ['fibre_g', 'Fibre (g)']].map(([k, l]) => field(l, inp(k, p[k] ?? '', 'type="number" inputmode="numeric"'))).join('')}</div>
+          <div data-suggest></div>
           ${field('Food plan', sel('diet', Object.entries(DIETS).map(([k, v]) => [k, v.name]), p.diet))}
           <div class="grid3">${field('Water (glasses/day)', inp('water_target', p.water_target, 'type="number" min="4" max="20"'))}${field('Steps/day', inp('steps_target', p.steps_target, 'type="number" min="1000" step="500"'))}${field('Sleep (hours)', inp('sleep_target', p.sleep_target, 'type="number" min="5" max="10" step="0.5"'))}</div>
           ${field('Note from your coach', `<textarea class="in" name="focus" maxlength="600" placeholder="e.g. This month: dinner by 8 pm, no sugar in tea, walk after lunch at Technopark.">${esc(p.focus || '')}</textarea>`, 'shown on the client\'s plan')}
@@ -644,7 +690,25 @@ function tabPlan(el, d, after) {
         ${ck.length ? `<table class="t"><thead><tr><th>Day</th><th class="n">Water</th><th class="n">Steps</th><th class="n">Sleep</th><th class="n">Meals on plan</th><th class="n">Energy</th></tr></thead><tbody>${ck.map(x => `<tr><td>${esc(fWeekday(x.day))} ${esc(fDay(x.day))}${x.note ? `<div class="small muted">${esc(x.note)}</div>` : ''}</td><td class="n">${x.water ?? '—'}</td><td class="n">${x.steps != null ? x.steps.toLocaleString('en-IN') : '—'}</td><td class="n">${x.sleep ?? '—'}</td><td class="n">${x.meals ?? '—'}/4</td><td class="n">${x.energy ?? '—'}/5</td></tr>`).join('')}</tbody></table>` : emptyState('clipboard-check', 'The client hasn\'t logged a check-in yet.')}</section>
     </div><section class="panel" data-preview>${dietView(p.diet)}</section></div>`;
   const f = el.querySelector('[data-f]');
-  f.diet.addEventListener('change', () => { el.querySelector('[data-preview]').innerHTML = dietView(f.diet.value); });
+  const tgt = () => ({ kcal: +f.kcal_target.value || null, protein: +f.protein_g.value, carbs: +f.carbs_g.value, fat: +f.fat_g.value, fibre: +f.fibre_g.value, protein_per_meal: Math.round((+f.protein_g.value || 0) / 4) });
+  const preview = () => { el.querySelector('[data-preview]').innerHTML = dietView(f.diet.value, tgt()); };
+  const recalc = (fill) => {
+    const pl = { aim: f.aim.value, activity: f.activity.value, food_pref: f.food_pref.value };
+    const t = nutritionTargets(comp, pl, d.client);
+    el.querySelector('[data-tcalc]').innerHTML = t ? `<p class="small muted" style="margin:0">Suggested from ${comp.mass ? `lean mass ${comp.mass.lean} kg` : 'weight'} and BMR ${comp.bmr.value} kcal (${esc(comp.bmr.source)}) × activity = ${t.tdee.toLocaleString('en-IN')} kcal/day to maintain → <b>${t.kcal.toLocaleString('en-IN')} kcal</b> for "${esc(AIMS[t.aim])}" · protein ${t.protein} g · carbs ${t.carbs} g · fat ${t.fat} g · fibre ${t.fibre} g · water ${t.water_glasses} glasses.${t.note ? ' ' + esc(t.note) : ''} <button type="button" class="btn sm ghost" data-use-t>Use these</button></p>`
+      : `<p class="small muted" style="margin:0">Add gender, year of birth, height and a weight measurement to calculate targets.</p>`;
+    const useT = () => { f.kcal_target.value = t.kcal; f.protein_g.value = t.protein; f.carbs_g.value = t.carbs; f.fat_g.value = t.fat; f.fibre_g.value = t.fibre; f.water_target.value = t.water_glasses; preview(); };
+    if (t) { el.querySelector('[data-use-t]').onclick = useT; if (fill) useT(); }
+    const sug = suggestDiets(comp, pl, d.client, scr);
+    el.querySelector('[data-suggest]').innerHTML = sug.length ? `<div><span class="small muted">Suggested plans</span><div class="rows" style="margin-top:4px">${sug.map((x, i) => `<div class="row" style="padding:8px 0"><div class="grow"><b>${i === 0 ? '★ ' : ''}${esc(DIETS[x.key].name)}</b><span>${esc(x.why.length ? [...new Set(x.why)].join('; ') : 'fits the food preference')}</span></div>${f.diet.value === x.key ? pill('good', 'Selected') : `<button type="button" class="btn sm ghost" data-pick="${x.key}">Use</button>`}</div>`).join('')}</div></div>` : '';
+    el.querySelectorAll('[data-pick]').forEach(b => b.onclick = () => { f.diet.value = b.dataset.pick; preview(); recalc(false); });
+    return sug;
+  };
+  // A change of aim or food preference picks the best-fitting plan if the current one no longer fits.
+  ['aim', 'activity', 'food_pref'].forEach(k => f[k].addEventListener('change', () => { const sug = recalc(true); if (sug.length && !sug.some(x => x.key === f.diet.value)) { f.diet.value = sug[0].key; preview(); recalc(false); } }));
+  ['kcal_target', 'protein_g', 'carbs_g', 'fat_g', 'fibre_g'].forEach(k => f[k].addEventListener('input', preview));
+  recalc(!p.kcal_target && !!comp.bmr); preview();
+  f.diet.addEventListener('change', () => { preview(); recalc(false); });
   f.addEventListener('submit', e => e.preventDefault());
   const save = el.querySelector('[data-save]');
   save.addEventListener('click', () => busy(save, () => api(`/staff/clients/${d.client.id}/plan`, { method: 'PUT', body: formData(f) })).then(() => { toast('Plan saved — the client will see it in their app'); after(); }).catch(() => {}));

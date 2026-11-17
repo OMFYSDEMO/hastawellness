@@ -2,7 +2,7 @@
 import {
   api, esc, icon, toast, modal, formData, busy, field, inp, sel, emptyState, today, nowLocal, addDays, fDay, fDate, fLong, fTime, fWhen,
   inr, initials, first, prettyPhone, wa, pill, BASE, CLINIC_PHONE,
-} from '../ems/core.js?v=8';
+} from '../ems/core.js?v=9';
 
 const app = document.getElementById('app');
 let ME, B, MAIN, CAT = null;

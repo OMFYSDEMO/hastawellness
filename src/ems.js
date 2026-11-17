@@ -28,7 +28,7 @@ const APPT_STATUSES = ['booked', 'attended', 'no_show', 'cancelled'];
 const APPT_KINDS = ['session', 'consultation', 'review', 'wm_consult'];
 const PAY_METHODS = ['UPI', 'Cash', 'Card', 'Bank transfer'];
 const LEAD_STATUSES = ['new', 'contacted', 'booked', 'not interested'];
-const DIETS = ['kerala-balanced', 'vegetarian', 'high-protein', 'low-gi'];
+const DIETS = ['kerala-balanced', 'vegetarian', 'high-protein', 'low-gi', 'calorie-smart', 'fish-forward', 'eggetarian', 'veg-high-protein', 'vegan', 'healthy-gain'];
 const SCREENING = ['pacemaker', 'pregnancy', 'epilepsy', 'heart', 'surgery', 'implants', 'cancer', 'diabetes', 'bp', 'skin'];
 
 /* ---------------- Time (IST) ---------------- */
@@ -182,9 +182,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=8">
+<link rel="stylesheet" href="/ems/app.css?v=9">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=11"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=12"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -759,11 +759,16 @@ async function savePlan(env, me, id, b) {
   const diet = DIETS.includes(b.diet) ? b.diet : 'kerala-balanced';
   const water = int(b.water_target, 4, 20), steps = int(b.steps_target, 1000, 25000), sleep = num(b.sleep_target, 5, 10);
   if ([water, steps, sleep].some(v => v === undefined || v === null)) return bad('Check the daily targets.');
-  await env.DB.prepare(`INSERT INTO ems_plans (client_id, diet, water_target, steps_target, sleep_target, focus, updated_at, updated_by)
-    VALUES (?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'),?)
+  const pick = (v, list) => list.includes(v) ? v : null;
+  const aim = pick(b.aim, ['lose', 'tone', 'maintain', 'gain']), activity = pick(b.activity, ['sedentary', 'light', 'moderate', 'active']), food = pick(b.food_pref, ['nonveg', 'fish', 'egg', 'veg', 'vegan']);
+  const t = { kcal: int(b.kcal_target, 900, 4500), protein: int(b.protein_g, 30, 250), carbs: int(b.carbs_g, 40, 600), fat: int(b.fat_g, 20, 200), fibre: int(b.fibre_g, 10, 60) };
+  if (Object.values(t).some(v => v === undefined)) return bad('Check the nutrition targets.');
+  await env.DB.prepare(`INSERT INTO ems_plans (client_id, diet, water_target, steps_target, sleep_target, focus, aim, activity, food_pref, kcal_target, protein_g, carbs_g, fat_g, fibre_g, updated_at, updated_by)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,strftime('%Y-%m-%dT%H:%M:%SZ','now'),?)
     ON CONFLICT(client_id) DO UPDATE SET diet=excluded.diet, water_target=excluded.water_target, steps_target=excluded.steps_target,
-    sleep_target=excluded.sleep_target, focus=excluded.focus, updated_at=excluded.updated_at, updated_by=excluded.updated_by`)
-    .bind(id, diet, water, steps, sleep, nz(clean(b.focus, 600)), me.id).run();
+    sleep_target=excluded.sleep_target, focus=excluded.focus, aim=excluded.aim, activity=excluded.activity, food_pref=excluded.food_pref, kcal_target=excluded.kcal_target,
+    protein_g=excluded.protein_g, carbs_g=excluded.carbs_g, fat_g=excluded.fat_g, fibre_g=excluded.fibre_g, updated_at=excluded.updated_at, updated_by=excluded.updated_by`)
+    .bind(id, diet, water, steps, sleep, nz(clean(b.focus, 600)), aim, activity, food, t.kcal, t.protein, t.carbs, t.fat, t.fibre, me.id).run();
   return api({ ok: true });
 }
 
@@ -821,11 +826,15 @@ async function addMeasurement(env, me, b) {
   const clientId = parseInt(b.client_id, 10);
   if (!access(await packagesFor(env, clientId)).measurements) return bad(NOT_INCLUDED.measurements);
   const day = isDate(b.measured_on) && b.measured_on <= today() ? b.measured_on : today();
-  const v = { weight: num(b.weight, 25, 300), waist: num(b.waist, 40, 250), hips: num(b.hips, 50, 250), body_fat: num(b.body_fat, 3, 70), muscle_mass: num(b.muscle_mass, 5, 150) };
-  if (Object.values(v).some(x => x === undefined)) return bad('One of the measurements looks out of range. Check kg, cm/in and %.');
+  const v = { weight: num(b.weight, 25, 300), waist: num(b.waist, 40, 250), hips: num(b.hips, 50, 250), body_fat: num(b.body_fat, 3, 70), muscle_mass: num(b.muscle_mass, 5, 150),
+    neck: num(b.neck, 20, 70), chest: num(b.chest, 50, 200), arm: num(b.arm, 15, 70), belly: num(b.belly, 40, 250), lower_belly: num(b.lower_belly, 40, 250), thigh: num(b.thigh, 25, 110),
+    water_pct: num(b.water_pct, 25, 80), protein_pct: num(b.protein_pct, 5, 30), bone_mass: num(b.bone_mass, 0.5, 8), visceral_fat: num(b.visceral_fat, 1, 59), bmr: num(b.bmr, 600, 4000), metabolic_age: num(b.metabolic_age, 10, 100) };
+  const bad1 = Object.entries(v).find(([, x]) => x === undefined);
+  if (bad1) return bad(`"${bad1[0].replace('_', ' ')}" looks out of range. Check kg, cm/in and %.`);
   if (Object.values(v).every(x => x === null)) return bad('Enter at least one measurement.');
-  await env.DB.prepare('INSERT INTO ems_measurements (client_id, measured_on, weight, waist, hips, body_fat, muscle_mass, notes, staff_id) VALUES (?,?,?,?,?,?,?,?,?)')
-    .bind(clientId, day, v.weight, v.waist, v.hips, v.body_fat, v.muscle_mass, nz(clean(b.notes, 300)), me.id).run();
+  const cols = Object.keys(v);
+  await env.DB.prepare(`INSERT INTO ems_measurements (client_id, measured_on, ${cols.join(', ')}, device, notes, staff_id) VALUES (?,?,${cols.map(() => '?').join(',')},?,?,?)`)
+    .bind(clientId, day, ...cols.map(k => v[k]), nz(clean(b.device, 60)), nz(clean(b.notes, 300)), me.id).run();
   return api({ ok: true });
 }
 

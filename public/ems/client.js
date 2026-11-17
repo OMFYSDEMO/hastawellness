@@ -2,7 +2,8 @@ import {
   api, esc, icon, toast, modal, formData, busy, field, inp, emptyState, slotPicker, lineChart, ring, insightList, deltaTag, measureSeries,
   dietView, today, nowLocal, dayDiff, fDay, fDate, fLong, fTime, fWhen, inr, kg, first, prettyPhone, pill, KIND_LABEL, CLINIC_PHONE, CLINIC_TEL,
   BASE, includesText, PROGRAMME_LABEL, admState, admSteps, letterBox, screeningForm, readScreening, sigPad,
-  toIn, cmIn } from './core.js?v=8';
+  toIn, cmIn } from './core.js?v=9';
+import { bodyComp, latestMerged } from './body.js?v=1';
 
 let ME, APP, BODY, DATA;
 const TABS = [['', 'home', 'Home'], ['progress', 'line-chart', 'Progress'], ['book', 'calendar-plus', 'Book', true], ['plan', 'salad', 'My plan'], ['account', 'user', 'Account']];
@@ -112,6 +113,13 @@ function progress() {
     <section class="panel" style="padding:0;overflow:hidden"><div class="metrics" style="border:0;border-radius:0">${tile('Weight', 'weight', 'kg')}${tile('Waist', 'waist', 'cm')}${tile('Hips', 'hips', 'cm')}${tile('Body fat', 'body_fat', '%')}</div></section>
     ${M.bmi || M.whr ? `<section class="panel"><div class="grid2" style="grid-template-columns:1fr 1fr">${M.bmi ? `<div><p class="small muted">BMI</p><p class="num" style="font-size:22px;font-weight:700">${M.bmi.value}</p><p class="small">${esc(M.bmi.band)}</p></div>` : ''}${M.whr ? `<div><p class="small muted">Waist-to-hip ratio</p><p class="num" style="font-size:22px;font-weight:700">${M.whr.value}</p><p class="small">${M.whr.ok ? 'In the healthy range' : `Aim for ${M.whr.limit} or less`}</p></div>` : ''}</div>
       <p class="small faint" style="margin-top:10px">BMI uses the ranges recommended for South Asian adults. These numbers are a guide, not a diagnosis.</p></section>` : ''}
+    ${(() => { const lm = latestMerged(DATA.measurements), k = bodyComp(DATA.client, lm.m, lm.date), M = k.mass; if (!M) return '';
+      const bar = [['Fat', M.fat, '#c4a45b'], ['Water', M.water, '#5b8fb0'], ['Protein', M.protein, '#2f7d58'], ['Minerals', M.mineral, '#8a8f8f']];
+      return `<section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>What your body is made of</h3></div></div>
+        <div style="display:flex;height:14px;border-radius:7px;overflow:hidden;margin:4px 0 10px">${bar.map(([, v, c]) => `<span style="flex:${v};background:${c}"></span>`).join('')}</div>
+        <div class="grid2" style="grid-template-columns:1fr 1fr;gap:8px">${bar.map(([l, v, c]) => `<div style="display:flex;gap:8px;align-items:center"><span style="width:10px;height:10px;border-radius:3px;background:${c}"></span><span class="small">${l}</span><b class="num" style="margin-left:auto">${v} kg</b></div>`).join('')}</div>
+        <p class="small" style="margin-top:10px">Body fat <b>${k.bf.value}%</b>${k.bf.band ? ` — ${esc(k.bf.band.label.toLowerCase())}` : ''} · lean mass <b>${M.lean} kg</b>${k.bmr ? ` · your body uses about <b>${k.bmr.value.toLocaleString('en-IN')} kcal</b> a day at rest` : ''}.</p>
+        <p class="small faint">${k.bf.source === 'Analyser (BIA)' ? 'From the body-composition analyser at the clinic.' : 'Estimated from your tape measurements.'} A guide, not a diagnosis.</p></section>`; })()}
     <section class="panel"><div class="panel-h"><div class="t">${icon('line-chart', 20)}<h3>Weight</h3></div></div><div data-w></div></section>
     <section class="panel"><div class="panel-h"><div class="t">${icon('ruler', 20)}<h3>Waist and hips</h3></div></div><div data-wh></div></section>
     <section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>Body fat</h3></div></div><div data-bf></div></section>
@@ -147,7 +155,7 @@ function plan() {
         <button class="btn" data-save style="width:100%;height:46px;margin-top:14px">${icon('check', 18)}Save check-in</button></form></section>
     ${week.length ? `<section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>This week</h3></div><span class="small muted">${week.length} of 7 days logged</span></div>
       <div class="metrics">${[['Water', 'water', ' gl'], ['Steps', 'steps', ''], ['Sleep', 'sleep', ' h'], ['Meals', 'meals', '/4']].map(([l, k, u]) => { const a = DATA.insights.metrics.habits[k]; return `<div class="metric"><div class="l">${l}</div><div class="v">${a == null ? '—' : k === 'steps' ? Math.round(a).toLocaleString('en-IN') : Math.round(a * 10) / 10}<small>${a == null ? '' : u}</small></div><span class="small faint">daily average</span></div>`; }).join('')}</div></section>` : ''}
-    <section class="panel">${dietView(P.diet)}</section>`;
+    <section class="panel">${dietView(P.diet, P.kcal_target ? { kcal: P.kcal_target, protein: P.protein_g, carbs: P.carbs_g, fat: P.fat_g, fibre: P.fibre_g, protein_per_meal: Math.round((P.protein_g || 0) / 4) } : null)}</section>`;
   const f = BODY.querySelector('[data-f]');
   f.addEventListener('click', e => {
     const b = e.target.closest('[data-d]');
