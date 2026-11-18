@@ -1577,16 +1577,29 @@ function consultantModal(t, reload) {
       <div><h4 style="margin-bottom:8px">Payout</h4><div class="grid3">${field('Share of net billed (%)', inp('payout_pct', t.payout_pct ?? '', 'type="number" min="0" max="100" step="0.5"'), 'of bill lines under them, excl. GST')}${field('Or fixed per visit (₹)', inp('payout_per_visit', t.payout_per_visit ?? '', 'type="number" min="0" step="1"'), 'per bill')}${field('Payout note', inp('payout_note', t.payout_note, 'maxlength="200" placeholder="e.g. lab charges deducted"'))}</div><p class="small muted">Reports → Consultants shows each month’s bills and the payout.</p></div>
       <div><label class="check"><input type="checkbox" name="login" data-login ${hasLogin ? 'checked' : ''}><span>Give a clinic app login (to write notes and prescriptions themselves)</span></label>
         <div class="grid2" data-loginf ${hasLogin ? '' : 'hidden'} style="margin-top:8px">${isNew ? field('Username', inp('username', '', 'autocapitalize="none"')) : field('Username', inp('username', t.username, 'disabled'))}${field(isNew || !hasLogin ? 'Password' : 'New password', inp('password', '', 'type="password" autocomplete="new-password"'), isNew || !hasLogin ? 'at least 8 characters' : 'leave blank to keep')}</div></div>
+      ${webBlock({ ...t, skills: t.skills || ['doctor'], external: true })}
       ${!isNew ? `<label class="check"><input type="checkbox" name="active" ${t.active ? 'checked' : ''}> Active</label>` : ''}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
     onMount(el, close) {
       const lg = el.querySelector('[data-login]'); lg.onchange = () => { el.querySelector('[data-loginf]').hidden = !lg.checked; };
       const s = el.querySelector('[data-save]'); s.onclick = () => { const v = formData(el.querySelector('[data-f]'));
         if (v.login && !hasLogin && String(v.password || '').length < 8) return toast('Set a password of at least 8 characters for the login.', true);
-        const body = { external: true, name: v.name, qualification: v.qualification, speciality: v.speciality, reg_no: v.reg_no, phone: v.phone, email: v.email, payout_pct: v.payout_pct, payout_per_visit: v.payout_per_visit, payout_note: v.payout_note,
+        const body = { external: true, web: webVal(v), name: v.name, qualification: v.qualification, speciality: v.speciality, reg_no: v.reg_no, phone: v.phone, email: v.email, payout_pct: v.payout_pct, payout_per_visit: v.payout_per_visit, payout_note: v.payout_note,
           username: v.login && isNew ? v.username : '', password: v.login ? v.password : '', role: 'staff', active: isNew ? true : v.active, apps: v.login ? ['clinic'] : [], skills: t.skills.length ? t.skills : ['doctor'], depts: Object.entries(v.dp || {}).filter(([, x]) => x).map(([k]) => +k) };
         busy(s, () => api('/clinic/team' + (isNew ? '' : '/' + t.id), { method: isNew ? 'POST' : 'PUT', body })).then(() => { close(); toast('Saved'); reload(); }).catch(() => {}); }; } });
 }
+
+// Website profile block (doctors). Shown on the website only with qualification + registration number.
+function webBlock(t) {
+  const isDocish = (t.skills || []).includes('doctor') || t.external;
+  return `<details ${t.web_show ? 'open' : ''} style="border:1px solid var(--line);border-radius:10px;padding:10px 14px"><summary style="cursor:pointer;font-weight:600">Website profile${t.web_show ? ' · shown on hastawellnessclinic.com' : ''}</summary>
+    <div class="stack" style="gap:12px;margin-top:12px">${isDocish ? '' : '<p class="small muted" style="margin:0">For doctors and consultants.</p>'}
+      <label class="check"><input type="checkbox" name="web.show" ${t.web_show ? 'checked' : ''}> Show on the website (Our doctors)</label>
+      <div class="grid3">${field('Registration council', inp('web.council', t.reg_council || '', 'maxlength="80" placeholder="e.g. Kerala Dental Council"'))}${field('Title on website', inp('web.title', t.web_title || '', 'maxlength="80" placeholder="e.g. Periodontist · Dental"'))}${field('Order', inp('web.order', t.web_order || 0, 'type="number" min="0" max="99"'), 'lower shows first')}</div>
+      ${field('Short introduction', `<textarea class="in" name="web.bio" rows="2" maxlength="400" placeholder="One or two sentences — no claims of results">${esc(t.web_bio || '')}</textarea>`)}
+      <p class="small muted" style="margin:0">Shown only when the qualification and registration number are filled in.</p></div></details>`;
+}
+const webVal = v => ({ show: !!(v.web && v.web.show), council: v.web && v.web.council, title: v.web && v.web.title, bio: v.web && v.web.bio, order: v.web && v.web.order });
 function memberModal(t, reload) {
   const isNew = !t.id;
   modal({ title: isNew ? 'Add team member' : 'Edit · ' + t.name, wide: true,
@@ -1595,10 +1608,12 @@ function memberModal(t, reload) {
       <div><h4 style="margin-bottom:8px">Apps</h4><div class="chips"><label class="chip"><input type="checkbox" name="app.clinic" ${t.apps.includes('clinic') ? 'checked' : ''}>Clinic app</label><label class="chip"><input type="checkbox" name="app.ems" ${t.apps.includes('ems') ? 'checked' : ''}>EMS app</label></div></div>
       <div><h4 style="margin-bottom:8px">Skills</h4><div class="chips">${Object.entries(SK).map(([k, l]) => `<label class="chip"><input type="checkbox" name="sk.${k}" ${t.skills.includes(k) ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div></div>
       <div><h4 style="margin-bottom:8px">Works in (clinical departments)</h4><div class="chips">${B.departments.filter(d => d.active).map(d => `<label class="chip"><input type="checkbox" name="dp.${d.id}" ${t.depts.includes(d.id) ? 'checked' : ''}>${esc(d.name)}</label>`).join('')}</div><p class="small muted" style="margin-top:6px">Only tick departments this person is qualified to treat in. They can only be booked there.</p></div>
+      ${field('Qualification', inp('qualification', t.qualification || '', 'maxlength="80" placeholder="e.g. MDS (Periodontics), BAMS, MBBS"'), 'for doctors')}
+      ${webBlock(t)}
       ${!isNew ? `<label class="check"><input type="checkbox" name="active" ${t.active ? 'checked' : ''}> Account active</label>` : ''}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
     onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => { const v = formData(el.querySelector('[data-f]'));
-      const body = { name: v.name, username: v.username, password: v.password, role: v.role, reg_no: v.reg_no, active: isNew ? true : v.active, apps: Object.entries(v.app || {}).filter(([, x]) => x).map(([k]) => k), skills: Object.entries(v.sk || {}).filter(([, x]) => x).map(([k]) => k), depts: Object.entries(v.dp || {}).filter(([, x]) => x).map(([k]) => +k) };
+      const body = { name: v.name, username: v.username, password: v.password, role: v.role, reg_no: v.reg_no, qualification: v.qualification, web: webVal(v), active: isNew ? true : v.active, apps: Object.entries(v.app || {}).filter(([, x]) => x).map(([k]) => k), skills: Object.entries(v.sk || {}).filter(([, x]) => x).map(([k]) => k), depts: Object.entries(v.dp || {}).filter(([, x]) => x).map(([k]) => +k) };
       busy(s, () => api('/clinic/team' + (isNew ? '' : '/' + t.id), { method: isNew ? 'POST' : 'PUT', body })).then(() => { close(); toast('Saved'); reload(); }).catch(() => {}); }; } });
 }
 

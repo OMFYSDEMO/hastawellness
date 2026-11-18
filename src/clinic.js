@@ -124,9 +124,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=11"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
-<link rel="modulepreload" href="/clinic/app.js?v=27"><link rel="modulepreload" href="/ems/core.js?v=9">
+<link rel="modulepreload" href="/clinic/app.js?v=28"><link rel="modulepreload" href="/ems/core.js?v=9">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=27"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=28"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -347,9 +347,9 @@ async function saveRoom(env, b) {
   else await env.DB.prepare('INSERT INTO cl_rooms (name, dept_id) VALUES (?,?)').bind(name, dept).run();
   return OK();
 }
-const TEAM_SQL = "SELECT id, name, username, role, skills, apps, reg_no, active, external, qualification, speciality, phone, email, payout_pct, payout_per_visit, payout_note FROM ems_staff WHERE role <> 'trainee' ORDER BY active DESC, external, name";
+const TEAM_SQL = "SELECT id, name, username, role, skills, apps, reg_no, active, external, qualification, speciality, phone, email, payout_pct, payout_per_visit, payout_note, reg_council, web_show, web_title, web_bio, web_order FROM ems_staff WHERE role <> 'trainee' ORDER BY active DESC, external, name";
 const teamRows = (results, d) => (results || []).map(s => ({ id: s.id, name: s.name, username: s.username, role: s.role, reg_no: s.reg_no, active: !!s.active,
-  external: !!s.external, qualification: s.qualification, speciality: s.speciality, phone: s.phone, email: s.email, payout_pct: s.payout_pct, payout_per_visit: s.payout_per_visit, payout_note: s.payout_note, skills: parse(s.skills, []), apps: parse(s.apps, ['ems']), depts: (d || []).filter(x => x.staff_id === s.id).map(x => x.dept_id) }));
+  external: !!s.external, qualification: s.qualification, speciality: s.speciality, phone: s.phone, email: s.email, payout_pct: s.payout_pct, payout_per_visit: s.payout_per_visit, payout_note: s.payout_note, reg_council: s.reg_council, web_show: !!s.web_show, web_title: s.web_title, web_bio: s.web_bio, web_order: s.web_order, skills: parse(s.skills, []), apps: parse(s.apps, ['ems']), depts: (d || []).filter(x => x.staff_id === s.id).map(x => x.dept_id) }));
 async function team(env) {
   const [a, b] = await env.DB.batch([env.DB.prepare(TEAM_SQL), env.DB.prepare('SELECT * FROM cl_staff_depts')]);
   return teamRows(a.results, b.results);
@@ -394,6 +394,14 @@ async function saveMember(env, me, id, b) {
   }
   await env.DB.prepare('DELETE FROM cl_staff_depts WHERE staff_id=?').bind(id).run();
   for (const d of depts) await env.DB.prepare('INSERT INTO cl_staff_depts (staff_id, dept_id) VALUES (?,?)').bind(id, d).run();
+  // Website profile (doctors): shown only with a qualification and registration number.
+  if (b.web !== undefined) {
+    const w = b.web || {};
+    const show = !!w.show;
+    if (show && (!ext.qualification || !clean(b.reg_no, 40))) return R(400, 'To show a doctor on the website, fill in the qualification and the registration number.');
+    await env.DB.prepare('UPDATE ems_staff SET reg_council=?, web_show=?, web_title=?, web_bio=?, web_order=? WHERE id=?')
+      .bind(nz(clean(w.council, 80)), show ? 1 : 0, nz(clean(w.title, 80)), nz(clean(w.bio, 400)), Math.max(0, Math.min(99, parseInt(w.order, 10) || 0)), id).run();
+  }
   await audit(env, me, id ? 'team.save' : 'team.add', 'staff', id, name + (external ? ' (external consultant)' : ''));
   return OK({ id });
 }

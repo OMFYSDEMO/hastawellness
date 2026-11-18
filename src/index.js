@@ -120,6 +120,17 @@ const SECURITY_HEADERS = {
   'permissions-policy': 'camera=(), microphone=(), geolocation=()',
 };
 
+// "Our doctors" on the home page — from the clinic app's team list. A doctor appears only when switched on for the
+// website AND the name, qualification and registration number are all filled in. Nothing shows until then.
+const hx = t => String(t ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+async function doctorsSection(env) {
+  const { results } = await env.DB.prepare(`SELECT name, qualification, reg_no, reg_council, web_title, web_bio, external FROM ems_staff
+    WHERE active=1 AND web_show=1 AND TRIM(IFNULL(qualification,'')) <> '' AND TRIM(IFNULL(reg_no,'')) <> '' ORDER BY web_order, external, name`).all();
+  if (!results || !results.length) return '';
+  return `<section class="doctors" id="doctors"><div class="wrap"><div class="sectionhead"><div><div class="eyebrow">YOUR CARE TEAM</div><h2>Our doctors</h2></div><p>Every treatment plan at Hasta is made by a registered clinician after an individual assessment.</p></div>
+<div class="doc-grid">${results.map(d => `<article class="doc"><h3>${hx(d.name)}</h3><div class="q">${hx(d.qualification)}${d.web_title ? ' · ' + hx(d.web_title) : ''}</div><div class="r">Reg. no. ${hx(d.reg_no)}${d.reg_council ? ' · ' + hx(d.reg_council) : ''}${d.external ? ' · Visiting consultant' : ''}</div>${d.web_bio ? `<p>${hx(d.web_bio)}</p>` : ''}</article>`).join('')}</div></div></section>`;
+}
+
 async function serveAsset(request, env, url) {
   const res = await env.ASSETS.fetch(request);
   const type = res.headers.get('content-type') || '';
@@ -135,6 +146,7 @@ async function serveAsset(request, env, url) {
       .replace(/(<link rel="canonical" href=")(\/[^"]*")/g, `$1${o}$2`)
       .replace(/(<meta property="og:(?:url|image)" content=")(\/[^"]*")/g, `$1${o}$2`)
       .replace(/"(url|item|image|logo)": ?"(\/[^"]*)"/g, `"$1":"${o}$2"`);
+    if (html.includes('<!--DOCTORS-->')) html = html.replace('<!--DOCTORS-->', await doctorsSection(env).catch(() => ''));
     headers.set('cache-control', 'public, max-age=300, must-revalidate');
     headers.delete('content-length');
     headers.delete('etag');
