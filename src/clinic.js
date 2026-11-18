@@ -124,9 +124,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=12"><link rel="stylesheet" href="/clinic/clinic.css?v=11">
-<link rel="modulepreload" href="/clinic/app.js?v=31"><link rel="modulepreload" href="/ems/core.js?v=10">
+<link rel="modulepreload" href="/clinic/app.js?v=32"><link rel="modulepreload" href="/ems/core.js?v=10">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=31"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=32"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -774,7 +774,21 @@ async function invoiceDetail(env, id) {
   const { results: allocs } = await env.DB.prepare('SELECT a.*, p.paid_on, p.mode, p.reference, p.lender FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=? AND p.voided=0 ORDER BY p.paid_on').bind(id).all();
   const bal = await balances(env, inv.patient_id);
   const { results: fu } = await env.DB.prepare('SELECT * FROM cl_pay_followups WHERE invoice_id=? ORDER BY id DESC').bind(id).all();
-  return { invoice: withBalance(inv), lines: (lines || []).map(l => ({ ...l, tax_parts: parse(l.tax_parts, null) })), payments: allocs || [], advance: bal.advance, followups: fu || [] };
+  // EMS packages billed here: how the sessions and any clinic treatments inside them are used.
+  const { results: emsPk } = await env.DB.prepare(`SELECT cp.id, cp.client_id, cp.name, cp.sessions_total, cp.entitlements, cp.expiry_date,
+    (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='attended') used,
+    (SELECT COUNT(*) FROM ems_appointments a WHERE a.client_package_id=cp.id AND a.kind='session' AND a.status='booked') booked
+    FROM ems_client_packages cp WHERE cp.invoice_id=?`).bind(id).all();
+  const ems = [];
+  for (const cp of emsPk || []) {
+    const tr = (parse(cp.entitlements, {}).treatments || []).filter(t => t.qty > 0);
+    const pp = tr.length ? await env.DB.prepare('SELECT id, status FROM cl_patient_packages WHERE invoice_id=? AND name=?').bind(id, `${cp.name} — treatments`).first() : null;
+    let given = {};
+    if (pp) { const { results: rr } = await env.DB.prepare('SELECT item_id, SUM(qty) n FROM cl_redemptions WHERE patient_package_id=? AND voided=0 GROUP BY item_id').bind(pp.id).all(); for (const x of rr || []) given[x.item_id] = x.n; }
+    ems.push({ id: cp.id, client_id: cp.client_id, name: cp.name, sessions: cp.sessions_total, used: cp.used, booked: cp.booked, expiry_date: cp.expiry_date,
+      treatments: tr.map(t => ({ name: t.name, qty: t.qty, given: given[t.item_id] || 0 })), patient_package: pp });
+  }
+  return { invoice: withBalance(inv), lines: (lines || []).map(l => ({ ...l, tax_parts: parse(l.tax_parts, null) })), payments: allocs || [], advance: bal.advance, followups: fu || [], ems };
 }
 // Used by treatment plans: a draft bill with the given lines. Returns the invoice id, or the
 // error from saveInvoice (e.g. a discount needing authorisation), in which case the draft is removed.
