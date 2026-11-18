@@ -128,7 +128,7 @@ async function doctorsSection(env) {
     WHERE active=1 AND web_show=1 AND TRIM(IFNULL(qualification,'')) <> '' AND TRIM(IFNULL(reg_no,'')) <> '' ORDER BY web_order, external, name`).all();
   if (!results || !results.length) return '';
   return `<section class="doctors" id="doctors"><div class="wrap"><div class="sectionhead"><div><div class="eyebrow">YOUR CARE TEAM</div><h2>Our doctors</h2></div><p>Every treatment plan at Hasta is made by a registered clinician after an individual assessment.</p></div>
-<div class="doc-grid">${results.map(d => `<article class="doc"><h3>${hx(d.name)}</h3><div class="q">${hx(d.qualification)}${d.web_title ? ' · ' + hx(d.web_title) : ''}</div><div class="r">Reg. no. ${hx(d.reg_no)}${d.reg_council ? ' · ' + hx(d.reg_council) : ''}${d.external ? ' · Visiting consultant' : ''}</div>${d.web_bio ? `<p>${hx(d.web_bio)}</p>` : ''}</article>`).join('')}</div></div></section>`;
+<div class="doc-grid">${results.map(d => `<article class="doc"><h3>${hx(d.name)}${d.web_title ? `<span class="t">${hx(d.web_title)}</span>` : ''}</h3><div class="q">${hx(d.qualification)}</div><div class="r">Reg. no. ${hx(d.reg_no)}${d.reg_council ? ' · ' + hx(d.reg_council) : ''}${d.external ? ' · Visiting consultant' : ''}</div>${d.web_bio ? `<p>${hx(d.web_bio)}</p>` : ''}</article>`).join('')}</div></div></section>`;
 }
 
 async function serveAsset(request, env, url) {
