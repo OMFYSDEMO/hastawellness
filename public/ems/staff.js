@@ -950,10 +950,10 @@ async function pkgDefModal(p) {
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save package</button>`,
     onMount(el, close) {
       const f = el.querySelector('[data-f]');
-      // Clinic treatments in the package (current clinic prices incl. GST).
+      // Clinic treatments in the package (current clinic prices, same GST basis as EMS prices).
       let trs = (e.treatments || []).map(t => { const c = CT.find(x => x.id === t.item_id) || {}; return { item_id: t.item_id, name: c.name || t.name, qty: t.qty, price: c.price ?? t.price ?? 0, cost: c.cost ?? t.cost ?? 0, missing: !c.id }; });
       const drawTr = () => {
-        el.querySelector('[data-trs]').innerHTML = trs.map((t, i) => `<div class="q"><p><b>${esc(t.name)}</b>${t.missing ? ' <span class="small" style="color:var(--alert)">no longer on the clinic list</span>' : ''}<br><span class="small muted">${inr(t.price)} each incl. GST · cost ${inr(t.cost)}</span></p><div style="display:flex;gap:6px;align-items:center"><input class="in" type="number" min="1" max="50" value="${t.qty}" data-trn="${i}" style="width:80px;text-align:right"><button type="button" class="btn sm quiet" data-trx="${i}" title="Remove">${icon('x', 15)}</button></div></div>`).join('');
+        el.querySelector('[data-trs]').innerHTML = trs.map((t, i) => `<div class="q"><p><b>${esc(t.name)}</b>${t.missing ? ' <span class="small" style="color:var(--alert)">no longer on the clinic list</span>' : ''}<br><span class="small muted">${inr(t.price)} each ${CT[0] && CT[0].incl === false ? '+ GST' : 'incl. GST'} · cost ${inr(t.cost)}</span></p><div style="display:flex;gap:6px;align-items:center"><input class="in" type="number" min="1" max="50" value="${t.qty}" data-trn="${i}" style="width:80px;text-align:right"><button type="button" class="btn sm quiet" data-trx="${i}" title="Remove">${icon('x', 15)}</button></div></div>`).join('');
         el.querySelectorAll('[data-trn]').forEach(x => x.oninput = () => { trs[+x.dataset.trn].qty = Math.max(1, parseInt(x.value, 10) || 1); calc(); });
         el.querySelectorAll('[data-trx]').forEach(x => x.onclick = () => { trs.splice(+x.dataset.trx, 1); drawTr(); calc(); });
       };

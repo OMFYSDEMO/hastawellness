@@ -56,7 +56,10 @@ export function readEntitlements(b) {
 export async function clinicTreatments(env) {
   const { results } = await env.DB.prepare(`SELECT i.id, i.code, i.name, i.price, i.gst_rate, i.cost, d.name dept FROM cl_items i LEFT JOIN cl_departments d ON d.id=i.dept_id
     WHERE i.kind='service' AND i.active=1 AND i.sellable=1 AND i.gst_rate=18 AND IFNULL(i.code,'') NOT LIKE 'EMS%' AND IFNULL(d.name,'') NOT LIKE '%Dental%' ORDER BY d.name, i.name`).all();
-  return (results || []).map(i => ({ id: i.id, code: i.code, name: i.name, dept: i.dept, price: Math.round(i.price * (1 + i.gst_rate / 100)), cost: Math.round((i.cost || 0) * (1 + 0)) }));
+  // Shown on the same basis as EMS prices: incl. GST when ems_price_incl_gst=1, otherwise before GST.
+  const st = await env.DB.prepare("SELECT value FROM cl_settings WHERE key='ems_price_incl_gst'").first();
+  const incl = String(st ? st.value : '1') !== '0';
+  return (results || []).map(i => ({ id: i.id, code: i.code, name: i.name, dept: i.dept, price: Math.round(i.price * (incl ? 1 + i.gst_rate / 100 : 1)), cost: Math.round(i.cost || 0), incl }));
 }
 // Fill in names and prices for the chosen treatments; refuses anything not on the allowed list.
 export async function resolveTreatments(env, list) {
