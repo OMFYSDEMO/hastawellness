@@ -171,8 +171,8 @@ function staffMonth(prof, month, att, leaves, holidays, absences, s) {
     row.missing_out = row.open && d < t && !row.pre;
     const first = row.entries.map(a => a.in_at).sort()[0];
     row.first_in = first ? first.slice(11, 16) : null;
-    // A joining date only cuts pay from the day the rules started; earlier months were settled outside the app.
-    const notYet = prof.joined_on && d < prof.joined_on && d >= rulesFrom;
+    const notYet = prof.joined_on && d < prof.joined_on;
+    row.is_holiday = hol.has(d);
     const working = !notYet && !(prof.left_on && d > prof.left_on) && dow(d) !== prof.weekly_off && !hol.has(d);
     row.working = working;
     const lv = leaves.find(l => l.from_date <= d && l.to_date >= d && ['approved', 'pending'].includes(l.status));
@@ -192,7 +192,7 @@ function staffMonth(prof, month, att, leaves, holidays, absences, s) {
 }
 function payFor(prof, month, days) {
   const dh = Number(prof.daily_hours) || 8, sal = Number(prof.monthly_salary) || 0;
-  const fullWorking = days.filter(d => dow(d.day) !== prof.weekly_off && d.status !== 'holiday').length; // whole month, for the rate
+  const fullWorking = days.filter(d => dow(d.day) !== prof.weekly_off && !d.is_holiday && d.status !== 'holiday').length; // whole month, for the rate
   const empWorking = days.filter(d => d.working).length;
   const contractH = fullWorking * dh, rate = contractH ? sal / contractH : 0;
   const n = st => days.filter(d => d.working && d.status === st).length;
