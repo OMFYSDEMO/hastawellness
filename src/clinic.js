@@ -124,9 +124,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=11"><link rel="stylesheet" href="/clinic/clinic.css?v=10">
-<link rel="modulepreload" href="/clinic/app.js?v=28"><link rel="modulepreload" href="/ems/core.js?v=9">
+<link rel="modulepreload" href="/clinic/app.js?v=29"><link rel="modulepreload" href="/ems/core.js?v=9">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=28"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=29"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -366,7 +366,7 @@ async function saveMember(env, me, id, b) {
   if (!name) return R(400, 'Enter the name.');
   // External consultant details: qualification, contact and how they are paid.
   const num = (v, max) => v === '' || v == null || isNaN(Number(v)) ? null : Math.min(max, Math.max(0, Math.round(Number(v) * 100) / 100));
-  const ext = { qualification: nz(clean(b.qualification, 80)), speciality: nz(clean(b.speciality, 80)), phone: nz(clean(b.phone, 20)), email: nz(clean(b.email, 120)),
+  const ext = { qualification: nz(clean(b.qualification, 160)), speciality: nz(clean(b.speciality, 80)), phone: nz(clean(b.phone, 20)), email: nz(clean(b.email, 120)),
     payout_pct: external ? num(b.payout_pct, 100) : null, payout_per_visit: external ? num(b.payout_per_visit, 100000) : null, payout_note: external ? nz(clean(b.payout_note, 200)) : null };
   if (external && !depts.length) return R(400, 'Tick the department(s) the consultant treats in, so they can be booked.');
   const loginless = external && !username && !id;

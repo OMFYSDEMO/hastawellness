@@ -1608,7 +1608,7 @@ function memberModal(t, reload) {
       <div><h4 style="margin-bottom:8px">Apps</h4><div class="chips"><label class="chip"><input type="checkbox" name="app.clinic" ${t.apps.includes('clinic') ? 'checked' : ''}>Clinic app</label><label class="chip"><input type="checkbox" name="app.ems" ${t.apps.includes('ems') ? 'checked' : ''}>EMS app</label></div></div>
       <div><h4 style="margin-bottom:8px">Skills</h4><div class="chips">${Object.entries(SK).map(([k, l]) => `<label class="chip"><input type="checkbox" name="sk.${k}" ${t.skills.includes(k) ? 'checked' : ''}>${esc(l)}</label>`).join('')}</div></div>
       <div><h4 style="margin-bottom:8px">Works in (clinical departments)</h4><div class="chips">${B.departments.filter(d => d.active).map(d => `<label class="chip"><input type="checkbox" name="dp.${d.id}" ${t.depts.includes(d.id) ? 'checked' : ''}>${esc(d.name)}</label>`).join('')}</div><p class="small muted" style="margin-top:6px">Only tick departments this person is qualified to treat in. They can only be booked there.</p></div>
-      ${field('Qualification', inp('qualification', t.qualification || '', 'maxlength="80" placeholder="e.g. MDS (Periodontics), BAMS, MBBS"'), 'for doctors')}
+      ${field('Qualification', inp('qualification', t.qualification || '', 'maxlength="160" placeholder="e.g. MDS (Periodontics), BAMS, MBBS"'), 'for doctors')}
       ${webBlock(t)}
       ${!isNew ? `<label class="check"><input type="checkbox" name="active" ${t.active ? 'checked' : ''}> Account active</label>` : ''}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
