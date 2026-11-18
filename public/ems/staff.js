@@ -5,7 +5,7 @@ import {
   includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
   toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=9';
 import { bodyComp, latestMerged, nutritionTargets, suggestDiets, defaultAim, TAPE, BIA, ACTIVITY, AIMS, FOOD_PREF } from './body.js?v=1';
-import { viewAcademy } from './academy.js?v=11';
+import { viewAcademy } from './academy.js?v=12';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
 const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';

@@ -335,6 +335,8 @@ async function tAdmissions(el, ctx) {
       <div class="grid3">${field('Machine', sel('machine_type_id', [['', 'Choose']].concat(d.machines.map(m => [m.id, m.name])), b ? b.machine_type_id : (d.machines[0] || {}).id))}${field('Seats', inp('seats', b ? b.seats : 6, 'type="number" min="1" max="50"'))}${field('Course fee before GST (₹)', inp('fee', b ? b.fee || '' : d.default_fee, 'type="number" min="0" step="1" data-fee'), '18% GST is added on the bill')}</div>
       <p class="small" data-feeinfo></p>
       ${field('Status', sel('status', [['draft', 'Draft — not on the website'], ['open', 'Open for applications'], ['closed', 'Closed to applications'], ['completed', 'Completed'], ['cancelled', 'Cancelled']], b ? b.status : 'draft'))}
+      <label class="check"><input type="checkbox" name="internal" ${b && b.internal ? 'checked' : ''}> Internal batch — for our own staff, not listed on the website</label>
+      ${b && b.internal ? `<p class="small muted" style="margin:-4px 0 0">Private application link: <b>${esc(location.origin.replace('ems.', ''))}/academy/?batch=${b.id}#apply</b></p>` : ''}
       ${field('Internal notes', inp('notes', b ? b.notes || '' : '', 'maxlength="300"'))}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save batch</button>`,
     onMount(m, close) {
@@ -486,7 +488,7 @@ async function tBatches(el, ctx) {
   const id = +params.get('batch');
   if (id) return batchPage(el, ctx, id, params.get('view') || 'roster');
   const d = await api('/staff/academy/batches');
-  el.innerHTML = `<section class="panel flush"><div class="rows">${d.batches.map(b => `<a class="row" href="#/academy?tab=batches&batch=${b.id}"><span class="avatar">${icon('calendar-days', 18)}</span><div class="grow"><b>${esc(b.code)} · ${esc(b.title)}</b><span>${fDate(b.start_date)}${b.end_date ? ' – ' + fDate(b.end_date) : ''} · ${esc(b.machine_name || 'machine not set')} · ${b.taken}/${b.seats} seats</span></div><div class="end">${pill(BATCH_PILL[b.status], b.status[0].toUpperCase() + b.status.slice(1))}</div></a>`).join('') || `<div class="row">${emptyState('calendar-days', d.can_manage ? 'No batches yet. Create one in Admissions.' : 'No batches on a machine you are a Master Trainer for.')}</div>`}</div></section>`;
+  el.innerHTML = `<section class="panel flush"><div class="rows">${d.batches.map(b => `<a class="row" href="#/academy?tab=batches&batch=${b.id}"><span class="avatar">${icon('calendar-days', 18)}</span><div class="grow"><b>${esc(b.code)} · ${esc(b.title)}${b.internal ? ' <small class="muted">· internal</small>' : ''}</b><span>${fDate(b.start_date)}${b.end_date ? ' – ' + fDate(b.end_date) : ''} · ${esc(b.machine_name || 'machine not set')} · ${b.taken}/${b.seats} seats</span></div><div class="end">${pill(BATCH_PILL[b.status], b.status[0].toUpperCase() + b.status.slice(1))}</div></a>`).join('') || `<div class="row">${emptyState('calendar-days', d.can_manage ? 'No batches yet. Create one in Admissions.' : 'No batches on a machine you are a Master Trainer for.')}</div>`}</div></section>`;
 }
 
 async function batchPage(el, ctx, id, view) {

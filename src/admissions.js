@@ -84,7 +84,7 @@ export async function academyPage(env, url) {
   if (path === '/academy/status' || path === '/academy/status/') return statusPage(env, url);
   if (path !== '/academy/') return page(url, 'Page not found | Hasta EMS Academy', '', path, '<div class="wrap" style="padding:80px 0"><h1>Page not found</h1><p><a href="/academy/">EMS Trainer Programme</a></p></div>');
   await ensureSeed(env);
-  const [s, cur, batches] = await Promise.all([settingsOf(env), approvedCurriculum(env).then(c => c || env.DB.prepare('SELECT * FROM ems_curriculum ORDER BY id DESC LIMIT 1').first()), batchesWithSeats(env, "WHERE b.status IN ('open','closed') AND b.start_date >= ?", today())]);
+  const [s, cur, batches] = await Promise.all([settingsOf(env), approvedCurriculum(env).then(c => c || env.DB.prepare('SELECT * FROM ems_curriculum ORDER BY id DESC LIMIT 1').first()), batchesWithSeats(env, "WHERE b.status IN ('open','closed') AND b.start_date >= ? AND (b.internal=0 OR b.id=?)", today(), parseInt(url.searchParams.get('batch'), 10) || 0)]);
   const mods = parse(cur && cur.modules, []);
   const open = batches.filter(openForApply);
   const applied = url.searchParams.get('applied'), err = url.searchParams.get('error');
@@ -182,7 +182,7 @@ export async function academyApply(request, env, url, ctx) {
   const bid = parseInt(form.get('batch'), 10);
   if (bid) { batch = (await batchesWithSeats(env, 'WHERE b.id=?', bid))[0]; if (!batch || !openForApply(batch)) return backTo(url, 'That batch is no longer taking applications. Please choose another.'); }
   else {
-    batch = (await batchesWithSeats(env, "WHERE b.status IN ('draft','open') AND b.start_date >= ?", today())).pop();
+    batch = (await batchesWithSeats(env, "WHERE b.status IN ('draft','open') AND b.start_date >= ? AND b.internal=0", today())).pop();
     if (!batch) return backTo(url, 'No batch is open yet. Please WhatsApp +91 97784 58883 and we’ll tell you when the next batch opens.');
   }
   const ph = last10(phone);
@@ -313,7 +313,7 @@ export async function saveBatch(env, me, id, b) {
   if (status === 'open' && !(fee > 0)) return R(400, 'Set the course fee before opening the batch for applications.');
   if (status === 'open' && !mt) return R(400, 'Choose the machine this batch trains on before opening it.');
   if (mt && !(await env.DB.prepare('SELECT 1 FROM ems_machine_types WHERE id=? AND active=1').bind(mt).first())) return R(400, 'Choose an active machine.');
-  const cols = [code, title, mt, b.start_date, nz(b.end_date), nz(clean(b.schedule, 200)), seats, fee, nz(b.apply_by), status, nz(clean(b.notes, 300))];
+  const cols = [code, title, mt, b.start_date, nz(b.end_date), nz(clean(b.schedule, 200)), seats, fee, nz(b.apply_by), status, nz(clean(b.notes, 300)), b.internal ? 1 : 0];
   try {
     if (id) {
       const old = await env.DB.prepare('SELECT * FROM ems_academy_batches WHERE id=?').bind(id).first();
@@ -321,8 +321,8 @@ export async function saveBatch(env, me, id, b) {
       const taken = (await env.DB.prepare("SELECT COUNT(*) n FROM ems_academy_applications WHERE batch_id=? AND status IN ('offered','enrolled','completed')").bind(id).first()).n;
       if (seats < taken) return R(400, `${taken} seats are already offered or taken. Seats can’t go below that.`);
       if (fee !== old.fee && taken) return R(400, 'Offers have already been made at the current fee. Create a new batch instead, or cancel those bills first.');
-      await env.DB.prepare('UPDATE ems_academy_batches SET code=?, title=?, machine_type_id=?, start_date=?, end_date=?, schedule=?, seats=?, fee=?, apply_by=?, status=?, notes=? WHERE id=?').bind(...cols, id).run();
-    } else id = (await env.DB.prepare('INSERT INTO ems_academy_batches (code, title, machine_type_id, start_date, end_date, schedule, seats, fee, apply_by, status, notes, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(...cols, me.id).run()).meta.last_row_id;
+      await env.DB.prepare('UPDATE ems_academy_batches SET code=?, title=?, machine_type_id=?, start_date=?, end_date=?, schedule=?, seats=?, fee=?, apply_by=?, status=?, notes=?, internal=? WHERE id=?').bind(...cols, id).run();
+    } else id = (await env.DB.prepare('INSERT INTO ems_academy_batches (code, title, machine_type_id, start_date, end_date, schedule, seats, fee, apply_by, status, notes, internal, created_by) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').bind(...cols, me.id).run()).meta.last_row_id;
   } catch (e) { if (/UNIQUE/i.test(String(e && e.message))) return R(400, 'Another batch already uses that code.'); throw e; }
   await audit(env, me, 'academy.batch', 'academy_batch', id, `${code} ${status} fee ${fee} seats ${seats}`);
   return OK({ id });
