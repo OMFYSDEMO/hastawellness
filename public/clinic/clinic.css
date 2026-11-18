@@ -144,3 +144,5 @@ table.attgrid td[data-cell]{cursor:pointer}table.attgrid td[data-cell]:hover{bac
 .batch-ed .exp{font-size:12px;font-weight:600;margin-top:4px}.batch-ed .exp.bad{color:var(--alert)}.batch-ed .exp.warn{color:#b26b00}.batch-ed .exp.note{color:var(--muted,#6b7a79)}
 .batch-ed{width:100%}.batch-ed td:first-child .in{min-width:150px;width:100%}.batch-ed td:nth-child(2) .in{min-width:170px}
 .batch-ed td:first-child .in::placeholder{text-transform:none}
+
+.dc.st-pre{background:#eef3f1;color:#7f9a92}

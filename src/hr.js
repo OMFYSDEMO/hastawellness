@@ -159,12 +159,16 @@ const addMinutes = (hhmm, n) => { const t = +hhmm.slice(0, 2) * 60 + +hhmm.slice
 // Status per day: na (not employed) · off (weekly off) · holiday · present · in (clocked in now) · leave · pending (leave awaiting approval) · absent · upcoming
 function staffMonth(prof, month, att, leaves, holidays, absences, s) {
   const t = today(), days = monthDays(month), grace = Number(s.att_grace_min) || 10;
+  // Attendance rules (absence, late, missing clock-out, short hours) apply from this day. Earlier working days are
+  // treated as worked in full — the app was not yet the record of attendance.
+  const rulesFrom = /^\d{4}-\d{2}-\d{2}$/.test(s.hr_rules_from || '') ? s.hr_rules_from : '2026-11-18';
   const hol = new Map(holidays.map(h => [h.day, h.name]));
   const out = days.map(d => {
     const row = { day: d, entries: att.filter(a => a.day === d) };
     row.minutes = row.entries.reduce((n, a) => n + (a.out_at ? minutesBetween(a.in_at, a.out_at) : 0), 0);
     row.open = row.entries.some(a => !a.out_at);
-    row.missing_out = row.open && d < t;
+    row.pre = d < rulesFrom;
+    row.missing_out = row.open && d < t && !row.pre;
     const first = row.entries.map(a => a.in_at).sort()[0];
     row.first_in = first ? first.slice(11, 16) : null;
     const working = !(prof.joined_on && d < prof.joined_on) && !(prof.left_on && d > prof.left_on) && dow(d) !== prof.weekly_off && !hol.has(d);
@@ -174,7 +178,8 @@ function staffMonth(prof, month, att, leaves, holidays, absences, s) {
     else if (hol.has(d)) { row.status = 'holiday'; row.label = hol.get(d); }
     else if (dow(d) === prof.weekly_off) row.status = 'off';
     else if (lv && lv.status === 'approved') { row.status = 'leave'; row.kind = lv.kind; row.leave_id = lv.id; }
-    else if (row.entries.length) { row.status = row.open && d === t ? 'in' : 'present'; row.late = !!(row.first_in && row.first_in > addMinutes(prof.shift_start || '09:30', grace)); }
+    else if (row.entries.length) { row.status = row.open && d === t ? 'in' : 'present'; row.late = !row.pre && !!(row.first_in && row.first_in > addMinutes(prof.shift_start || '09:30', grace)); }
+    else if (row.pre) row.status = 'pre';
     else if (lv) { row.status = 'pending'; row.kind = lv.kind; row.leave_id = lv.id; }
     else if (d < t) { row.status = 'absent'; const ab = absences.find(a => a.day === d); row.confirmed = !!ab; row.letter_id = ab ? ab.letter_id : null; }
     else row.status = 'upcoming';
@@ -194,7 +199,9 @@ function payFor(prof, month, days) {
   const absent = n('absent'), pending = n('pending');
   // Today is still in progress: count it as a full expected day rather than the hours so far.
   const t = today(), todayRow = days.find(d => d.day === t && d.working && ['in', 'present', 'upcoming'].includes(d.status));
-  const workedH = r2(days.reduce((x, d) => x + (d === todayRow ? 0 : d.minutes), 0) / 60);
+  // Working days before the rules started count as a full day, whatever was (or wasn't) recorded.
+  const preDays = days.filter(d => d.working && d.pre && ['pre', 'present', 'in'].includes(d.status)).length;
+  const workedH = r2(days.reduce((x, d) => x + (d === todayRow || (d.pre && d.working && ['pre', 'present', 'in'].includes(d.status)) ? 0 : d.minutes), 0) / 60 + preDays * dh);
   const capH = Math.max(0, empWorking * dh - (absent + unpaidLeave + pending) * dh);
   // Days still to come this month are assumed worked in full, so a part-month shows the expected pay.
   const upcomingH = days.filter(d => d.working && (d.status === 'upcoming' || d === todayRow)).length * dh;
@@ -206,7 +213,7 @@ function payFor(prof, month, days) {
     salary: sal, daily_hours: dh, working_days: fullWorking, employed_days: empWorking, contract_hours: r2(contractH), rate: r2(rate),
     worked_hours: workedH, paid_leave_days: paidLeave, unpaid_leave_days: unpaidLeave, pending_leave_days: pending, absent_days: absent,
     unconfirmed_absences: days.filter(d => d.working && d.status === 'absent' && !d.confirmed).length,
-    late_days: days.filter(d => d.late).length, missing_out: days.filter(d => d.missing_out).length,
+    late_days: days.filter(d => d.late).length, pre_days: preDays, missing_out: days.filter(d => d.missing_out).length,
     paid_hours: r2(paidH), short_hours: shortH, projected_hours: upcomingH, deductions: ded, net,
   };
 }
