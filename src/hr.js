@@ -171,10 +171,12 @@ function staffMonth(prof, month, att, leaves, holidays, absences, s) {
     row.missing_out = row.open && d < t && !row.pre;
     const first = row.entries.map(a => a.in_at).sort()[0];
     row.first_in = first ? first.slice(11, 16) : null;
-    const working = !(prof.joined_on && d < prof.joined_on) && !(prof.left_on && d > prof.left_on) && dow(d) !== prof.weekly_off && !hol.has(d);
+    // A joining date only cuts pay from the day the rules started; earlier months were settled outside the app.
+    const notYet = prof.joined_on && d < prof.joined_on && d >= rulesFrom;
+    const working = !notYet && !(prof.left_on && d > prof.left_on) && dow(d) !== prof.weekly_off && !hol.has(d);
     row.working = working;
     const lv = leaves.find(l => l.from_date <= d && l.to_date >= d && ['approved', 'pending'].includes(l.status));
-    if (prof.joined_on && d < prof.joined_on || prof.left_on && d > prof.left_on) row.status = 'na';
+    if (notYet || prof.left_on && d > prof.left_on) row.status = 'na';
     else if (hol.has(d)) { row.status = 'holiday'; row.label = hol.get(d); }
     else if (dow(d) === prof.weekly_off) row.status = 'off';
     else if (lv && lv.status === 'approved') { row.status = 'leave'; row.kind = lv.kind; row.leave_id = lv.id; }
