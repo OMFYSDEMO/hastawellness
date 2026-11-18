@@ -56,6 +56,7 @@ export function includesText(e, sessions) {
   if (e.wm_consults) parts.push(e.legacy ? 'weight-management consultations' : `${e.wm_consults} weight-management consultation${e.wm_consults > 1 ? 's' : ''}`);
   if (e.diet_plan) parts.push('diet and lifestyle plan');
   if (e.measurements) parts.push('progress measurements and charts');
+  for (const t of e.treatments || []) parts.push(`${t.qty} × ${t.name}${t.used != null ? ` (${t.used} given)` : ''}`);
   return parts.join(', ');
 }
 

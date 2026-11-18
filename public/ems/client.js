@@ -2,7 +2,7 @@ import {
   api, esc, icon, toast, modal, formData, busy, field, inp, emptyState, slotPicker, lineChart, ring, insightList, deltaTag, measureSeries,
   dietView, today, nowLocal, dayDiff, fDay, fDate, fLong, fTime, fWhen, inr, kg, first, prettyPhone, pill, KIND_LABEL, CLINIC_PHONE, CLINIC_TEL,
   BASE, includesText, PROGRAMME_LABEL, admState, admSteps, letterBox, screeningForm, readScreening, sigPad,
-  toIn, cmIn } from './core.js?v=9';
+  toIn, cmIn } from './core.js?v=10';
 import { bodyComp, latestMerged } from './body.js?v=1';
 
 let ME, APP, BODY, DATA, DEMO = null;

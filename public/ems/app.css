@@ -426,3 +426,7 @@ h4.h-ic{display:flex;align-items:center;gap:8px;margin:6px 0 -4px}
 .demo-hl{outline:3px solid var(--gold,#c4a45b);outline-offset:3px;animation:hlpulse 1.6s ease-in-out 2;border-radius:16px}
 @keyframes hlpulse{50%{outline-color:rgba(196,164,91,.25)}}
 @media (max-width:1100px){.qdemo{grid-template-columns:1fr}.phone{margin:0 auto}}
+.picker{position:relative}
+.picker .list{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(29,52,55,.15);max-height:320px;overflow:auto}
+.picker .opt{display:flex;justify-content:space-between;gap:12px;padding:9px 12px;cursor:pointer;font-size:13.5px;border-top:1px solid var(--line-soft)}
+.picker .opt:first-child{border-top:0}

@@ -16,7 +16,7 @@ import * as AC from './academy.js';
 import * as ADM from './admissions.js';
 import * as BR from './batchrun.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
-import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED } from './packages.js';
+import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED, clinicTreatments, resolveTreatments } from './packages.js';
 import { EMS_DUE, clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, createPatientFor } from './emslink.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
 
@@ -183,9 +183,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=11">
+<link rel="stylesheet" href="/ems/app.css?v=12">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=15"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=16"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -301,6 +301,7 @@ async function route(request, env, url, ctx, base, p) {
     if (m === 'PUT') return admin ? done(await saveUnit(env, +r[1], body)) : api({ ok: false, error: 'Only head-office admins can change unit settings.' }, 403);
   }
   if (p === '/staff/price-list' && m === 'GET') return api({ ok: true, items: await priceList(env) });
+  if (p === '/staff/clinic-treatments' && m === 'GET') return api({ ok: true, items: await clinicTreatments(env) });
   if (p === '/staff/price-list' && m === 'PUT') return admin ? done(await savePriceList(env, body.items)) : api({ ok: false, error: 'Only admins can change prices.' }, 403);
   if (p === '/staff/machines' && m === 'GET') return api({ ok: true, machines: await listMachines(env), categories: MACHINE_CATEGORIES });
   if (p === '/staff/machines' && m === 'POST') return admin ? done(await saveMachine(env, null, body)) : api({ ok: false, error: 'Only admins can add machines.' }, 403);
@@ -505,6 +506,14 @@ async function packagesFor(env, clientId) {
     FROM ems_client_packages cp LEFT JOIN cl_invoices i ON i.id=cp.invoice_id WHERE cp.client_id=? ORDER BY cp.start_date, cp.id`).bind(clientId).all();
   const t = today();
   const use = await usage(env, (results || []).map(p => p.id));
+  // Clinic treatments in the package: how many have been given (redeemed at the clinic front desk).
+  const invIds = (results || []).map(p => p.invoice_id).filter(Boolean);
+  const red = {};
+  if (invIds.length) {
+    const { results: rr } = await env.DB.prepare(`SELECT pp.invoice_id, r.item_id, SUM(r.qty) n FROM cl_redemptions r JOIN cl_patient_packages pp ON pp.id=r.patient_package_id
+      WHERE pp.invoice_id IN (${invIds.map(Number).join(',')}) AND r.voided=0 AND pp.def_id=0 GROUP BY pp.invoice_id, r.item_id`).all();
+    for (const x of rr || []) red[x.invoice_id + ':' + x.item_id] = x.n;
+  }
   return (results || []).map(p => {
     const u = use[p.id] || {};
     const ent = entOf(p);
@@ -518,12 +527,13 @@ async function packagesFor(env, clientId) {
     let state = p.status;
     if (state === 'active') {
       if (p.expiry_date && p.expiry_date < t) state = 'expired';
-      else if (p.sessions_total > 0 && usedS >= p.sessions_total && !reviews_left && !wm_left) state = 'completed';
+      else if (p.sessions_total > 0 && usedS >= p.sessions_total && !reviews_left && !wm_left && !(ent.treatments || []).some(x => (red[p.invoice_id + ':' + x.item_id] || 0) < x.qty)) state = 'completed';
       else if (p.sessions_total === 0 && !reviews_left && !wm_left && !ent.diet_plan) state = 'completed';
     }
     // Bills are GST-inclusive splits of the package price, so a fully paid bill can be a paisa short.
     const left = Math.round((due - p.paid) * 100) / 100, paid = left < 1 ? due : Math.round(p.paid * 100) / 100;
     const billing = !p.invoice_id || p.invoice_status === 'cancelled' ? 'none' : p.invoice_status;
+    ent.treatments = (ent.treatments || []).map(x => ({ ...x, used: red[p.invoice_id + ':' + x.item_id] || 0 }));
     return { ...p, paid, billing, ent, used: usedS, booked: bookedS, remaining, available: Math.max(0, remaining - bookedS), due, balance: left < 1 ? 0 : left, state, reviews_used: reviews, wm_used: wm, reviews_left, wm_left };
   });
 }
@@ -789,6 +799,9 @@ async function assignPackage(env, clientId, b, me) {
   } else {
     ent = readEntitlements(b);
     if (!ent) return bad('Check what the custom package includes.');
+    const tr = await resolveTreatments(env, ent.treatments);
+    if (!tr.ok) return bad(tr.error);
+    ent.treatments = tr.treatments;
     name = clean(b.name, 80); price = int(b.price, 0, 10000000); programme = ['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems';
     validity = int(b.validity_days, 7, 730) || 90; mts = JSON.stringify((Array.isArray(b.machine_types) ? b.machine_types : []).map(Number).filter(Boolean)); maxDisc = 100;
     if (!name || price == null || price === undefined) return bad('Enter the custom package name and price.');
@@ -1228,6 +1241,9 @@ async function savePackageDef(env, id, b) {
   const name = clean(b.name, 80), validity = int(b.validity_days, 7, 730), price = int(b.price, 0, 10000000);
   const ent = readEntitlements(b);
   if (!name || !validity || !ent) return bad('Enter a name, validity and what the package includes.');
+  const tr = await resolveTreatments(env, ent.treatments);
+  if (!tr.ok) return bad(tr.error);
+  ent.treatments = tr.treatments;
   const prog = ['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems';
   if (prog !== 'weight' && ent.sessions < 1) return bad('An EMS package needs at least one EMS session.');
   if (prog === 'ems' && (ent.wm_consults || ent.diet_plan)) return bad('Weight-management consultations and the diet plan need the "EMS + weight management" or "Weight management" programme.');

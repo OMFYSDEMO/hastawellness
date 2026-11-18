@@ -159,7 +159,8 @@ export async function billPackage(env, me, cpId) {
   const [item, s] = await Promise.all([env.DB.prepare('SELECT * FROM cl_items WHERE code=?').bind(EMS_ITEM).first(), settings(env)]);
   if (!item) return R(500, 'The EMS package item is missing from the clinic catalogue.');
   const incl = String(s.ems_price_incl_gst ?? '1') !== '0', k = incl ? 1 + (item.gst_rate || 0) / 100 : 1;
-  const label = `EMS: ${cp.name}${cp.sessions_total ? ` (${cp.sessions_total} session${cp.sessions_total === 1 ? '' : 's'})` : ''}`;
+  const trs = (() => { try { return (JSON.parse(cp.entitlements || '{}').treatments || []); } catch { return []; } })();
+  const label = `EMS: ${cp.name}${cp.sessions_total ? ` (${cp.sessions_total} session${cp.sessions_total === 1 ? '' : 's'}${trs.map(t => ` + ${t.qty} × ${t.name}`).join('')})` : ''}`.slice(0, 200);
   // Price before GST chosen so the bill total comes to exactly the EMS price (GST rounds to the paisa).
   const rate = incl ? item.gst_rate || 0 : 0;
   // When no exact split exists the bill comes to a paisa under the price (never over).

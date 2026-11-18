@@ -123,17 +123,17 @@ function shell(base) {
 <title>Hasta Clinic</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=11"><link rel="stylesheet" href="/clinic/clinic.css?v=11">
-<link rel="modulepreload" href="/clinic/app.js?v=30"><link rel="modulepreload" href="/ems/core.js?v=9">
+<link rel="stylesheet" href="/ems/app.css?v=12"><link rel="stylesheet" href="/clinic/clinic.css?v=11">
+<link rel="modulepreload" href="/clinic/app.js?v=31"><link rel="modulepreload" href="/ems/core.js?v=10">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=30"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=31"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
 function kioskShell(base) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="robots" content="noindex,nofollow"><meta name="ems-base" content="${h(base)}"><title>Staff attendance · Hasta</title>
-<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=11"><link rel="stylesheet" href="/clinic/clinic.css?v=11">
+<link rel="icon" href="/favicon.ico"><link rel="stylesheet" href="/ems/app.css?v=12"><link rel="stylesheet" href="/clinic/clinic.css?v=11">
 </head><body class="kiosk-body"><div id="kiosk" class="kiosk"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
 <script type="module" src="/clinic/kiosk.js?v=1"></script></body></html>`;
 }
@@ -937,6 +937,16 @@ export async function finalise(env, me, id) {
     if (!def) continue;
     for (let k = 0; k < l.qty; k++) await env.DB.prepare('INSERT INTO cl_patient_packages (patient_id, def_id, name, items, invoice_id, line_id, start_date, expiry_date) VALUES (?,?,?,?,?,?,?,?)')
       .bind(inv.patient_id, def.id, def.name, JSON.stringify(def.items.map(x => ({ item_id: x.item_id, name: x.name, qty: x.qty }))), id, l.id, d, addDays(d, def.validity_days)).run();
+  }
+  // Clinic treatments included in an EMS package sold on this invoice (e.g. "Smooth & Sculpt": 3 EMS + 1 LHR)
+  // become a clinic package the front desk redeems like any other.
+  const { results: emsPk } = await env.DB.prepare('SELECT id, name, entitlements, expiry_date FROM ems_client_packages WHERE invoice_id=?').bind(id).all();
+  for (const cp of emsPk || []) {
+    const tr = (parse(cp.entitlements, {}).treatments || []).filter(t => t.item_id && t.qty > 0);
+    if (!tr.length) continue;
+    const had = await env.DB.prepare('SELECT id FROM cl_patient_packages WHERE invoice_id=? AND name=?').bind(id, `${cp.name} — treatments`).first();
+    if (!had) await env.DB.prepare('INSERT INTO cl_patient_packages (patient_id, def_id, name, items, invoice_id, line_id, start_date, expiry_date) VALUES (?,0,?,?,?,NULL,?,?)')
+      .bind(inv.patient_id, `${cp.name} — treatments`, JSON.stringify(tr.map(t => ({ item_id: t.item_id, name: t.name, qty: t.qty }))), id, d, cp.expiry_date && cp.expiry_date > d ? cp.expiry_date : addDays(d, 90)).run();
   }
   if (inv.appointment_id) await env.DB.prepare("UPDATE cl_appointments SET closure='billed', updated_at=? WHERE id=?").bind(nowIso(), inv.appointment_id).run();
   // Products sold go out of stock (first expiry first).

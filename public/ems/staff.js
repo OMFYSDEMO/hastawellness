@@ -3,9 +3,9 @@ import {
   measureSeries, dietView, DIETS, SCREENING, today, nowLocal, addDays, dayDiff, fDay, fDate, fWeekday, fLong, fTime, fWhen, inr, kg, initials, first,
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
   includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
-  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=9';
+  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=10';
 import { bodyComp, latestMerged, nutritionTargets, suggestDiets, defaultAim, TAPE, BIA, ACTIVITY, AIMS, FOOD_PREF } from './body.js?v=1';
-import { viewAcademy } from './academy.js?v=12';
+import { viewAcademy } from './academy.js?v=13';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
 const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';
@@ -924,6 +924,7 @@ async function renderPrices(el, admin) {
 async function pkgDefModal(p) {
   const items = await prices();
   const P = Object.fromEntries(items.map(i => [i.item, i]));
+  const CT = (await api('/staff/clinic-treatments')).items;
   p = p || { name: '', programme: 'ems', sessions: 10, price: '', validity_days: 60, description: '', active: 1, max_discount: 0, ent: { reviews: 0, wm_consults: 0, diet_plan: false, measurements: false } };
   const e = p.ent || {};
   modal({
@@ -937,6 +938,9 @@ async function pkgDefModal(p) {
         <div class="q"><p><b>Diet and lifestyle plan</b> <span class="small muted">with daily check-ins</span><br><span class="small muted">${inr(P.diet_plan.price)} · cost ${inr(P.diet_plan.cost)}</span></p><label class="check"><input type="checkbox" name="diet_plan" ${e.diet_plan ? 'checked' : ''}> Included</label></div>
         <div class="q"><p><b>Progress measurements and charts</b><br><span class="small muted">${inr(P.measurements.price)} · cost ${inr(P.measurements.cost)}</span></p><label class="check"><input type="checkbox" name="measurements" ${e.measurements ? 'checked' : ''}> Included</label></div>
       </div></div>
+      <div><h4 style="margin-bottom:4px">Add clinic treatments</h4><p class="small muted" style="margin:0 0 8px">Combine EMS with Skin or Hair treatments from the clinic price list, e.g. <i>Smooth &amp; Sculpt</i> = 3 EMS sessions + 1 laser hair reduction. They're given and ticked off at the clinic front desk.</p>
+        <div class="qs" data-trs></div>
+        <div class="picker" style="margin-top:8px"><input class="in" data-trq placeholder="Type to add a treatment — e.g. LHR, carbon peel, PRP" autocomplete="off"><div class="list" data-trl hidden></div></div></div>
       <div><h4 style="margin-bottom:8px">Machines this package uses</h4><div class="chips">${MACHINES.filter(m => m.active).map(m => `<label class="chip"><input type="checkbox" name="mt_${m.id}" ${machineList(p.machine_types).includes(m.id) ? 'checked' : ''}>${esc(m.name)}</label>`).join('') || '<span class="muted small">Add machines first.</span>'}</div><p class="small muted" style="margin-top:6px">Leave all unticked to allow any machine.</p></div>
       <div class="metrics" data-calc></div>
       <div class="grid3">${field('Selling price (₹)', inp('price', p.price ?? '', 'type="number" min="0"'))}${field('Max staff discount', sel('max_discount', [0, 5, 10, 15, 20, 25].map(x => [x, x ? x + '%' : 'No discount']), p.max_discount || 0), 'at the point of sale')}${field('Status', sel('active', [['1', 'Available to sell'], ['0', 'Hidden']], p.active ? '1' : '0'))}</div>
@@ -946,10 +950,29 @@ async function pkgDefModal(p) {
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save package</button>`,
     onMount(el, close) {
       const f = el.querySelector('[data-f]');
+      // Clinic treatments in the package (current clinic prices incl. GST).
+      let trs = (e.treatments || []).map(t => { const c = CT.find(x => x.id === t.item_id) || {}; return { item_id: t.item_id, name: c.name || t.name, qty: t.qty, price: c.price ?? t.price ?? 0, cost: c.cost ?? t.cost ?? 0, missing: !c.id }; });
+      const drawTr = () => {
+        el.querySelector('[data-trs]').innerHTML = trs.map((t, i) => `<div class="q"><p><b>${esc(t.name)}</b>${t.missing ? ' <span class="small" style="color:var(--alert)">no longer on the clinic list</span>' : ''}<br><span class="small muted">${inr(t.price)} each incl. GST · cost ${inr(t.cost)}</span></p><div style="display:flex;gap:6px;align-items:center"><input class="in" type="number" min="1" max="50" value="${t.qty}" data-trn="${i}" style="width:80px;text-align:right"><button type="button" class="btn sm quiet" data-trx="${i}" title="Remove">${icon('x', 15)}</button></div></div>`).join('');
+        el.querySelectorAll('[data-trn]').forEach(x => x.oninput = () => { trs[+x.dataset.trn].qty = Math.max(1, parseInt(x.value, 10) || 1); calc(); });
+        el.querySelectorAll('[data-trx]').forEach(x => x.onclick = () => { trs.splice(+x.dataset.trx, 1); drawTr(); calc(); });
+      };
+      const q = el.querySelector('[data-trq]'), ql = el.querySelector('[data-trl]');
+      q.addEventListener('input', () => {
+        const ws = q.value.trim().toLowerCase().split(/\s+/).filter(Boolean);
+        if (!ws.length) { ql.hidden = true; return; }
+        const hits = CT.filter(i => ws.every(w => (i.name + ' ' + (i.code || '') + ' ' + (i.dept || '')).toLowerCase().includes(w))).slice(0, 12);
+        ql.innerHTML = hits.length ? hits.map(i => `<div class="opt" data-ct="${i.id}"><span>${esc(i.name)} <small>${esc(i.dept || '')}</small></span><small>${inr(i.price)}</small></div>`).join('') : '<div class="opt muted">No Skin or Hair treatment matches</div>';
+        ql.hidden = false;
+        ql.querySelectorAll('[data-ct]').forEach(o => o.onmousedown = ev => { ev.preventDefault(); const c = CT.find(x => x.id === +o.dataset.ct); const ex = trs.find(x => x.item_id === c.id); if (ex) ex.qty++; else trs.push({ item_id: c.id, name: c.name, qty: 1, price: c.price, cost: c.cost }); q.value = ''; ql.hidden = true; drawTr(); calc(); });
+      });
+      q.addEventListener('blur', () => setTimeout(() => { ql.hidden = true; }, 150));
+      drawTr();
       const calc = () => {
         const n = k => Math.max(0, parseInt(f[k].value, 10) || 0);
-        const list = n('sessions') * P.ems_session.price + n('reviews') * P.review.price + n('wm_consults') * P.wm_consult.price + (f.diet_plan.checked ? P.diet_plan.price : 0) + (f.measurements.checked ? P.measurements.price : 0);
-        const cost = n('sessions') * P.ems_session.cost + n('reviews') * P.review.cost + n('wm_consults') * P.wm_consult.cost + (f.diet_plan.checked ? P.diet_plan.cost : 0) + (f.measurements.checked ? P.measurements.cost : 0);
+        const trList = trs.reduce((a, t) => a + t.price * t.qty, 0), trCost = trs.reduce((a, t) => a + t.cost * t.qty, 0);
+        const list = trList + n('sessions') * P.ems_session.price + n('reviews') * P.review.price + n('wm_consults') * P.wm_consult.price + (f.diet_plan.checked ? P.diet_plan.price : 0) + (f.measurements.checked ? P.measurements.price : 0);
+        const cost = trCost + n('sessions') * P.ems_session.cost + n('reviews') * P.review.cost + n('wm_consults') * P.wm_consult.cost + (f.diet_plan.checked ? P.diet_plan.cost : 0) + (f.measurements.checked ? P.measurements.cost : 0);
         const price = parseInt(f.price.value, 10);
         const has = Number.isFinite(price);
         const margin = has && price ? Math.round((price - cost) / price * 100) : null;
@@ -962,7 +985,7 @@ async function pkgDefModal(p) {
       };
       f.addEventListener('input', calc); f.addEventListener('change', calc); calc();
       const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => { const b = formData(f); b.active = b.active === '1'; b.machine_types = MACHINES.filter(m => b['mt_' + m.id]).map(m => m.id); return api('/staff/packages' + (p.id ? '/' + p.id : ''), { method: p.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Package saved'); reload(); }).catch(() => {}));
+      save.addEventListener('click', () => busy(save, () => { const b = formData(f); b.active = b.active === '1'; b.machine_types = MACHINES.filter(m => b['mt_' + m.id]).map(m => m.id); b.treatments = trs.map(t => ({ item_id: t.item_id, qty: t.qty })); return api('/staff/packages' + (p.id ? '/' + p.id : ''), { method: p.id ? 'PUT' : 'POST', body: b }); }).then(() => { close(); toast('Package saved'); reload(); }).catch(() => {}));
     },
   });
 }
@@ -1233,7 +1256,7 @@ const QSTEPS = [
   { view: 'home', hl: '[data-board]', title: 'Your coach sees it too', say: ['I see the same goal board on my screen, so we talk about what is red at each session.', 'No one else sees your data. Nothing here is about being perfect — it is about showing up.', 'Let\'s set up your app now: your mobile number and the 6-digit PIN.'] },
 ];
 async function viewQuestDemo() {
-  const C = await import('./client.js?v=11');
+  const C = await import('./client.js?v=12');
   let step = 0, profile = 'green', view = 'home', extra = { meals: [] }, data = null, forced = false;
   MAIN.innerHTML = `<div class="head"><div><h1>Hasta Quest — client demo</h1><p>Walk a client through how the game works. This is a sample client; nothing is saved.</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><div class="seg" data-prof>${[['green', 'On track'], ['amber', 'Slipping'], ['red', 'Off track']].map(([k, l]) => `<button data-p="${k}">${l}</button>`).join('')}</div><button class="btn ghost" data-reset>${icon('refresh-cw', 16)}Reset</button></div></div>
