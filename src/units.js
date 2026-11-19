@@ -91,8 +91,8 @@ function evaluate(dd, d, t, kind, mode, { exceptId = 0, prefer = null, types = [
   const live = dd.appts.filter(a => a.id !== exceptId && overlaps(a, t, dur));
   const busyOf = id => live.filter(a => a.trainer_id === id);
   const onShift = (r, needUnit) => (!needUnit || r.unit_id === u.id) && toMin(r.start_time) <= t && toMin(r.end_time) >= t + dur;
-  if (kind === 'session') {
-    const here = live.filter(a => a.unit_id === u.id && a.kind === 'session');
+  if (kind === 'session' || kind === 'trial') {
+    const here = live.filter(a => a.unit_id === u.id && (a.kind === 'session' || a.kind === 'trial'));
     const usedDevices = new Set(here.map(a => a.device_id).filter(Boolean));
     const anonymous = here.filter(a => !a.device_id || !a.trainer_id).length;    // older bookings without an assignment
     const freeDevices = dd.devices.filter(x => !usedDevices.has(x.id) && (!types.length || types.includes(x.machine_type_id)));
@@ -141,7 +141,7 @@ export async function allocate(env, unitId, start, kind, mode, { exceptId = 0, p
   if (r.left && inHours) return { ok: true, device_id: r.device || null, trainer_id: r.staff || null, duration: dd.unit.slot_minutes };
   if (force) return { ok: true, device_id: null, trainer_id: null, duration: dd.unit.slot_minutes, warning: inHours ? 'Overbooked: no free device or trainer was left.' : 'Outside this unit\'s opening hours.' };
   if (!inHours) return { ok: false, error: 'That time is outside the unit\'s opening hours.' };
-  return { ok: false, error: kind === 'session' ? 'No free device with a certified trainer at that time. Choose another slot.' : mode === 'video' ? 'No coach or doctor is free for a video call then.' : 'No coach or doctor is free at that time.' };
+  return { ok: false, error: kind === 'session' || kind === 'trial' ? 'No free device with a certified trainer at that time. Choose another slot.' : mode === 'video' ? 'No coach or doctor is free for a video call then.' : 'No coach or doctor is free at that time.' };
 }
 
 // Unit for a new lead: matching pin code, else district, else none (head office assigns).

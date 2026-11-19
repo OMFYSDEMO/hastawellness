@@ -33,6 +33,32 @@ export const SCREEN_QS = [
   ['skin', 'Do you have wounds, rashes or skin conditions where pads would be placed?'],
   ['fever', 'Are you currently unwell, with a fever or infection?'],
 ];
+// Trial / demo session: same screening questions, a short consent, signed by the client and the staff member.
+export const TRIAL_VERSION = 'HW-EMS-TRIAL-v1 (Nov 2026)';
+export const TRIAL_TEXT = [
+  'I am having a single supervised EMS (electrical muscle stimulation) trial session at Hasta Wellness, a venture of HASWEL CARE Private Limited.',
+  'It has been explained to me that EMS passes a small electrical current through the muscles to make them contract, and that it can cause muscle soreness and, rarely, more serious effects such as severe muscle breakdown (rhabdomyolysis), dizziness, or effects on the heart or on implanted devices.',
+  'I have answered the health questions truthfully. I understand that if I have any of the listed conditions I must not have EMS until a clinician has assessed me.',
+  'I will drink water before and after the session, tell the coach straight away if I feel pain, dizziness, chest discomfort or anything unusual, and seek medical help if I notice dark urine, severe pain or swelling in the next few days.',
+  'I can stop the session at any time. I have had the chance to ask questions and I agree to the trial session.',
+];
+export function trialSigOk(s) { return sigOk(s); }
+
+// No screening, no consent, no session. Returns the reason to stop, or null.
+export async function screeningStop(env, a) {
+  if (a.kind !== 'session' && a.kind !== 'trial') return null;
+  if (a.client_id) {
+    const el = await eligible(env, a.client_id, ['ems']);
+    if (el.ok) return null;
+    if (a.kind === 'session') return `This client is not cleared for EMS: ${el.reason} Do not start the session.`;
+  }
+  const tc = await env.DB.prepare("SELECT outcome FROM ems_trial_consents WHERE appointment_id=? ORDER BY id DESC LIMIT 1").bind(a.id).first();
+  if (!tc) return 'Complete the trial health screening and both signatures (Trial consent) before the session. No screening, no consent, no session.';
+  if (tc.outcome !== 'cleared') return 'The trial screening found a condition that needs a clinician\'s assessment first. Do not start EMS; book an initial consultation instead.';
+  return null;
+}
+
+
 const ROLES = ['Wellness coach', 'Doctor', 'Physiotherapist', 'Dietitian', 'Nurse'];
 const DECISIONS = { suitable: 'Suitable', conditions: 'Suitable with precautions', not_suitable: 'Not suitable at this time' };
 

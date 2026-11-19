@@ -13,7 +13,8 @@ export function entOf(row, legacyFull = true) {
     ? { sessions: row ? row.sessions_total ?? row.sessions ?? 0 : 0, reviews: 99, wm_consults: 99, diet_plan: true, measurements: true, legacy: true }
     : { sessions: row ? row.sessions ?? 0 : 0, reviews: 0, wm_consults: 0, diet_plan: false, measurements: false };
   return { sessions: Math.max(0, parseInt(e.sessions, 10) || 0), reviews: Math.max(0, parseInt(e.reviews, 10) || 0), wm_consults: Math.max(0, parseInt(e.wm_consults, 10) || 0), diet_plan: !!e.diet_plan, measurements: !!e.measurements,
-    treatments: Array.isArray(e.treatments) ? e.treatments.filter(t => t && t.item_id && t.qty > 0) : [] };
+    treatments: Array.isArray(e.treatments) ? e.treatments.filter(t => t && t.item_id && t.qty > 0) : [],
+    ...(parseInt(e.session_minutes, 10) >= 10 ? { session_minutes: parseInt(e.session_minutes, 10) } : {}) };
 }
 
 export async function priceList(env) {
@@ -47,6 +48,7 @@ export function readEntitlements(b) {
   const n = (v, max) => { const x = parseInt(v, 10); return x >= 0 && x <= max ? x : null; };
   const e = { sessions: n(b.sessions, 200), reviews: n(b.reviews, 52), wm_consults: n(b.wm_consults, 52), diet_plan: !!b.diet_plan, measurements: !!b.measurements };
   if ([e.sessions, e.reviews, e.wm_consults].some(x => x === null)) return null;
+  const sm = parseInt(b.session_minutes, 10); if (sm >= 10 && sm <= 120) e.session_minutes = sm; // blank = the unit's standard slot
   e.treatments = (Array.isArray(b.treatments) ? b.treatments : []).map(t => ({ item_id: parseInt(t.item_id, 10), qty: parseInt(t.qty, 10) })).filter(t => t.item_id > 0 && t.qty >= 1 && t.qty <= 50);
   return e;
 }

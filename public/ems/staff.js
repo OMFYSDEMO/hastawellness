@@ -3,7 +3,7 @@ import {
   measureSeries, dietView, DIETS, SCREENING, today, nowLocal, addDays, dayDiff, fDay, fDate, fWeekday, fLong, fTime, fWhen, inr, kg, initials, first,
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
   includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
-  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=10';
+  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=12';
 import { bodyComp, latestMerged, nutritionTargets, suggestDiets, defaultAim, TAPE, BIA, ACTIVITY, AIMS, FOOD_PREF } from './body.js?v=1';
 import { viewAcademy } from './academy.js?v=13';
 
@@ -90,8 +90,10 @@ function apptRow(a, { showDate = false, link = true, own = false } = {}) {
   const phone = a.client_phone || a.guest_phone;
   const when = showDate ? fWhen(a.start_at) : fTime(a.start_at);
   const sub = [own ? null : KIND_LABEL[a.kind], a.mode === 'video' ? 'Video call' : null, multi() || own ? a.unit_name : null, a.trainer_name ? (a.kind === 'session' ? 'Trainer ' : 'With ') + first(a.trainer_name) : null, a.device_name, a.notes].filter(Boolean).map(esc).join(' — ');
+  const needConsent = a.kind === 'trial' && a.trial_consent !== 'cleared';
   const acts = a.status === 'booked' ? `
-      <button class="btn sm ghost" data-act="attended" data-id="${a.id}" title="Mark attended">${icon('check', 16)}<span class="hide-m">Attended</span></button>
+      ${needConsent ? `<button class="btn sm${a.trial_consent === 'refer' ? ' danger' : ''}" data-act="trial" data-id="${a.id}" title="Trial health screening and consent">${icon('shield-check', 16)}<span class="hide-m">${a.trial_consent === 'refer' ? 'Refer to clinician' : 'Trial consent'}</span></button>`
+        : `<button class="btn sm ghost" data-act="attended" data-id="${a.id}" title="Mark attended">${icon('check', 16)}<span class="hide-m">Attended</span></button>`}
       <button class="btn sm quiet icon" data-act="more" data-id="${a.id}" aria-label="More actions">${icon('more-horizontal', 18)}</button>` : '';
   return `<div class="row" data-appt="${a.id}">
     <span class="time${showDate ? ' wide' : ''}">${esc(when)}</span>
@@ -108,7 +110,52 @@ function bindApptActions(root, list, after) {
     if (!a) return;
     if (b.dataset.act === 'attended') {
       await busy(b, () => api('/staff/appointments/' + a.id, { method: 'PUT', body: { status: 'attended' } })).catch(() => null) && (toast('Marked as attended'), after());
-    } else if (b.dataset.act === 'more') apptMenu(a, after);
+    } else if (b.dataset.act === 'trial') trialConsentModal(a, after);
+    else if (b.dataset.act === 'more') apptMenu(a, after);
+  });
+}
+
+// Trial / demo EMS: short health screening + consent signed by the client and the staff member, before the machine is on.
+async function trialConsentModal(a, after) {
+  const name = a.client_name || a.guest_name || 'Client';
+  if (a.trial_consent === 'refer') {
+    const r = await api(`/staff/appointments/${a.id}/trial-consent`).catch(() => null);
+    const c = r && r.consent, qs = (r && r.questions) || [];
+    return modal({ title: `Do not start EMS · ${name}`, body: `<div class="note" style="border-color:var(--alert)"><b>The trial screening found a condition that needs a clinician's assessment first.</b><p class="small" style="margin:6px 0 0">Do not switch the machine on. Book an initial consultation so a clinician can assess ${esc(first(name))}, and cancel this trial.</p></div>
+      ${c ? `<ul class="dots" style="margin-top:12px">${qs.filter(([k]) => c.answers[k]).map(([, q]) => `<li>${esc(q)} <b>Yes</b></li>`).join('')}</ul><p class="small muted">Screened by ${esc(c.staff_name || '')} · ${esc(fWhen(c.created_at.slice(0, 16)))}</p>` : ''}`,
+      actions: `<button class="btn ghost" data-close>Close</button>` });
+  }
+  const form = await api('/staff/trial-consent-form');
+  modal({
+    title: `Trial consent · ${name}`, wide: true,
+    body: `<form data-f class="stack">
+      <p class="note small" style="margin:0"><b>No screening, no consent, no session.</b> Ask every question and read the answers back. If any answer is <b>Yes</b>, EMS cannot start today: the client needs a clinician's assessment first.</p>
+      ${screeningForm(form.questions)}
+      ${field('Blood pressure (if measured)', inp('bp', '', 'maxlength="20" placeholder="e.g. 120/80"'))}
+      <div data-consent>
+        <div class="letter"><h4>Trial session consent</h4>${form.text.map(t => `<p>${esc(t)}</p>`).join('')}<p class="small muted">${esc(form.version)}</p></div>
+        ${field('Client types their full name', inp('typed_name', name, 'maxlength="80"'))}
+        <label class="check"><input type="checkbox" name="agree"> I (the client) have read this, had the chance to ask questions, and agree to the trial session.</label>
+        <div class="grid2" style="margin-top:10px"><div><h4 style="margin-bottom:8px">Client signature</h4><div data-csig></div></div><div><h4 style="margin-bottom:8px">Staff signature <span class="small muted">(I explained the risks)</span></h4><div data-ssig></div></div></div>
+      </div></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>${icon('shield-check', 18)}Save trial consent</button>`,
+    onMount(el, close) {
+      const f = el.querySelector('[data-f]'), cs = sigPad(el.querySelector('[data-csig]')), ss = sigPad(el.querySelector('[data-ssig]')), save = el.querySelector('[data-save]');
+      const yes = () => form.questions.some(([k]) => { const r = f.querySelector(`[name="q_${k}"]:checked`); return r && r.value === 'yes'; });
+      f.addEventListener('change', () => { el.querySelector('[data-consent]').hidden = yes(); save.innerHTML = yes() ? `${icon('alert-triangle', 18)}Record and stop` : `${icon('shield-check', 18)}Save trial consent`; });
+      save.addEventListener('click', () => {
+        const sc = readScreening(f, form.questions);
+        if (Object.values(sc.answers).some(v => v === null)) return toast('Answer every health question (yes or no).', true);
+        const body = { answers: sc.answers, medicines: sc.medicines, other: sc.other, bp: f.bp.value, typed_name: f.typed_name.value, agree: f.agree.checked, client_sig: cs.value(), staff_sig: ss.value() };
+        if (!yes()) { if (!body.client_sig) return toast('The client must sign.', true); if (!body.staff_sig) return toast('Please sign as the staff member.', true); if (!body.agree) return toast('The client must tick the agreement.', true); }
+        busy(save, () => api(`/staff/appointments/${a.id}/trial-consent`, { method: 'POST', body })).then(r => {
+          close();
+          if (r.outcome === 'cleared') toast('Trial consent saved. You can start the session and mark it attended.');
+          else toast('Recorded. Do not start EMS — book an initial consultation with a clinician.', true);
+          after();
+        }).catch(() => {});
+      });
+    },
   });
 }
 
@@ -163,10 +210,10 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
   const startUnit = (client && client.home_unit_id) || (lead && lead.unit_id) || UNIT || (UNITS[0] && UNITS[0].id);
   const m = modal({
     title: lead ? `Book consultation · ${lead.name}` : 'New booking', wide: true,
-    body: `${lead ? '' : `<div class="seg" data-kind style="flex-wrap:wrap">${[['session', 'EMS session'], ['review', 'Progress review'], ['wm_consult', 'Weight-mgmt consultation'], ['consultation', 'Initial consultation']].map(([k, l]) => `<button type="button" data-k="${k}" class="${k === kind ? 'on' : ''}">${l}</button>`).join('')}</div>
-      <p class="small muted" style="margin-top:-6px">Reviews and weight-management consultations are only bookable when the client's package includes them. Initial consultations are for new or returning clients before admission.</p>`}
+    body: `${lead ? '' : `<div class="seg" data-kind style="flex-wrap:wrap">${[['session', 'EMS session'], ['trial', 'EMS trial / demo'], ['review', 'Progress review'], ['wm_consult', 'Weight-mgmt consultation'], ['consultation', 'Initial consultation']].map(([k, l]) => `<button type="button" data-k="${k}" class="${k === kind ? 'on' : ''}">${l}</button>`).join('')}</div>
+      <p class="small muted" style="margin-top:-6px">Reviews and weight-management consultations are only bookable when the client's package includes them. Initial consultations are for new or returning clients before admission. An EMS trial / demo needs the trial health screening and both signatures before the machine is switched on.</p>`}
       ${lead ? `<p class="muted">${esc(prettyPhone(lead.phone))}${lead.concern ? ' — ' + esc(lead.concern) : ''}</p>` : `<div data-who></div>`}
-      <div class="grid2">${field('Unit', sel('unit_id', unitOpts(), startUnit), 'clients can book at any unit')}<div data-mode ${kind === 'session' ? 'hidden' : ''}>${field('How', `<div class="seg" style="width:100%"><button type="button" data-m="in_person" class="on" style="flex:1">${icon('home', 15)} In person</button><button type="button" data-m="video" style="flex:1">${icon('phone', 15)} Video call</button></div>`)}</div></div>
+      <div class="grid2">${field('Unit', sel('unit_id', unitOpts(), startUnit), 'clients can book at any unit')}<div data-mode ${kind === 'session' || kind === 'trial' ? 'hidden' : ''}>${field('How', `<div class="seg" style="width:100%"><button type="button" data-m="in_person" class="on" style="flex:1">${icon('home', 15)} In person</button><button type="button" data-m="video" style="flex:1">${icon('phone', 15)} Video call</button></div>`)}</div></div>
       <div><h4 style="margin-bottom:10px">Date and time</h4><div data-slots></div><p class="small muted" style="margin-top:8px">Times shown have a free device and a rostered trainer (one client per trainer), or a free coach/doctor for consultations. A device and staff member are assigned automatically.</p></div>
       <label class="check" hidden data-over><input type="checkbox" name="force"> Overbook — this slot is already full</label>
       ${field('Note', inp('notes', '', 'maxlength="300" placeholder="Optional"'))}
@@ -174,7 +221,7 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save disabled>${icon('calendar-plus', 18)}Book</button>`,
     onMount(el, close) {
       const save = el.querySelector('[data-save]');
-      const ready = () => { save.disabled = !pick || (!lead && kind !== 'consultation' && !chosen) || (!lead && !chosen && !guestOk()); };
+      const ready = () => { save.disabled = !pick || (!lead && kind !== 'consultation' && kind !== 'trial' && !chosen) || (!lead && !chosen && !guestOk()); };
       const guestOk = () => { const n = el.querySelector('[name=guest_name]'), p = el.querySelector('[name=guest_phone]'); return n && p && n.value.trim().length > 1 && p.value.replace(/\D/g, '').length >= 10; };
       const who = el.querySelector('[data-who]');
       const drawWho = () => {
@@ -182,7 +229,7 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
  if (chosen && sp) setTimeout(() => sp.reload(), 0);
         if (chosen) { who.innerHTML = `<div class="row" style="border:1px solid var(--line);border-radius:12px"><span class="avatar">${esc(initials(chosen.name))}</span><div class="grow"><b>${esc(chosen.name)}</b><span>${esc(prettyPhone(chosen.phone))}</span></div>${client ? '' : `<button type="button" class="btn sm quiet" data-change>Change</button>`}</div>`; ready(); return; }
         who.innerHTML = `${field('Client', `<div class="search" style="max-width:none">${icon('search', 18)}<input class="in" data-q placeholder="Search by name or mobile" autocomplete="off"></div>`)}<div class="rows" data-res style="margin-top:6px"></div>
-          ${kind === 'consultation' ? `<details style="margin-top:6px"><summary class="small" style="cursor:pointer;color:var(--teal)">Someone new? Enter their details</summary><div class="grid2" style="margin-top:10px">${field('Name', inp('guest_name'))}${field('Mobile', inp('guest_phone', '', 'type="tel"'))}</div></details>` : ''}`;
+          ${kind === 'consultation' || kind === 'trial' ? `<details style="margin-top:6px"><summary class="small" style="cursor:pointer;color:var(--teal)">Someone new? Enter their details</summary><div class="grid2" style="margin-top:10px">${field('Name', inp('guest_name'))}${field('Mobile', inp('guest_phone', '', 'type="tel"'))}</div></details>` : ''}`;
         const qi = who.querySelector('[data-q]'), res = who.querySelector('[data-res]');
         let tmr;
         qi.addEventListener('input', () => { clearTimeout(tmr); tmr = setTimeout(async () => {
@@ -196,7 +243,7 @@ function bookModal({ client = null, kind = 'session', lead = null, after = reloa
       who && who.addEventListener('click', e => { if (e.target.closest('[data-change]')) { chosen = null; drawWho(); ready(); } });
       drawWho();
       const uSel = el.querySelector('[name=unit_id]');
-      el.querySelector('[data-kind]')?.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (!b) return; kind = b.dataset.k; el.querySelectorAll('[data-kind] button').forEach(x => x.classList.toggle('on', x === b)); el.querySelector('[data-mode]').hidden = kind === 'session'; if (kind === 'session') mode = 'in_person'; if (!client) drawWho(); sp.reload(); ready(); });
+      el.querySelector('[data-kind]')?.addEventListener('click', e => { const b = e.target.closest('[data-k]'); if (!b) return; kind = b.dataset.k; el.querySelectorAll('[data-kind] button').forEach(x => x.classList.toggle('on', x === b)); el.querySelector('[data-mode]').hidden = kind === 'session' || kind === 'trial'; if (kind === 'session' || kind === 'trial') mode = 'in_person'; if (!client) drawWho(); sp.reload(); ready(); });
       el.querySelector('[data-mode]').addEventListener('click', e => { const b = e.target.closest('[data-m]'); if (!b) return; mode = b.dataset.m; el.querySelectorAll('[data-mode] button').forEach(x => x.classList.toggle('on', x === b)); sp.reload(); });
       uSel.addEventListener('change', () => sp.reload());
       sp = slotPicker(el.querySelector('[data-slots]'), { staff: true, days: 30, query: () => `&unit=${uSel.value}&kind=${lead ? 'consultation' : kind}&mode=${mode}${chosen ? '&client=' + chosen.id : ''}`, startDate: lead && lead.preferred_date >= today() && lead.preferred_date <= addDays(today(), 29) ? lead.preferred_date : undefined, onPick: (v, full) => { pick = v; el.querySelector('[data-over]').hidden = !full; ready(); } });
@@ -950,6 +997,7 @@ async function pkgDefModal(p) {
       <div class="grid3">${field('Package name', inp('name', p.name, 'maxlength="80" placeholder="e.g. EMS Starter"'))}${field('Programme', sel('programme', [['ems', 'EMS programme'], ['weight', 'Weight management only'], ['combined', 'EMS + weight management']], p.programme || 'ems'), 'admission must cover this')}${field('Valid for (days)', inp('validity_days', p.validity_days, 'type="number" min="7"'))}</div>
       <div><h4 style="margin-bottom:8px">What's included</h4><div class="qs">
         <div class="q"><p><b>EMS sessions</b><br><span class="small muted">${inr(P.ems_session.price)} each · cost ${inr(P.ems_session.cost)}</span></p><input class="in" name="sessions" type="number" min="0" max="200" value="${p.sessions ?? 0}" style="width:100px;text-align:right"></div>
+        <div class="q"><p><b>Session length</b> <span class="small muted">(minutes; leave blank for the centre's standard slot)</span></p><input class="in" name="session_minutes" type="number" min="10" max="120" placeholder="standard" value="${(p.ent && p.ent.session_minutes) || ''}" style="width:100px;text-align:right"></div>
         <div class="q"><p><b>Progress reviews</b> <span class="small muted">(monthly review with measurements)</span><br><span class="small muted">${inr(P.review.price)} each · cost ${inr(P.review.cost)}</span></p><input class="in" name="reviews" type="number" min="0" max="52" value="${e.reviews || 0}" style="width:100px;text-align:right"></div>
         <div class="q"><p><b>Weight-management consultations</b><br><span class="small muted">${inr(P.wm_consult.price)} each · cost ${inr(P.wm_consult.cost)}</span></p><input class="in" name="wm_consults" type="number" min="0" max="52" value="${e.wm_consults || 0}" style="width:100px;text-align:right"></div>
         <div class="q"><p><b>Diet and lifestyle plan</b> <span class="small muted">with daily check-ins</span><br><span class="small muted">${inr(P.diet_plan.price)} · cost ${inr(P.diet_plan.cost)}</span></p><label class="check"><input type="checkbox" name="diet_plan" ${e.diet_plan ? 'checked' : ''}> Included</label></div>

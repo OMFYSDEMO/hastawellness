@@ -18,14 +18,14 @@ import * as BR from './batchrun.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED, clinicTreatments, resolveTreatments } from './packages.js';
 import { EMS_DUE, clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, rebillPackage, createPatientFor } from './emslink.js';
-import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
+import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS, TRIAL_VERSION, TRIAL_TEXT, trialSigOk, screeningStop } from './admission.js';
 
 const STAFF_TTL_H = 12;
 const CLIENT_TTL_D = 30;
 const SLOT_MIN = 30;
 const HOURS = { 0: ['10:00', '16:00'], 1: ['10:00', '20:30'], 2: ['10:00', '20:30'], 3: ['10:00', '20:30'], 4: ['10:00', '20:30'], 5: ['10:00', '20:30'], 6: ['10:00', '20:30'] };
 const APPT_STATUSES = ['booked', 'attended', 'no_show', 'cancelled'];
-const APPT_KINDS = ['session', 'consultation', 'review', 'wm_consult'];
+const APPT_KINDS = ['session', 'trial', 'consultation', 'review', 'wm_consult'];
 const PAY_METHODS = ['UPI', 'Cash', 'Card', 'Bank transfer'];
 const LEAD_STATUSES = ['new', 'contacted', 'booked', 'not interested'];
 import { game, demoData } from './emsgame.js';
@@ -185,7 +185,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=12">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=19"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=21"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -204,7 +204,7 @@ async function route(request, env, url, ctx, base, p) {
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
     if (!(request.headers.get('content-type') || '').includes('application/json')) return api({ ok: false, error: 'Unsupported' }, 415);
-    if (parseInt(request.headers.get('content-length') || '0', 10) > (/\/(assess|sign|client-sign)$/.test(p) ? 400000 : 20000)) return api({ ok: false, error: 'Too large' }, 413);
+    if (parseInt(request.headers.get('content-length') || '0', 10) > (/\/(assess|sign|client-sign|trial-consent)$/.test(p) ? 400000 : 20000)) return api({ ok: false, error: 'Too large' }, 413);
     try { body = await request.json(); } catch { return bad('Invalid request'); }
     if (!body || typeof body !== 'object') return bad('Invalid request');
   }
@@ -380,6 +380,9 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/staff/appointments' && m === 'GET') return listAppointments(env, url, sc);
   if (p === '/staff/appointments' && m === 'POST') return staffBook(env, me, body, sc);
   if ((r = p.match(/^\/staff\/appointments\/(\d+)$/)) && m === 'PUT') return updateAppointment(env, +r[1], body);
+  if (p === '/staff/trial-consent-form' && m === 'GET') return api({ ok: true, questions: SCREEN_QS, text: TRIAL_TEXT, version: TRIAL_VERSION });
+  if ((r = p.match(/^\/staff\/appointments\/(\d+)\/trial-consent$/)) && m === 'POST') return saveTrialConsent(env, me, +r[1], body);
+  if ((r = p.match(/^\/staff\/appointments\/(\d+)\/trial-consent$/)) && m === 'GET') return trialConsentView(env, +r[1]);
   if (p === '/staff/leads' && m === 'GET') return listLeads(env, url, sc, scope);
   if ((r = p.match(/^\/staff\/leads\/(\d+)$/)) && m === 'PUT') return updateLead(env, +r[1], body);
   if ((r = p.match(/^\/staff\/leads\/(\d+)\/convert$/)) && m === 'POST') return convertLead(env, me, +r[1], body, sc);
@@ -565,7 +568,7 @@ async function clientBook(env, ctx, url, me, b) {
   const al = await allocate(env, unit.id, start, 'session', 'in_person', { prefer: c.coach_id, types: typesOf(pkg) });
   if (!al.ok) return bad(al.error.startsWith('No free device') ? 'That time has just been taken. Please choose another.' : al.error);
   await env.DB.prepare("INSERT INTO ems_appointments (client_id, kind, start_at, duration, client_package_id, created_by, unit_id, device_id, trainer_id) VALUES (?,'session',?,?,?,'client',?,?,?)")
-    .bind(me.id, start, al.duration, pkg.id, unit.id, al.device_id, al.trainer_id).run();
+    .bind(me.id, start, entOf(pkg).session_minutes || al.duration, pkg.id, unit.id, al.device_id, al.trainer_id).run();
   const alert = notify(env, `EMS session booked by ${me.name} at ${unit.name}`, [['Client', me.name], ['Mobile', me.phone], ['Unit', unit.name], ['When', start.replace('T', ' ') + ' IST'], ['Package', pkg.name]], '/#/schedule', emsOrigin(env, url));
   if (ctx && ctx.waitUntil) ctx.waitUntil(alert);
   return api({ ok: true });
@@ -582,22 +585,23 @@ async function clientCancel(env, me, id) {
 async function staffBook(env, me, b, sc) {
   const start = String(b.start_at || '');
   const kind = APPT_KINDS.includes(b.kind) ? b.kind : 'session';
-  const mode = kind !== 'session' && b.mode === 'video' ? 'video' : 'in_person';
+  const mode = kind !== 'session' && kind !== 'trial' && b.mode === 'video' ? 'video' : 'in_person';
   if (!isLocal(start)) return bad('Choose a date and time.');
   const clientId = parseInt(b.client_id, 10) || null;
   let guestName = null, guestPhone = null;
   if (!clientId) {
     guestName = clean(b.guest_name, 80); guestPhone = normalisePhone(b.guest_phone);
-    if (!guestName || !guestPhone) return bad('Choose a client, or enter a name and mobile for a new consultation.');
+    if (!guestName || !guestPhone) return bad('Choose a client, or enter a name and mobile for a new consultation or trial.');
+    if (kind !== 'consultation' && kind !== 'trial') return bad('Someone new can only be booked for an initial consultation or an EMS trial. EMS sessions need a client who has completed admission.');
   }
-  let pkgId = null, types = [];
+  let pkgId = null, types = [], sessMins = null;
   const warnings = [];
   if (clientId && kind === 'session') {
     const pkg = await bookablePackage(env, clientId);
     if (!pkg) return bad('This client has no sessions left. Add a package first.');
     const el = await eligible(env, clientId, needsProgrammes(pkg.programme));
     if (!el.ok) return bad(el.reason);
-    pkgId = pkg.id; types = typesOf(pkg);
+    pkgId = pkg.id; types = typesOf(pkg); sessMins = entOf(pkg).session_minutes || null;
     if (await recoveryClash(env, clientId, start)) warnings.push('Less than 48 hours from another session.');
   }
   if (clientId && (kind === 'review' || kind === 'wm_consult')) {
@@ -617,7 +621,7 @@ async function staffBook(env, me, b, sc) {
   if (!al.ok) return bad(al.error + ' Or tick "overbook".');
   if (al.warning) warnings.push(al.warning);
   await env.DB.prepare('INSERT INTO ems_appointments (client_id, lead_id, guest_name, guest_phone, kind, mode, start_at, duration, client_package_id, staff_id, notes, unit_id, device_id, trainer_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(clientId, parseInt(b.lead_id, 10) || null, guestName, guestPhone, kind, mode, start, al.duration, pkgId, me.id, nz(clean(b.notes, 300)), unit.id, al.device_id, al.trainer_id).run();
+    .bind(clientId, parseInt(b.lead_id, 10) || null, guestName, guestPhone, kind, mode, start, sessMins || al.duration, pkgId, me.id, nz(clean(b.notes, 300)), unit.id, al.device_id, al.trainer_id).run();
   return api({ ok: true, warnings });
 }
 
@@ -647,6 +651,12 @@ async function updateAppointment(env, id, b) {
     const el = await eligible(env, a.client_id, ['ems']);
     if (!el.ok) return bad(el.reason);
   }
+  // No screening, no consent, no session: an EMS session needs a client who is admitted on the day;
+  // a trial needs the trial screening and signed consent (or a client already admitted).
+  if (status === 'attended' && a.status !== 'attended') {
+    const stop = await screeningStop(env, a);
+    if (stop) return bad(stop);
+  }
   const notes = b.notes !== undefined ? nz(clean(b.notes, 300)) : a.notes;
   if (b.trainer_id !== undefined && parseInt(b.trainer_id, 10)) trainerId = parseInt(b.trainer_id, 10);
   await env.DB.prepare("UPDATE ems_appointments SET status=?, start_at=?, client_package_id=?, notes=?, unit_id=?, device_id=?, trainer_id=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?")
@@ -654,8 +664,41 @@ async function updateAppointment(env, id, b) {
   return api({ ok: true });
 }
 
+async function saveTrialConsent(env, me, id, b) {
+  const a = await env.DB.prepare('SELECT a.*, c.name client_name, c.phone client_phone FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id WHERE a.id=?').bind(id).first();
+  if (!a) return api({ ok: false, error: 'Not found' }, 404);
+  if (a.kind !== 'trial') return bad('Trial consent is only for EMS trial bookings.');
+  if (a.status !== 'booked') return bad('This booking is no longer open.');
+  const answers = {};
+  for (const [k] of SCREEN_QS) {
+    const v = b.answers && b.answers[k];
+    if (v !== true && v !== false) return bad('Answer every health question (yes or no).');
+    answers[k] = v;
+  }
+  const anyYes = Object.values(answers).some(Boolean);
+  const name = a.client_name || a.guest_name || 'Client';
+  if (!anyYes) {
+    if (clean(b.typed_name, 80).length < 2) return bad('The client must type their full name.');
+    if (b.agree !== true) return bad('The client must tick that they have read and agree to the trial consent.');
+    if (!trialSigOk(b.client_sig)) return bad('The client must sign in their signature box.');
+    if (!trialSigOk(b.staff_sig)) return bad('You must sign in the staff signature box, confirming you explained the risks.');
+  }
+  const outcome = anyYes ? 'refer' : 'cleared';
+  await env.DB.prepare(`INSERT INTO ems_trial_consents (appointment_id, client_id, lead_id, name, phone, answers, any_yes, bp, medicines, other, outcome, typed_name, client_sig, staff_sig, staff_id, staff_name, version)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`).bind(id, a.client_id, a.lead_id, name, a.client_phone || a.guest_phone, JSON.stringify(answers), anyYes ? 1 : 0,
+    nz(clean(b.bp, 20)), nz(clean(b.medicines, 300)), nz(clean(b.other, 500)), outcome, anyYes ? null : clean(b.typed_name, 80), anyYes ? null : b.client_sig, anyYes ? null : b.staff_sig, me.id, me.name, TRIAL_VERSION).run();
+  return api({ ok: true, outcome });
+}
+
+async function trialConsentView(env, id) {
+  const t = await env.DB.prepare('SELECT id, appointment_id, name, answers, any_yes, bp, medicines, other, outcome, typed_name, client_sig, staff_sig, staff_name, version, created_at FROM ems_trial_consents WHERE appointment_id=? ORDER BY id DESC LIMIT 1').bind(id).first();
+  if (!t) return api({ ok: false, error: 'No trial consent yet.' }, 404);
+  return api({ ok: true, consent: { ...t, answers: JSON.parse(t.answers || '{}') }, questions: SCREEN_QS, text: TRIAL_TEXT });
+}
+
 const APPT_SELECT = `SELECT a.*, c.name client_name, c.phone client_phone, cp.name package_name, c.coach_id, s.name coach_name,
     t.name trainer_name, dv.name device_name, un.name unit_name, un.code unit_code,
+    (SELECT tc.outcome FROM ems_trial_consents tc WHERE tc.appointment_id=a.id ORDER BY tc.id DESC LIMIT 1) trial_consent,
     (SELECT ce.code FROM ems_certifications ce WHERE ce.staff_id=a.trainer_id AND ce.machine_type_id=dv.machine_type_id AND ce.status='active' AND ce.code IS NOT NULL ORDER BY ce.valid_until DESC LIMIT 1) trainer_cert
     FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id LEFT JOIN ems_client_packages cp ON cp.id=a.client_package_id
     LEFT JOIN ems_staff s ON s.id=c.coach_id LEFT JOIN ems_staff t ON t.id=a.trainer_id LEFT JOIN ems_devices dv ON dv.id=a.device_id LEFT JOIN ems_units un ON un.id=a.unit_id`;

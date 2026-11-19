@@ -306,7 +306,7 @@ function noChargeModal(a, after) {
 
 /* ---------------- EMS (one person, one record) ---------------- */
 const EMS_C = '#6b4fa0';
-const EMS_KIND = { session: 'EMS session', consultation: 'EMS consultation', review: 'EMS review' };
+const EMS_KIND = { session: 'EMS session', trial: 'EMS trial / demo', consultation: 'EMS consultation', review: 'EMS review', wm_consult: 'Weight-mgmt consultation' };
 const EMS_ST = { booked: 'Booked', attended: 'Attended', no_show: 'No-show', cancelled: 'Cancelled' };
 const emsCls = e => 'ems st-' + (e.status === 'attended' ? 'completed' : e.status);
 const EMS_APP = location.hostname.startsWith('clinicapp.') ? location.origin.replace('//clinicapp.', '//ems.') : location.origin + '/ems';

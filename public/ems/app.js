@@ -1,4 +1,4 @@
-import { api, esc, icon, toast, formData, busy, field, inp, today, CLINIC_PHONE, CLINIC_TEL } from './core.js?v=10';
+import { api, esc, icon, toast, formData, busy, field, inp, today, CLINIC_PHONE, CLINIC_TEL } from './core.js?v=12';
 
 const app = document.getElementById('app');
 
@@ -6,9 +6,9 @@ async function start() {
   let me = null;
   try { ({ me } = await api('/me')); } catch (e) { app.innerHTML = `<div class="boot"><p class="err">${esc(e.message)}</p></div>`; return; }
   if (!me) return login();
-  if (me.kind === 'staff' && me.role === 'trainee') (await import('./academy.js?v=13')).mountTrainee(app, me);
-  else if (me.kind === 'staff') (await import('./staff.js?v=19')).mount(app, me);
-  else (await import('./client.js?v=12')).mount(app, me);
+  if (me.kind === 'staff' && me.role === 'trainee') (await import('./academy.js?v=15')).mountTrainee(app, me);
+  else if (me.kind === 'staff') (await import('./staff.js?v=21')).mount(app, me);
+  else (await import('./client.js?v=14')).mount(app, me);
 }
 
 function login() {

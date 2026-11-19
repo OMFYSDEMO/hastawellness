@@ -14,6 +14,7 @@
 import { clean } from './util.js';
 import { settings, createInvoiceWithLines, saveInvoice, finalise, EMS_ITEM } from './clinic.js';
 import { audit } from './hr.js';
+import { screeningStop } from './admission.js';
 
 const IST = 330 * 60000;
 const today = () => new Date(Date.now() + IST).toISOString().slice(0, 10);
@@ -289,6 +290,7 @@ export async function markEmsAppt(env, me, id, b) {
   if (!a) return R(404, 'EMS booking not found.');
   if (a.status !== 'booked') return R(400, 'This EMS booking is already marked.');
   if (a.start_at > new Date(Date.now() + IST).toISOString().slice(0, 16)) return R(400, 'The session has not started yet.');
+  if (status === 'attended') { const stop = await screeningStop(env, a); if (stop) return R(400, stop); }
   await env.DB.prepare("UPDATE ems_appointments SET status=?, updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=? AND status='booked'").bind(status, id).run();
   await audit(env, me, 'ems.appt_' + status, 'ems_appointment', id, a.start_at);
   return OK();

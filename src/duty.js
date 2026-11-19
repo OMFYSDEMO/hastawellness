@@ -12,6 +12,8 @@
 //     still_unbilled  still not closed on a later day (each day, up to 3 days)
 //     unpaid          bill finalised on the day with money not collected
 //     ems_unmarked    EMS session not marked attended / no-show
+//   EMS coach and the person who booked it:
+//     ems_unscreened  EMS session / trial attended without admission (or trial screening and consent)
 //   Duty manager (signed on as duty manager; else managers at work who were not on the front desk):
 //     mgr_no_action   front-desk lapses left unresolved at the end of the day
 //     leave_pending   a leave application waiting more than 48 hours for the approver
@@ -56,6 +58,7 @@ export const CODES = {
   callback_missed: { label: 'Balance call-back missed', who: 'front', points: 1, help: 'A balance follow-up call was due on the day and no call was recorded (and the bill was not paid).' },
   ems_unmarked: { label: 'EMS session not marked', who: 'front', points: 2, help: 'An EMS session was not marked attended or no-show.' },
   notes_missing: { label: 'Clinical notes not written', who: 'doctor', points: 1, help: 'A completed visit had no clinical note from the treating doctor by the end of the day.' },
+  ems_unscreened: { label: 'EMS given without screening and consent', who: 'coach', points: 5, help: 'An EMS session or trial was marked attended for someone who had not completed health screening, clinician assessment and signed consent (or, for a trial, the trial screening and both signatures). No screening, no consent, no session.' },
   ems_coach: { label: 'EMS session not closed by the coach', who: 'coach', points: 1, help: 'As the EMS coach of the session, it was not marked attended or no-show.' },
   mgr_no_action: { label: 'Front-desk lapses not acted on', who: 'manager', points: 2, help: 'As duty manager, front-desk items were left unresolved at the end of the day.' },
   leave_pending: { label: 'Leave application not decided', who: 'ops', points: 1, help: 'A leave application waited more than 48 hours for a decision.' },
@@ -157,6 +160,20 @@ async function findings(env, day, cf, cut) {
   for (const a of ems) if (addMin(a.start_at, (a.minutes || 30) + GRACE) <= end) {
     out.push({ code: 'ems_unmarked', ...ref('ems_appointment', a.id), detail: `${a.client_name} · EMS ${ft(a.start_at)}` });
     if (a.trainer_id) out.push({ code: 'ems_coach', staff_id: a.trainer_id, ...ref('ems_appointment', a.id), detail: `${a.client_name} · EMS ${ft(a.start_at)}` });
+  }
+  // No screening, no consent, no session: EMS given on the day to someone who was not cleared.
+  const given = await env.DB.prepare(`SELECT a.id, a.kind, a.start_at, a.trainer_id, a.staff_id, COALESCE(c.name, a.guest_name, 'Guest') client_name,
+        (SELECT COUNT(*) FROM ems_admissions ad WHERE ad.client_id=a.client_id AND ad.status='admitted' AND ad.valid_until >= substr(a.start_at,1,10)
+           AND (ad.programmes LIKE '%"ems"%')) admitted,
+        (SELECT COUNT(*) FROM ems_trial_consents tc WHERE tc.appointment_id=a.id AND tc.outcome='cleared') trial_ok
+      FROM ems_appointments a LEFT JOIN ems_clients c ON c.id=a.client_id
+      WHERE substr(a.start_at,1,10)=? AND a.status='attended' AND a.kind IN ('session','trial') AND a.unit_id IN (${units.join(',') || 0})`).bind(day).all().then(r => r.results || []);
+  for (const a of given) {
+    if (a.admitted || (a.kind === 'trial' && a.trial_ok)) continue;
+    const detail = `${a.client_name} · EMS ${a.kind === 'trial' ? 'trial' : 'session'} ${ft(a.start_at)} given without ${a.kind === 'trial' ? 'trial screening and consent' : 'a completed admission'}`;
+    const who = [...new Set([a.trainer_id, a.staff_id].filter(Boolean))];
+    for (const id of who) out.push({ code: 'ems_unscreened', staff_id: id, ...ref('ems_appointment', a.id), detail });
+    if (!who.length) out.push({ code: 'ems_unscreened', ...ref('ems_appointment', a.id), detail });
   }
   return out;
 }
