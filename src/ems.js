@@ -654,6 +654,7 @@ async function updateAppointment(env, id, b) {
   // No screening, no consent, no session: an EMS session needs a client who is admitted on the day;
   // a trial needs the trial screening and signed consent (or a client already admitted).
   if (status === 'attended' && a.status !== 'attended') {
+    if (start > nowLocal()) return bad('This session has not started yet. Mark it attended once the client has had it.');
     const stop = await screeningStop(env, a);
     if (stop) return bad(stop);
   }
