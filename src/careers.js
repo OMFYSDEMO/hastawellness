@@ -84,7 +84,7 @@ export function chrome(origin, title, desc, path, body, ld = [], opt = {}) {
 <meta property="og:url" content="${origin}${path}"><meta property="og:image" content="${origin}/img/og-hasta-wellness.jpg"><meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="/favicon.ico" sizes="48x48"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/dm-sans-var.woff2" as="font" type="font/woff2" crossorigin><link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin><style>@font-face{font-family:'DM Sans';font-style:normal;font-display:swap;font-weight:100 1000;src:url(/fonts/dm-sans-var.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}@font-face{font-family:'Manrope';font-style:normal;font-display:swap;font-weight:200 800;src:url(/fonts/manrope-var.woff2) format('woff2');unicode-range:U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD}</style>
-<link rel="stylesheet" href="/assets/service.css">
+<link rel="stylesheet" href="/assets/service.css?v=2">
 ${ld.map(x => `<script type="application/ld+json">${JSON.stringify(x).replace(/</g, '\\u003c')}</script>`).join('')}
 ${opt.css ? `<style>${opt.css}</style>` : ''}<style>.jobs{display:grid;gap:16px}.job{display:grid;grid-template-columns:1fr auto;gap:16px;align-items:center;padding:24px;border:1px solid var(--line);border-left:2px solid var(--gold);border-radius:8px;text-decoration:none}.job:hover{border-color:var(--gold)}.job h3{font-size:22px;margin:0 0 6px}.job p{margin:0;color:var(--muted);font-size:14px}.meta{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--muted);margin:10px 0 0}.meta span:before{content:'·';margin-right:8px;color:var(--gold)}.meta span:first-child:before{content:none}
 .jd{display:grid;grid-template-columns:1.2fr .8fr;gap:56px;align-items:start}.jd h2{font-size:24px;margin:34px 0 10px}.jd ul{padding-left:20px;margin:0}.jd li{margin:6px 0;color:#3f5f62}.jd p{color:var(--muted)}
@@ -92,14 +92,14 @@ ${opt.css ? `<style>${opt.css}</style>` : ''}<style>.jobs{display:grid;gap:16px}
 .okmsg{padding:22px;border-left:2px solid var(--gold);background:var(--soft);margin-bottom:20px}.errmsg{padding:14px;border-left:2px solid #a0442f;background:#fbefeb;margin-bottom:14px;color:#7a3322}
 @media(max-width:900px){.jd{grid-template-columns:1fr}.apply{position:static}.job{grid-template-columns:1fr}}</style>
 </head><body>
-<div class="top">YOUR EVERYDAY WELLNESS, BEAUTIFULLY REIMAGINED · KAZHAKOOTTAM, TRIVANDRUM</div>
+<div class="top">YOUR EVERYDAY WELLNESS, BEAUTIFULLY REIMAGINED · KAZHAKKOOTTAM, TRIVANDRUM</div>
 <header class="site"><nav class="wrap"><a class="logo" href="/" aria-label="Hasta Wellness home"><img src="/img/hasta-wellness-logo.webp" alt="Hasta Wellness" width="185" height="66"></a>
 <div class="navlinks"><a href="/#care">Find your care</a><a href="/#programmes">All programmes</a><a href="/careers/">Careers</a><a href="/#visit">Visit us</a></div>
-<a class="btn" href="/#visit">Book a consultation <span>↗</span></a></nav></header>
+<a class="btn" href="/#book">Book a consultation <span>↗</span></a></nav></header>
 <main>${body}</main>
 <footer class="site"><div class="wrap"><div class="row">
 <div><a href="/"><img src="/img/hasta-wellness-logo.webp" alt="Hasta Wellness" width="170" height="61" loading="lazy"></a>
-<p>Dental · Skin · Hair | Kazhakkoottam, Trivandrum<br>Mon – Sat 10 am – 8:30 pm · Sun 10 am – 4 pm<br><a href="tel:${PHONE_TEL}">${PHONE_DISPLAY}</a></p>
+<p>Dental · Skin · Hair | Kazhakkoottam, Trivandrum<br>Mon – Sat 10 am – 8:30 pm · Sun 10 am – 4 pm<br><a href="tel:${PHONE_TEL}">${PHONE_DISPLAY}</a><br><a href="mailto:hello@hastawellnessclinic.com">hello@hastawellnessclinic.com</a></p>
 <a class="social" href="https://www.instagram.com/hasta_wellness/" target="_blank" rel="noopener" aria-label="Hasta Wellness on Instagram (opens in a new tab)">${ig}<span>@hasta_wellness</span></a></div>
 <nav aria-label="Site">${nav}</nav></div>
 <div class="fine"><span>© ${new Date().getFullYear()} Hasta Wellness. All rights reserved. A venture of HASWEL CARE Private Limited.</span><span>${opt.fine ?? 'Equal-opportunity employer.'}</span></div></div></footer>
