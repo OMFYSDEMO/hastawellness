@@ -1313,7 +1313,11 @@ async function savePackageDef(env, id, b) {
   ent.treatments = tr.treatments;
   const prog = ['ems', 'weight', 'combined'].includes(b.programme) ? b.programme : 'ems';
   if (prog !== 'weight' && ent.sessions < 1) return bad('An EMS package needs at least one EMS session.');
-  if (prog === 'ems' && (ent.wm_consults || ent.diet_plan)) return bad('Weight-management consultations and the diet plan need the "EMS + weight management" or "Weight management" programme.');
+  // One-off exemption set by the MD (e.g. Demo EMS): an EMS-only package that may include weight-management consultations.
+  const prevDef = id ? await env.DB.prepare('SELECT entitlements FROM ems_packages WHERE id=?').bind(id).first() : null;
+  const exempt = !!(prevDef && (() => { try { return JSON.parse(prevDef.entitlements || '{}').exempt_wm; } catch { return false; } })());
+  if (exempt) ent.exempt_wm = true;
+  if (prog === 'ems' && !exempt && (ent.wm_consults || ent.diet_plan)) return bad('Weight-management consultations and the diet plan need the "EMS + weight management" or "Weight management" programme.');
   if (prog === 'weight' && ent.sessions) return bad('A weight-management-only package cannot include EMS sessions.');
   if (price === undefined || price === null) return bad('Enter the selling price.');
   const v = valuation(ent, await priceList(env));
