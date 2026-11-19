@@ -91,14 +91,20 @@ const skillsOf = r => parse(r.skills, []);
 /* ------------------------------ who was on duty ------------------------------ */
 
 async function rosterFor(env, day, cf) {
-  const [staff, att, sign] = await env.DB.batch([
+  const [staff, att, sign, pay, leave] = await env.DB.batch([
     env.DB.prepare("SELECT id, name, role, skills, username FROM ems_staff WHERE active=1 AND external=0 AND role <> 'trainee' AND username <> 'hasta'"),
     env.DB.prepare('SELECT DISTINCT staff_id FROM cl_attendance WHERE day=?').bind(day),
     env.DB.prepare('SELECT d.staff_id, d.role, d.on_at, s.name FROM cl_duty_signons d JOIN ems_staff s ON s.id=d.staff_id WHERE d.day=? ORDER BY d.on_at').bind(day),
+    env.DB.prepare('SELECT staff_id, weekly_off FROM cl_staff_pay'),
+    env.DB.prepare("SELECT staff_id FROM cl_leave WHERE status='approved' AND from_date<=? AND to_date>=?").bind(day, day),
   ]);
   const sup = id => isSuper({ id, username: '' }, cf.s);
   const all = (staff.results || []).filter(x => !sup(x.id));
-  const present = new Set((att.results || []).map(a => a.staff_id));
+  // Someone on their weekly off or approved leave is never put on duty by default, even if a clock-in exists
+  // for them that day; they are only responsible if they signed on themselves.
+  const dowDay = new Date(day + 'T00:00:00Z').getUTCDay();
+  const off = new Set((pay.results || []).filter(x => x.weekly_off === dowDay).map(x => x.staff_id).concat((leave.results || []).map(x => x.staff_id)));
+  const present = new Set((att.results || []).map(a => a.staff_id).filter(id => !off.has(id)));
   const signed = sign.results || [];
   const at = id => present.has(id) && all.some(x => x.id === id);
   let front = signed.filter(x => x.role === 'front').map(x => x.staff_id);
