@@ -185,7 +185,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=12">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=18"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=19"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -864,17 +864,34 @@ async function assignPackage(env, clientId, b, me) {
 
 async function updateClientPackage(env, id, b, me) {
   const sets = [], binds = [];
+  const draftCheck = async cp => {
+    if (!cp.invoice_id) return null;
+    const inv = await env.DB.prepare(`SELECT status, (SELECT COALESCE(SUM(a.amount),0) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0) paid FROM cl_invoices i WHERE id=?`).bind(cp.invoice_id).first();
+    if (inv && inv.status !== 'draft' && inv.status !== 'cancelled') return bad('The bill for this package is already finalised, so the price and discount can no longer change. Use a credit note in the clinic app if needed.');
+    if (inv && inv.paid > 0) return bad('A payment is already recorded on this bill. Remove it in the clinic app before changing the price or discount.');
+    return null;
+  };
+  // Admins can correct the price of a sold package while its bill is a draft and unpaid.
+  if (b._admin && b.price !== undefined && b.price !== '') {
+    const cp = await env.DB.prepare('SELECT * FROM ems_client_packages WHERE id=?').bind(id).first();
+    if (!cp) return bad('Package not found.');
+    const price = int(b.price, 0, 10000000);
+    if (price === undefined || price === null) return bad('Check the price.');
+    if (price !== cp.price) {
+      const e = await draftCheck(cp); if (e) return e;
+      if ((cp.discount || 0) > price) return bad('The discount is more than the new price. Lower the discount first.');
+      await env.DB.prepare('UPDATE ems_client_packages SET price=? WHERE id=?').bind(price, id).run();
+      const rb = await rebillPackage(env, me, id);
+      if (rb[0] !== 200) return api({ ok: false, error: rb[1] }, rb[0]);
+    }
+  }
   if (b.discount !== undefined && b.discount !== '') {
     const cp = await env.DB.prepare('SELECT cp.*, d.max_discount FROM ems_client_packages cp LEFT JOIN ems_packages d ON d.id=cp.package_id WHERE cp.id=?').bind(id).first();
     if (!cp) return bad('Package not found.');
     const discount = int(b.discount, 0, 10000000);
     if (discount === undefined || discount > cp.price) return bad('Check the discount.');
     if (discount !== cp.discount || clean(b.discount_reason || '', 120) !== (cp.discount_reason || '')) {
-      if (cp.invoice_id) {
-        const inv = await env.DB.prepare(`SELECT status, (SELECT COALESCE(SUM(a.amount),0) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0) paid FROM cl_invoices i WHERE id=?`).bind(cp.invoice_id).first();
-        if (inv && inv.status !== 'draft' && inv.status !== 'cancelled') return bad('The bill for this package is already finalised, so the discount can no longer change. Use a credit note in the clinic app if needed.');
-        if (inv && inv.paid > 0) return bad('A payment is already recorded on this bill. Remove it in the clinic app before changing the discount.');
-      }
+      { const e = await draftCheck(cp); if (e) return e; }
       const dc = await checkDiscount(env, me, me.role === 'admin', cp.price, cp.package_id ? (cp.max_discount || 0) : 100, !!cp.package_id, b, discount);
       if (dc instanceof Response) return dc;
       await env.DB.prepare('UPDATE ems_client_packages SET discount=?, discount_reason=?, discount_by_name=? WHERE id=?').bind(discount, discount ? dc.reason : null, dc.authBy ? dc.authBy.name : null, id).run();
