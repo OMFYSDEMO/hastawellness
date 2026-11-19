@@ -21,6 +21,7 @@
       var msg = 'Hasta Wellness — ' + type + '\n\nName: ' + name + '\nMobile: ' + phone + '\nInterested in: ' + interest +
         '\nTiming: ' + timing + '\n\nRequest only. Please confirm availability. No appointment has been booked yet.';
       var url = 'https://wa.me/' + WA + '?text=' + encodeURIComponent(msg);
+      if (window.gtag) gtag('event', 'generate_lead', { form: 'service_page' });
       var w = window.open(url, '_blank'); try { if (w) w.opener = null; } catch (err) {}
       var done = document.createElement('div'); done.className = 'done'; done.setAttribute('role', 'status');
       done.innerHTML = '<p><strong>Thanks, ' + name.split(' ')[0].replace(/[<>&"]/g, '') + '.</strong> Your details are with the team. ' +
