@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Generate Hasta Wellness service pages and the privacy page.
+"""RETIRED (19 Nov 2026) — kept for reference only; see the note at the bottom. Do not run.
+
+Generate Hasta Wellness service pages and the privacy page.
 
 Usage:  python3 tools/build_pages.py
 Writes public/<slug>/index.html for each page in tools/pages.py,
@@ -158,4 +160,12 @@ def main():
 
 
 if __name__ == '__main__':
+    # RETIRED 19 Nov 2026. The HTML in public/ has been edited directly since this script was last run
+    # (opening hours, spelling, booking button, privacy notice with DPDP rights and Grievance Officer,
+    # EMS academy section and programme facts, Google Analytics). Running this would overwrite all of that.
+    # Edit public/<page>/index.html, src/pages.js and src/site_nav.js directly instead.
+    import sys
+    if '--force' not in sys.argv:
+        sys.exit('build_pages.py is retired and out of date: it would overwrite the live pages. '
+                 'Edit the files in public/ directly. (Override with --force only after updating tools/pages.py and this script.)')
     main()

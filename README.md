@@ -4,6 +4,10 @@ Static website for Hasta Wellness, Kazhakkoottam, Thiruvananthapuram.
 Deployed to the Cloudflare Worker `hasta-wellness-clinic` via Workers Builds.
 
 - `public/index.html` — the complete site (logo and hair portrait embedded)
+- `public/<page>/index.html` — the 7 service pages and `public/privacy/` — **edit these files directly**.
+  `tools/build_pages.py` is retired (out of date since 19 Nov 2026) and refuses to run, because it would overwrite the live pages.
+- Google Analytics `G-VNLXJEJ7ZJ` is in the `<head>` of the home, service and privacy pages (events: call_click,
+  whatsapp_click, directions_click, generate_lead). Keep it on any new public page, and keep the privacy notice in step.
 - `public/_headers` — security and caching headers
 - `wrangler.jsonc` — deploy target (existing Worker, static assets only)
 
