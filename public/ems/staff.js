@@ -531,7 +531,7 @@ function tabSessions(el, d, after) {
 async function packageModal(c, after, clinic) {
   if (clinic && !clinic.confirmed) { toast('Link this client to their clinic record first — packages are billed in the clinic app.', true); return go(`#/clients/${c.id}?tab=overview`); }
   if (!c.cleared) { toast('Complete the admission first — both the clinician and the client must sign before enrolment.', true); return go(`#/clients/${c.id}?tab=admission`); }
-  const { packages } = await api('/staff/packages');
+  const { packages, discount: DR } = await api('/staff/packages');
   const defs = packages.filter(p => p.active && p.price != null);
   const admin = ME.role === 'admin';
   if (!defs.length && !admin) return toast('No priced packages in the catalogue yet. Ask an admin to build one.', true);
@@ -546,7 +546,9 @@ async function packageModal(c, after, clinic) {
         <div class="chips"><label class="chip"><input type="checkbox" name="diet_plan">Diet and lifestyle plan</label><label class="chip"><input type="checkbox" name="measurements">Measurements and charts</label></div>
         <div class="grid2">${field('Price (₹)', inp('price', '', 'type="number" min="0"'))}${field('Valid for (days)', inp('validity_days', 90, 'type="number" min="7"'))}</div></div>
       <div class="grid3">${field('Discount (₹)', inp('discount', 0, 'type="number" min="0" inputmode="numeric"'), '')}${field('Start date', inp('start_date', today(), 'type="date"'))}${multi() ? field('Sold by unit', sel('unit_id', unitOpts(), c.home_unit_id)) : '<div></div>'}</div>
-      <p class="small muted" data-disc></p></form>`,
+      <div data-reason hidden>${field('Reason for the discount', inp('discount_reason', '', 'maxlength="120" placeholder="e.g. Referral, repeat client, staff family"'))}</div>
+      <p class="small muted" data-disc></p>
+      <div data-auth hidden class="note stack" style="gap:10px"><p class="small" style="margin:0" data-authmsg></p><div class="grid2">${field('Approver username', inp('auth_username', '', 'autocomplete="off"'))}${field('Approver password', inp('auth_password', '', 'type="password" autocomplete="new-password"'))}</div></div></form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Add package</button>`,
     onMount(el, close) {
       const f = el.querySelector('[data-f]');
@@ -556,14 +558,20 @@ async function packageModal(c, after, clinic) {
         el.querySelector('[data-inc]').hidden = !p;
         if (p) {
           el.querySelector('[data-inc]').innerHTML = `<b>Includes:</b> ${esc(includesText(p.ent, p.sessions))}. ${machineList(p.machine_types).length ? 'Machines: ' + esc(machineList(p.machine_types).map(machineName).join(', ')) + '. ' : ''}Valid ${p.validity_days} days. Price ${inr(p.price)}.`;
-          const lim = Math.floor(p.price * (p.max_discount || 0) / 100);
-          el.querySelector('[data-disc]').textContent = admin ? `Staff can discount up to ${p.max_discount || 0}% (${inr(lim)}). As an admin you can give more.` : p.max_discount ? `You can discount up to ${p.max_discount}% (${inr(lim)}).` : 'No discount is allowed on this package.';
-          f.discount.max = admin ? p.price : lim; if (!admin && !p.max_discount) { f.discount.value = 0; f.discount.disabled = true; } else f.discount.disabled = false;
+          const pct = p.staff_discount || 0, lim = Math.floor(p.price * pct / 100), who = (DR && DR.approvers.length ? DR.approvers.join(' or ') : 'an admin');
+          el.querySelector('[data-disc]').textContent = (DR && DR.can_approve) || admin ? `Anyone can discount up to ${pct}% (${inr(lim)}). You can approve more.` : `You can discount up to ${pct}% (${inr(lim)}). More than that needs ${who} to authorise with their password.`;
+          f.discount.max = p.price; f.discount.disabled = false;
         } else el.querySelector('[data-disc]').textContent = 'Custom packages are for exceptions. Prefer building a catalogue package in Settings.';
       };
-      f.package_id.addEventListener('change', sync); sync();
+      const showReason = () => { el.querySelector('[data-reason]').hidden = !(+f.discount.value > 0); };
+      f.discount.addEventListener('input', showReason); f.package_id.addEventListener('change', sync); sync(); showReason();
       const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => api(`/staff/clients/${c.id}/packages`, { method: 'POST', body: formData(f) })).then(r => {
+      const body = () => { const b = formData(f); if (b.auth_username) b.authoriser = { username: b.auth_username, password: b.auth_password }; delete b.auth_username; delete b.auth_password; return b; };
+      save.addEventListener('click', () => busy(save, () => api(`/staff/clients/${c.id}/packages`, { method: 'POST', body: body() }), true).catch(e => {
+        if (e.data && e.data.code === 'authorise') { el.querySelector('[data-auth]').hidden = false; el.querySelector('[data-authmsg]').textContent = e.message + ' Ask them to enter their username and password here, then press Add package again.'; (f.auth_username.value ? f.auth_password : f.auth_username).focus(); }
+        else toast(e.message, true);
+        throw e;
+      }).then(r => {
         close(); after();
         if (!r.invoice_id) return toast('Package added');
         modal({ title: 'Package added', body: `<p>The bill is ready in the clinic app. Take the payment there so it is in the day book and the GST records.</p>`,
@@ -578,11 +586,19 @@ function managePackage(p, after) {
     title: p.name,
     body: `<p class="muted">${p.used} used, ${p.booked} booked, ${p.remaining} left of ${p.sessions_total}.</p>
       <form class="stack" style="gap:14px" data-f><div class="grid2">${ME.role === 'admin' ? field('Total EMS sessions', inp('sessions_total', p.sessions_total, 'type="number" min="1"'), 'admins only') : `<div><p class="small muted">Includes: ${esc(includesText(p.ent, p.sessions_total))}</p></div>`}${field('Expiry date', inp('expiry_date', p.expiry_date, 'type="date"'))}</div>
-      ${field('Status', sel('status', [['active', 'Active'], ['paused', 'Paused (no new bookings)'], ['closed', 'Closed']], p.status))}</form>`,
+      ${field('Status', sel('status', [['active', 'Active'], ['paused', 'Paused (no new bookings)'], ['closed', 'Closed']], p.status))}
+      ${p.price > 0 ? `<div class="grid2">${field(`Discount (₹) on ${inr(p.price)}`, inp('discount', p.discount || 0, 'type="number" min="0" inputmode="numeric"'), 'can change while the bill is a draft and unpaid')}${field('Reason for the discount', inp('discount_reason', p.discount_reason || '', 'maxlength="120" placeholder="e.g. Referral, repeat client"'))}</div>
+      ${p.discount_by_name ? `<p class="small muted">Discount authorised by ${esc(p.discount_by_name)}.</p>` : ''}
+      <div data-auth hidden class="note stack" style="gap:10px"><p class="small" style="margin:0" data-authmsg></p><div class="grid2">${field('Approver username', inp('auth_username', '', 'autocomplete="off"'))}${field('Approver password', inp('auth_password', '', 'type="password" autocomplete="new-password"'))}</div></div>` : ''}</form>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Save</button>`,
     onMount(el, close) {
-      const save = el.querySelector('[data-save]');
-      save.addEventListener('click', () => busy(save, () => api('/staff/client-packages/' + p.id, { method: 'PUT', body: formData(el.querySelector('[data-f]')) })).then(() => { close(); toast('Package updated'); after(); }).catch(() => {}));
+      const save = el.querySelector('[data-save]'), f = el.querySelector('[data-f]');
+      const body = () => { const b = formData(f); if (b.auth_username) b.authoriser = { username: b.auth_username, password: b.auth_password }; delete b.auth_username; delete b.auth_password; return b; };
+      save.addEventListener('click', () => busy(save, () => api('/staff/client-packages/' + p.id, { method: 'PUT', body: body() }), true).catch(e => {
+        if (e.data && e.data.code === 'authorise') { el.querySelector('[data-auth]').hidden = false; el.querySelector('[data-authmsg]').textContent = e.message + ' Ask them to enter their username and password here, then press Save again.'; (f.auth_username.value ? f.auth_password : f.auth_username).focus(); }
+        else toast(e.message, true);
+        throw e;
+      }).then(() => { close(); toast('Package updated'); after(); }).catch(() => {}));
     },
   });
 }

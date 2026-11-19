@@ -12,7 +12,7 @@
 // Every function returns [status, error, extra] like the clinic routes.
 
 import { clean } from './util.js';
-import { settings, createInvoiceWithLines, finalise, EMS_ITEM } from './clinic.js';
+import { settings, createInvoiceWithLines, saveInvoice, finalise, EMS_ITEM } from './clinic.js';
 import { audit } from './hr.js';
 
 const IST = 330 * 60000;
@@ -146,16 +146,8 @@ export async function confirmedPatient(env, clientId) {
 }
 
 // Turn an EMS package into a clinic bill (draft). The EMS package price is what the client pays;
-// with ems_price_incl_gst=1 (default) the GST is taken out of it rather than added on top.
-export async function billPackage(env, me, cpId) {
-  const cp = await env.DB.prepare('SELECT * FROM ems_client_packages WHERE id=?').bind(cpId).first();
-  if (!cp) return R(404, 'Package not found.');
-  if (cp.invoice_id) {
-    const inv = await env.DB.prepare('SELECT id, invoice_no, status FROM cl_invoices WHERE id=?').bind(cp.invoice_id).first();
-    if (inv && inv.status !== 'cancelled') return OK({ invoice_id: inv.id, invoice_no: inv.invoice_no, existing: true });
-  }
-  const p = await confirmedPatient(env, cp.client_id);
-  if (!p) return R(400, 'Link this client to their clinic patient record first (Clinic record on the client page), so the bill goes to the right person.');
+// The clinic bill line for an EMS package (price, discount and label exactly as sold in the EMS app).
+async function packageLine(env, cp) {
   const [item, s] = await Promise.all([env.DB.prepare('SELECT * FROM cl_items WHERE code=?').bind(EMS_ITEM).first(), settings(env)]);
   if (!item) return R(500, 'The EMS package item is missing from the clinic catalogue.');
   const incl = String(s.ems_price_incl_gst ?? '1') !== '0', k = incl ? 1 + (item.gst_rate || 0) / 100 : 1;
@@ -166,7 +158,36 @@ export async function billPackage(env, me, cpId) {
   // When no exact split exists the bill comes to a paisa under the price (never over).
   const exact = target => { const base = r2(target / k); let best = null; for (let d = -0.03; d <= 0.031; d += 0.01) { const n = r2(base + d), t = r2(n + 2 * r2(n * rate / 200)); if (t === r2(target)) return n; if (t < target && (best === null || n > best)) best = n; } return best ?? base; };
   const unit = incl ? exact(cp.price) : cp.price, net = incl ? exact(cp.price - cp.discount) : cp.price - cp.discount;
-  const line = { item_id: item.id, qty: 1, unit_price: unit, discount: r2(unit - net), discount_reason: cp.discount ? 'EMS package discount (EMS app)' : null, label };
+  const line = { item_id: item.id, qty: 1, unit_price: unit, discount: r2(unit - net), discount_reason: cp.discount ? `${cp.discount_reason || 'EMS package discount'}${cp.discount_by_name ? ` — authorised by ${cp.discount_by_name}` : ''} (EMS app)`.slice(0, 200) : null, label };
+  return line;
+}
+
+// Change the bill after the discount on an EMS package changed. Only while the bill is a draft with no payment.
+export async function rebillPackage(env, me, cpId) {
+  const cp = await env.DB.prepare('SELECT * FROM ems_client_packages WHERE id=?').bind(cpId).first();
+  if (!cp || !cp.invoice_id) return OK({});
+  const inv = await env.DB.prepare('SELECT id, status FROM cl_invoices WHERE id=?').bind(cp.invoice_id).first();
+  if (!inv || inv.status === 'cancelled') return OK({});
+  const line = await packageLine(env, cp);
+  if (Array.isArray(line)) return line;
+  const { results: prev } = await env.DB.prepare('SELECT * FROM cl_invoice_lines WHERE invoice_id=? ORDER BY id').bind(inv.id).all();
+  const lines = (prev || []).map(l => l.item_id === line.item_id && String(l.name).startsWith('EMS: ') ? line
+    : { item_id: l.item_id, package_def_id: l.package_def_id, qty: l.qty, unit_price: l.unit_price, discount: l.discount, discount_reason: l.discount_reason, doctor_id: l.doctor_id, label: l.name });
+  return saveInvoice(env, me, inv.id, { lines }, { id: me.id, name: me.name });
+}
+
+// with ems_price_incl_gst=1 (default) the GST is taken out of it rather than added on top.
+export async function billPackage(env, me, cpId) {
+  const cp = await env.DB.prepare('SELECT * FROM ems_client_packages WHERE id=?').bind(cpId).first();
+  if (!cp) return R(404, 'Package not found.');
+  if (cp.invoice_id) {
+    const inv = await env.DB.prepare('SELECT id, invoice_no, status FROM cl_invoices WHERE id=?').bind(cp.invoice_id).first();
+    if (inv && inv.status !== 'cancelled') return OK({ invoice_id: inv.id, invoice_no: inv.invoice_no, existing: true });
+  }
+  const p = await confirmedPatient(env, cp.client_id);
+  if (!p) return R(400, 'Link this client to their clinic patient record first (Clinic record on the client page), so the bill goes to the right person.');
+  const line = await packageLine(env, cp);
+  if (Array.isArray(line)) return line;
   const r = await createInvoiceWithLines(env, me, p.id, [line], null, { id: me.id, name: me.name });
   if (r[0] !== 200) return r;
   const id = r[2].id;

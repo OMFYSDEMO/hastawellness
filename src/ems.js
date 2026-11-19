@@ -17,7 +17,7 @@ import * as ADM from './admissions.js';
 import * as BR from './batchrun.js';
 import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allocate, routeUnit, saveUnit, unitDetail, saveShift, saveLeave, settlement, unitStats, SKILLS, listMachines, saveMachine, listCertifications, certify, revokeCert, MACHINE_CATEGORIES } from './units.js';
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED, clinicTreatments, resolveTreatments } from './packages.js';
-import { EMS_DUE, clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, createPatientFor } from './emslink.js';
+import { EMS_DUE, clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, rebillPackage, createPatientFor } from './emslink.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS } from './admission.js';
 
 const STAFF_TTL_H = 12;
@@ -185,7 +185,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=12">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=17"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=18"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -368,7 +368,7 @@ async function route(request, env, url, ctx, base, p) {
   }
   if ((r = p.match(/^\/staff\/clients\/(\d+)\/plan$/)) && m === 'PUT') return savePlan(env, me, +r[1], body);
   if ((r = p.match(/^\/staff\/clients\/(\d+)\/packages$/)) && m === 'POST') return assignPackage(env, +r[1], body, me);
-  if ((r = p.match(/^\/staff\/client-packages\/(\d+)$/)) && m === 'PUT') { if (body.sessions_total !== undefined && !admin) return api({ ok: false, error: 'Only admins can change the sessions on a sold package.' }, 403); return updateClientPackage(env, +r[1], { ...body, _admin: admin }); }
+  if ((r = p.match(/^\/staff\/client-packages\/(\d+)$/)) && m === 'PUT') { if (body.sessions_total !== undefined && !admin) return api({ ok: false, error: 'Only admins can change the sessions on a sold package.' }, 403); return updateClientPackage(env, +r[1], { ...body, _admin: admin }, me); }
   if (p === '/staff/measurements' && m === 'POST') return addMeasurement(env, me, body);
   if ((r = p.match(/^\/staff\/measurements\/(\d+)$/)) && m === 'DELETE') { await env.DB.prepare('DELETE FROM ems_measurements WHERE id=?').bind(+r[1]).run(); return api({ ok: true }); }
   if (p === '/staff/payments' && m === 'POST') return addPayment(env, me, body);
@@ -388,7 +388,8 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/staff/packages' && m === 'GET') {
     const { results } = await env.DB.prepare('SELECT * FROM ems_packages ORDER BY active DESC, sessions, id').all();
     const list = await priceList(env);
-    return api({ ok: true, packages: (results || []).map(p => { const ent = entOf(p, false); ent.sessions = p.sessions; return { ...p, ent, valuation: valuation(ent, list) }; }), price_list: list });
+    const dr = await discountRules(env);
+    return api({ ok: true, packages: (results || []).map(p => { const ent = entOf(p, false); ent.sessions = p.sessions; return { ...p, ent, valuation: valuation(ent, list), staff_discount: Math.max(p.max_discount || 0, dr.limit) }; }), price_list: list, discount: { limit: dr.limit, approvers: dr.names, can_approve: admin || dr.approvers.includes(me.id) } });
   }
   if (p === '/staff/packages' && m === 'POST') return admin ? savePackageDef(env, null, body) : api({ ok: false, error: 'Admins only.' }, 403);
   if ((r = p.match(/^\/staff\/packages\/(\d+)$/)) && m === 'PUT') return admin ? savePackageDef(env, +r[1], body) : api({ ok: false, error: 'Admins only.' }, 403);
@@ -787,6 +788,36 @@ async function savePlan(env, me, id, b) {
   return api({ ok: true });
 }
 
+// The clinic's discount rule (cl_settings): limit % anyone may give, and who may approve more.
+async function discountRules(env) {
+  const { results } = await env.DB.prepare("SELECT key, value FROM cl_settings WHERE key IN ('discount_limit_pct','discount_approvers')").all();
+  const s = Object.fromEntries((results || []).map(r => [r.key, r.value]));
+  const approvers = String(s.discount_approvers || '').split(',').map(Number).filter(Boolean);
+  const names = approvers.length ? ((await env.DB.prepare(`SELECT name FROM ems_staff WHERE active=1 AND id IN (${approvers.join(',')})`).all()).results || []).map(r => r.name) : [];
+  return { limit: Math.max(0, Math.min(100, Number(s.discount_limit_pct) || 0)), approvers, names };
+}
+
+// Same rule as clinic billing: anyone may discount up to the clinic limit (Settings → discount limit),
+// or the package's own staff limit if higher; above that an approver (or an admin) authorises it.
+async function checkDiscount(env, me, admin, price, maxDisc, isDef, b, discount) {
+  const dr = await discountRules(env);
+  if (isDef) maxDisc = Math.max(maxDisc, dr.limit);
+  const limit = Math.floor(price * maxDisc / 100);
+  const reason = clean(b.discount_reason || '', 120);
+  if (discount > 0 && !reason) return bad('Give a reason for the discount (for example "Referral", "Repeat client").');
+  let authBy = null;
+  if (discount > limit) {
+    if (admin || dr.approvers.includes(me.id)) authBy = { id: me.id, name: me.name };
+    else {
+      const a = b.authoriser || {};
+      const u = a.username ? await env.DB.prepare('SELECT id, name, role, pass_hash FROM ems_staff WHERE username=? AND active=1').bind(clean(a.username, 40).toLowerCase()).first() : null;
+      if (u && (u.role === 'admin' || dr.approvers.includes(u.id)) && await verifySecret(String(a.password || ''), u.pass_hash)) authBy = { id: u.id, name: u.name };
+      if (!authBy) return json({ ok: false, code: 'authorise', approvers: dr.names, error: a.username ? 'That username or password is not right, or that person cannot authorise discounts.' : `Discounts over ${maxDisc}% (₹${limit.toLocaleString('en-IN')}) need ${dr.names.join(' or ') || 'an admin'} to authorise.` }, 403);
+    }
+  }
+  return { reason, authBy };
+}
+
 async function assignPackage(env, clientId, b, me) {
   const admin = me && me.role === 'admin';
   const def = parseInt(b.package_id, 10) ? await env.DB.prepare('SELECT * FROM ems_packages WHERE id=? AND active=1').bind(parseInt(b.package_id, 10)).first() : null;
@@ -809,8 +840,9 @@ async function assignPackage(env, clientId, b, me) {
   if (programme !== 'weight' && ent.sessions < 1) return bad('An EMS package needs at least one session.');
   const discount = int(b.discount || 0, 0, 10000000);
   if (discount === undefined || discount > price) return bad('Check the discount.');
-  const limit = Math.floor(price * maxDisc / 100);
-  if (!admin && discount > limit) return bad(maxDisc ? `The most you can discount this package is ${maxDisc}% (₹${limit.toLocaleString('en-IN')}). Ask an admin for more.` : 'Discounts are not allowed on this package. Ask an admin.');
+  const dc = await checkDiscount(env, me, admin, price, def ? maxDisc : 100, !!def, b, discount);
+  if (dc instanceof Response) return dc;
+  const { reason: discountReason, authBy } = dc;
   const el = await eligible(env, clientId, needsProgrammes(programme));
   if (!el.ok) return bad(el.reason);
   if (price - discount > 0 && !(await confirmedPatient(env, clientId))) return bad('Packages are billed in the clinic app. Link this client to their clinic patient record first (Clinic record, on the Overview tab).');
@@ -818,8 +850,8 @@ async function assignPackage(env, clientId, b, me) {
   const expiry = addDays(start, validity);
   const cl = await env.DB.prepare('SELECT home_unit_id FROM ems_clients WHERE id=?').bind(clientId).first();
   const unitId = parseInt(b.unit_id, 10) || (cl && cl.home_unit_id) || 1;
-  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme, unit_id, machine_types, entitlements) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)')
-    .bind(clientId, def ? def.id : null, name, ent.sessions, price, discount, start, expiry, programme, unitId, mts, JSON.stringify(ent)).run();
+  const r = await env.DB.prepare('INSERT INTO ems_client_packages (client_id, package_id, name, sessions_total, price, discount, start_date, expiry_date, programme, unit_id, machine_types, entitlements, discount_reason, discount_by_name) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)')
+    .bind(clientId, def ? def.id : null, name, ent.sessions, price, discount, start, expiry, programme, unitId, mts, JSON.stringify(ent), discount ? discountReason : null, authBy ? authBy.name : null).run();
   const id = r.meta.last_row_id;
   if (price - discount <= 0) return api({ ok: true, id });
   const bill = await billPackage(env, me, id);
@@ -830,12 +862,30 @@ async function assignPackage(env, clientId, b, me) {
   return api({ ok: true, id, invoice_id: bill[2].invoice_id });
 }
 
-async function updateClientPackage(env, id, b) {
+async function updateClientPackage(env, id, b, me) {
   const sets = [], binds = [];
+  if (b.discount !== undefined && b.discount !== '') {
+    const cp = await env.DB.prepare('SELECT cp.*, d.max_discount FROM ems_client_packages cp LEFT JOIN ems_packages d ON d.id=cp.package_id WHERE cp.id=?').bind(id).first();
+    if (!cp) return bad('Package not found.');
+    const discount = int(b.discount, 0, 10000000);
+    if (discount === undefined || discount > cp.price) return bad('Check the discount.');
+    if (discount !== cp.discount || clean(b.discount_reason || '', 120) !== (cp.discount_reason || '')) {
+      if (cp.invoice_id) {
+        const inv = await env.DB.prepare(`SELECT status, (SELECT COALESCE(SUM(a.amount),0) FROM cl_allocations a JOIN cl_payments p ON p.id=a.payment_id WHERE a.invoice_id=i.id AND p.voided=0) paid FROM cl_invoices i WHERE id=?`).bind(cp.invoice_id).first();
+        if (inv && inv.status !== 'draft' && inv.status !== 'cancelled') return bad('The bill for this package is already finalised, so the discount can no longer change. Use a credit note in the clinic app if needed.');
+        if (inv && inv.paid > 0) return bad('A payment is already recorded on this bill. Remove it in the clinic app before changing the discount.');
+      }
+      const dc = await checkDiscount(env, me, me.role === 'admin', cp.price, cp.package_id ? (cp.max_discount || 0) : 100, !!cp.package_id, b, discount);
+      if (dc instanceof Response) return dc;
+      await env.DB.prepare('UPDATE ems_client_packages SET discount=?, discount_reason=?, discount_by_name=? WHERE id=?').bind(discount, discount ? dc.reason : null, dc.authBy ? dc.authBy.name : null, id).run();
+      const rb = await rebillPackage(env, me, id);
+      if (rb[0] !== 200) return api({ ok: false, error: rb[1] }, rb[0]);
+    }
+  }
   if (['active', 'paused', 'closed'].includes(b.status)) { sets.push('status=?'); binds.push(b.status); }
   if (isDate(b.expiry_date)) { sets.push('expiry_date=?'); binds.push(b.expiry_date); }
   const s = int(b.sessions_total, 1, 200); if (s && b._admin) { sets.push('sessions_total=?'); binds.push(s); }
-  if (!sets.length) return bad('Nothing to change.');
+  if (!sets.length) return api({ ok: true });
   await env.DB.prepare(`UPDATE ems_client_packages SET ${sets.join(',')} WHERE id=?`).bind(...binds, id).run();
   return api({ ok: true });
 }

@@ -848,7 +848,7 @@ function computeLine(src, item, pkg) {
   return { item_id: item ? item.id : null, package_def_id: pkg ? pkg.id : null, kind, name, hsn_sac: hsn, qty, unit_price: unit, discount, gst_rate: rate, taxable, exempt, cgst, sgst, total: r2(net + cgst + sgst), tax_parts: parts ? JSON.stringify(parts) : null, doctor_id: src.doctor_id || null, partner, gross };
 }
 
-async function saveInvoice(env, me, id, b, trusted) {
+export async function saveInvoice(env, me, id, b, trusted) {
   const inv = await env.DB.prepare('SELECT * FROM cl_invoices WHERE id=?').bind(id).first();
   if (!inv) return R(404, 'Not found.');
   if (inv.status !== 'draft') return R(400, 'Only draft invoices can be changed.');
