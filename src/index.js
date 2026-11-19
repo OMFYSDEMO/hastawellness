@@ -96,7 +96,7 @@ const isPreviewHost = host => host.endsWith('.workers.dev') || host.startsWith('
 function robots(url) {
   const body = isPreviewHost(url.hostname)
     ? 'User-agent: *\nDisallow: /\n'
-    : `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /ems\nDisallow: /clinicapp\n\nSitemap: ${url.origin}/sitemap.xml\n`;
+    : `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /ems/\nDisallow: /ems$\nDisallow: /clinicapp/\nDisallow: /clinicapp$\n\nSitemap: ${url.origin}/sitemap.xml\n`;
   return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
 }
 
