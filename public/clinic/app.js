@@ -2,7 +2,7 @@
 import {
   api, esc, icon, toast, modal, formData, busy, field, inp, sel, emptyState, today, nowLocal, addDays, fDay, fDate, fLong, fTime, fWhen,
   inr, initials, first, prettyPhone, wa, pill, BASE, CLINIC_PHONE,
-} from '../ems/core.js?v=10';
+} from '../ems/core.js?v=13';
 
 const app = document.getElementById('app');
 let ME, B, MAIN, CAT = null;
@@ -219,7 +219,7 @@ function alertsModal() {
     onMount(el, close) {
       const after = () => { close(); checkAlerts(); if (!parseHash().parts[0]) route(); };
       const list = [...A.checkin, ...A.overrun, ...A.unbilled];
-      el.querySelectorAll('[data-next]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/appointments/${b.dataset.next}/status`, { method: 'POST', body: { status: b.dataset.s } })).then(() => {
+      el.querySelectorAll('[data-next]').forEach(b => b.onclick = () => busy(b, () => apptStatus(list.find(a => a.id === +b.dataset.next) || { id: +b.dataset.next }, b.dataset.s)).then(() => {
         if (b.dataset.s === 'completed') { close(); closeVisitModal(list.find(a => a.id === +b.dataset.next), () => { checkAlerts(); if (!parseHash().parts[0]) route(); }); }
         else { toast('Marked ' + ST[b.dataset.s].toLowerCase()); after(); }
       }).catch(() => {}));
@@ -271,9 +271,39 @@ function apptRow(a) {
     ${a.medical_alert ? `<div class="small" style="color:var(--alert);font-weight:600">${icon('alert-triangle', 13)} ${esc(a.medical_alert)}</div>` : ''}</div>
     ${st(a.status)}${a.closure ? st(a.closure) : ''}${next ? `<button class="btn sm ghost" data-next="${a.id}" data-s="${next[0]}">${next[1]}</button>` : ''}<button class="btn sm quiet icon" data-open="${a.id}" aria-label="Open">${icon('more-horizontal', 18)}</button></div>`;
 }
+// Moving a visit on from "booked" after the slot has ended: ask whether the patient has just arrived late.
+// A late arrival is recorded with the time it is marked, and does not count as a late marking in Duty Watch.
+const slotEnd = a => { const t = new Date(Date.parse(a.start_at + ':00Z') + ((a.minutes || 30) + 15) * 60000); return t.toISOString().slice(0, 16); };
+function apptStatus(a, s) {
+  const post = extra => api(`/clinic/appointments/${a.id}/status`, { method: 'POST', body: { status: s, ...extra } });
+  if (!a || a.status !== 'booked' || !['arrived', 'in_treatment', 'completed'].includes(s) || nowLocal() <= slotEnd(a)) return post({});
+  return new Promise((resolve, reject) => {
+    let done = false;
+    modal({
+      title: 'Past this appointment\'s time',
+      body: `<p>${esc(a.patient_name || 'This patient')}'s appointment was at <b>${esc(fTime(a.start_at))}</b>. What happened?</p>
+        <div class="stack" style="gap:10px">
+          <button class="btn" data-l="late">${icon('clock', 18)}Patient has just arrived (late)</button>
+          ${field('Reason (optional)', inp('late_reason', '', 'maxlength="120" placeholder="e.g. traffic, called to say running late"'))}
+          <button class="btn ghost" data-l="catchup">${icon('pencil', 18)}Patient came earlier — I'm updating it now</button>
+        </div>
+        <p class="small muted" style="margin-top:10px">“Arrived late” records the arrival at this moment and is not counted against you, as long as the visit then actually happens (not closed within 5 minutes). Updating an earlier arrival now is a late marking.</p>`,
+      actions: '<button class="btn quiet" data-close>Cancel</button>',
+      onMount(el, close) {
+        el.querySelectorAll('[data-l]').forEach(b => b.onclick = () => {
+          const late = b.dataset.l === 'late';
+          if (late && s === 'completed') return toast('Mark the patient arrived first; complete the visit when it is over.', true);
+          done = true;
+          busy(b, () => post(late ? { late_arrival: true, late_reason: el.querySelector('[name=late_reason]').value } : {})).then(r => { close(); resolve(r); }).catch(e => { close(); reject(e); });
+        });
+        const sc = el.parentElement, obs = new MutationObserver(() => { if (!sc.isConnected) { obs.disconnect(); if (!done) reject(new Error('cancelled')); } }); obs.observe(document.body, { childList: true });
+      },
+    });
+  });
+}
 function wireApptRows(root, list, after) {
   const find = id => list.find(a => a.id === +id);
-  root.querySelectorAll('[data-next]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/appointments/${b.dataset.next}/status`, { method: 'POST', body: { status: b.dataset.s } })).then(() => {
+  root.querySelectorAll('[data-next]').forEach(b => b.onclick = () => busy(b, () => apptStatus(find(b.dataset.next) || { id: +b.dataset.next }, b.dataset.s)).then(() => {
     if (b.dataset.s === 'completed') closeVisitModal(find(b.dataset.next), after); else after();
   }).catch(() => {}));
   root.querySelectorAll('[data-open]').forEach(b => b.onclick = () => apptDetail(find(b.dataset.open), after));
@@ -488,7 +518,7 @@ function apptDetail(a, after) {
       ${a.status === 'completed' && !a.closure ? `<button class="btn ghost" data-pkg>${icon('package', 16)}Use package</button><button class="btn gold" data-bill>${icon('receipt', 16)}Bill</button>` : ''}
       ${next ? `<button class="btn" data-next="${next[0]}">${next[1]}</button>` : ''}`,
     onMount(el, close) {
-      const set = (s, msg) => api(`/clinic/appointments/${a.id}/status`, { method: 'POST', body: { status: s } }).then(() => { close(); toast(msg); s === 'completed' ? closeVisitModal(a, after) : after(); }).catch(e => toast(e.message, true));
+      const set = (s, msg) => apptStatus(a, s).then(() => { close(); toast(msg); s === 'completed' ? closeVisitModal(a, after) : after(); }).catch(e => e.message !== 'cancelled' && toast(e.message, true));
       el.querySelector('[data-edit]') && (el.querySelector('[data-edit]').onclick = () => { close(); apptModal(a, after); });
       el.querySelector('[data-note]') && (el.querySelector('[data-note]').onclick = () => { close(); noteModal({ patient_id: a.patient_id, appointment_id: a.id, dept_id: a.dept_id, patient_name: a.patient_name }, after); });
       el.querySelector('[data-ns]') && (el.querySelector('[data-ns]').onclick = () => set('no_show', 'Marked as no-show'));

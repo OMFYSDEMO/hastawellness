@@ -3,7 +3,7 @@ import {
   measureSeries, dietView, DIETS, SCREENING, today, nowLocal, addDays, dayDiff, fDay, fDate, fWeekday, fLong, fTime, fWhen, inr, kg, initials, first,
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
   includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
-  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=12';
+  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=13';
 import { bodyComp, latestMerged, nutritionTargets, suggestDiets, defaultAim, TAPE, BIA, ACTIVITY, AIMS, FOOD_PREF } from './body.js?v=1';
 import { viewAcademy } from './academy.js?v=13';
 

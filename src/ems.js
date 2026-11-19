@@ -185,7 +185,7 @@ function shell(base) {
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=12">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=21"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=22"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */

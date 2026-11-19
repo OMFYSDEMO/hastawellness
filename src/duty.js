@@ -47,10 +47,11 @@ const json = (d, s = 200) => new Response(JSON.stringify(d), { status: s, header
 const safe = t => String(t == null ? '' : t).replace(/₹/g, 'Rs.').replace(/→/g, '>').replace(/[^\x20-\x7E\xA0-\xFF–—‘’“”•…\n]/g, '?');
 const SYSTEM = { id: 0, name: 'Hasta Duty Watch' };
 const GRACE = 15;
+const LATE_MIN_VISIT = 5;   // a declared late arrival must be followed by a visit of at least this many minutes
 
 export const CODES = {
   no_arrival: { label: 'Arrival not marked', who: 'front', points: 3, help: 'An appointment was left as "booked": the patient was never marked arrived, no-show or cancelled.' },
-  late_mark: { label: 'Arrival marked late', who: 'front', points: 1, help: 'The arrival was marked only after the appointment should have finished.' },
+  late_mark: { label: 'Arrival marked late', who: 'front', points: 1, help: 'The arrival was marked only after the appointment should have finished. If the patient really arrived late, mark the arrival when they walk in and choose "Patient has just arrived (late)"; it is then not counted, provided the visit is not closed within 5 minutes of that mark.' },
   not_completed: { label: 'Treatment not marked complete', who: 'front', points: 2, help: 'The patient was marked arrived or in treatment and never marked completed.' },
   not_billed: { label: 'Not billed on the day', who: 'front', points: 3, help: 'A completed visit was not billed, put on a package or marked no charge on the day.' },
   still_unbilled: { label: 'Still not billed', who: 'front', points: 2, help: 'A visit from an earlier day was still not closed at the end of this day.' },
@@ -122,7 +123,7 @@ async function findings(env, day, cf, cut) {
   const ref = (type, id) => ({ ref_type: type, ref_id: id });
   const out = [];
   const pt = a => `${a.patient_name}${a.patient_no ? ' (' + a.patient_no + ')' : ''}`;
-  const appts = await env.DB.prepare(`SELECT a.id, a.patient_id, a.doctor_id, a.start_at, a.minutes, a.status, a.closure, a.invoice_id, i.status inv_status, p.name patient_name, p.patient_no, d.name doctor_name, d.external doc_external,
+  const appts = await env.DB.prepare(`SELECT a.id, a.patient_id, a.doctor_id, a.start_at, a.minutes, a.status, a.late_arrival_at, a.closure, a.invoice_id, i.status inv_status, p.name patient_name, p.patient_no, d.name doctor_name, d.external doc_external,
         (SELECT COUNT(*) FROM cl_notes n WHERE n.appointment_id=a.id OR (n.patient_id=a.patient_id AND n.visit_date=substr(a.start_at,1,10))) notes
       FROM cl_appointments a JOIN cl_patients p ON p.id=a.patient_id LEFT JOIN cl_invoices i ON i.id=a.invoice_id LEFT JOIN ems_staff d ON d.id=a.doctor_id
       WHERE substr(a.start_at,1,10)=? ORDER BY a.start_at`).bind(day).all().then(r => r.results || []);
@@ -135,7 +136,11 @@ async function findings(env, day, cf, cut) {
     else if (['arrived', 'in_treatment'].includes(a.status)) out.push({ code: 'not_completed', ...ref('appointment', a.id), detail: what });
     else if (a.status === 'completed' && (!a.closure || (a.closure === 'billed' && a.inv_status === 'draft'))) out.push({ code: 'not_billed', ...ref('appointment', a.id), detail: what + (a.inv_status === 'draft' ? ' · draft bill not finalised' : '') });
     const first = marks.find(m => m.entity_id === a.id && /^booked → (arrived|in_treatment|completed)/.test(m.detail || ''));
-    if (first && istOf(first.at) > addMin(a.start_at, a.minutes + GRACE)) out.push({ code: 'late_mark', ...ref('appointment', a.id), detail: `${what} · marked at ${ft(istOf(first.at))}${istOf(first.at).slice(0, 10) !== day ? ' on ' + fd(istOf(first.at)) : ''}` });
+    // A late arrival marked when the patient walked in is not a late marking — unless the whole visit was then
+    // closed within a few minutes of that mark (a catch-up entry, not a real arrival).
+    const nextMark = first && marks.find(m => m.entity_id === a.id && m.at > first.at && /→ completed/.test(m.detail || ''));
+    const realLate = first && a.late_arrival_at && /patient arrived late/.test(first.detail || '') && (!nextMark || (Date.parse(nextMark.at) - Date.parse(first.at)) >= LATE_MIN_VISIT * 60000);
+    if (first && !realLate && istOf(first.at) > addMin(a.start_at, a.minutes + GRACE)) out.push({ code: 'late_mark', ...ref('appointment', a.id), detail: `${what} · marked at ${ft(istOf(first.at))}${istOf(first.at).slice(0, 10) !== day ? ' on ' + fd(istOf(first.at)) : ''}` });
   }
   {
     // Visits from the 3 days before still not closed.

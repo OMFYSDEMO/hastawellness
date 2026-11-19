@@ -124,9 +124,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=12"><link rel="stylesheet" href="/clinic/clinic.css?v=11">
-<link rel="modulepreload" href="/clinic/app.js?v=33"><link rel="modulepreload" href="/ems/core.js?v=11">
+<link rel="modulepreload" href="/clinic/app.js?v=34"><link rel="modulepreload" href="/ems/core.js?v=13">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=33"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=34"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -722,8 +722,12 @@ async function setStatus(env, me, id, b) {
   if (!st) return R(400, 'Unknown status.');
   if (['completed', 'cancelled', 'no_show'].includes(a.status) && !canManage(me)) return R(400, 'This appointment is closed. Ask a manager to reopen it.');
   if (st === 'cancelled' && a.invoice_id) return R(400, 'This visit has an invoice. Cancel or delete the invoice first.');
+  // The patient arrived after their slot: recorded with the time it is marked (not editable), so Duty Watch does not
+  // count it as a late marking — provided the visit then actually takes place (see duty.js).
+  const late = b.late_arrival === true && a.status === 'booked' && ['arrived', 'in_treatment'].includes(st);
+  if (late) await env.DB.prepare('UPDATE cl_appointments SET late_arrival_at=?, late_reason=? WHERE id=?').bind(nowIso(), nz(clean(b.late_reason, 120)), id).run();
   await env.DB.prepare('UPDATE cl_appointments SET status=?, notes=COALESCE(?, notes), updated_at=? WHERE id=?').bind(st, nz(clean(b.notes, 500)), nowIso(), id).run();
-  await audit(env, me, 'appt.status', 'appointment', id, `${a.status} → ${st}`);
+  await audit(env, me, 'appt.status', 'appointment', id, `${a.status} → ${st}${late ? ' · patient arrived late' + (b.late_reason ? ` (${clean(b.late_reason, 120)})` : '') : ''}`);
   return OK();
 }
 async function noCharge(env, me, id, b) {

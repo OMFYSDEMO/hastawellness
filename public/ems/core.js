@@ -102,7 +102,7 @@ export function formData(form) {
 export async function busy(btn, fn, silent = false) {
   const label = btn.innerHTML;
   btn.disabled = true;
-  try { return await fn(); } catch (e) { if (!silent) toast(e.message, true); throw e; }
+  try { return await fn(); } catch (e) { if (!silent && e.message !== 'cancelled') toast(e.message, true); throw e; }
   finally { btn.disabled = false; btn.innerHTML = label; }
 }
 
