@@ -722,6 +722,8 @@ async function setStatus(env, me, id, b) {
   if (!st) return R(400, 'Unknown status.');
   if (['completed', 'cancelled', 'no_show'].includes(a.status) && !canManage(me)) return R(400, 'This appointment is closed. Ask a manager to reopen it.');
   if (st === 'cancelled' && a.invoice_id) return R(400, 'This visit has an invoice. Cancel or delete the invoice first.');
+  if (['arrived', 'in_treatment', 'completed', 'no_show'].includes(st) && a.start_at.slice(0, 10) > today())
+    return R(400, `This appointment is on ${a.start_at.slice(0, 10)}. A visit can only be marked arrived, in treatment, completed or no-show on its own day. If the patient came in today, reschedule it to today first.`);
   // The patient arrived after their slot: recorded with the time it is marked (not editable), so Duty Watch does not
   // count it as a late marking — provided the visit then actually takes place (see duty.js).
   const late = b.late_arrival === true && a.status === 'booked' && ['arrived', 'in_treatment'].includes(st);
@@ -736,6 +738,7 @@ async function noCharge(env, me, id, b) {
   const a = await env.DB.prepare('SELECT * FROM cl_appointments WHERE id=?').bind(id).first();
   if (!a) return R(404, 'Not found.');
   if (a.invoice_id) return R(400, 'This visit already has an invoice.');
+  if (a.start_at.slice(0, 10) > today()) return R(400, 'This appointment is on a later date. Close it on the day of the visit.');
   await env.DB.prepare("UPDATE cl_appointments SET closure='no_charge', closure_note=?, status=CASE WHEN status IN ('booked','arrived','in_treatment') THEN 'completed' ELSE status END, updated_at=? WHERE id=?").bind(`${reason} — ${me.name}`, nowIso(), id).run();
   await audit(env, me, 'appt.no_charge', 'appointment', id, reason);
   return OK();
