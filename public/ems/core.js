@@ -1,4 +1,4 @@
-import { icon } from './icons.js';
+import { icon } from './icons.js?v=2';
 export { icon };
 
 export const BASE = document.querySelector('meta[name="ems-base"]')?.content || '';
@@ -392,6 +392,51 @@ export const DIETS = {
     ],
     swaps: ['Skipping breakfast → never; eat within an hour of waking', 'Chips and bakery → nuts, banana, peanut chikki', 'Tea only → milk, buttermilk or a smoothie'],
   },
+  'fat-loss-5': {
+    name: 'Fat-loss 5-meal plan (Kerala)', icon: 'flame',
+    intro: 'Five smaller meals a day keep hunger down while you eat a little less overall. Rice is kept, just smaller; protein comes at every meal so EMS keeps your muscle as fat comes off.',
+    plate: ['Half the plate: vegetables — thoran, avial, cabbage or beans mezhukkupuratti, salad', 'A quarter: protein — fish curry, egg whites, chicken (not fried), kadala, cherupayar', 'A quarter: carbs — ¾ cup cooked matta rice or 2 small chapatis'],
+    day: [
+      ['sun', '7:30 · Breakfast', '2 idli or 1 dosa with sambar and 2 boiled egg whites, or oats upma with vegetables. Tea or coffee without sugar.'],
+      ['apple', '10:30 · Mid-morning', 'Guava, papaya or orange, or a glass of sambharam.'],
+      ['utensils', '1:00 · Lunch', '¾ cup matta rice, fish curry (not fried), a big thoran and a salad of cucumber and carrot.'],
+      ['coffee', '4:30 · Evening', 'Black tea with sprouts salad or a small cup of roasted kadala.'],
+      ['soup', '7:30 · Dinner', '2 chapatis or ragi dosa with chicken or egg curry and a vegetable side. Finish dinner by 8 pm.'],
+    ],
+    swaps: ['Fried fish → pollichathu or fish curry', 'Pazham pori, banana chips, bakery snacks → roasted kadala or a fruit', 'Sugar in tea → none (cut by half each week if needed)', 'Second helping of rice → more thoran or salad', 'Coconut oil: about 3 teaspoons a day in total'],
+    grocery: ['Matta rice, wheat atta, ragi, oats', 'Eggs, fish (mathi, ayala, choora), chicken breast', 'Kadala, cherupayar, dal, sprouts', 'Cabbage, beans, carrot, beetroot, cucumber, drumstick, spinach', 'Guava, papaya, orange, apple', 'Curd / buttermilk, a small amount of coconut oil'],
+    water: ['On waking: 1 glass', 'With each meal: 1 glass', 'Between meals: 1 glass every 1–2 hours', 'Before and after EMS: 1 glass each', 'Aim: about 10 glasses (2.5 L) a day, unless your doctor advises otherwise'],
+  },
+  'tone-5': {
+    name: 'Muscle-toning 5-meal plan (Kerala)', icon: 'dumbbell',
+    intro: 'For firming and toning with EMS: enough protein at every meal and steady carbohydrates around your sessions, so your muscles have what they need to respond.',
+    plate: ['A third: protein — egg, fish, chicken, paneer, soya, kadala, curd', 'A third: vegetables', 'A third: carbs — matta rice, chapati, puttu, oats'],
+    day: [
+      ['sun', '7:30 · Breakfast', 'Puttu (small) with kadala curry and 2 boiled eggs, or 2 appam with egg curry.'],
+      ['apple', '10:30 · Mid-morning', 'A banana with a handful of peanuts, or curd with fruit.'],
+      ['utensils', '1:00 · Lunch', '1 cup matta rice, fish or chicken curry, dal and a thoran.'],
+      ['coffee', '4:30 · Before / after EMS', 'Sprouts or a boiled egg with black coffee; after the session, a glass of milk or buttermilk.'],
+      ['soup', '7:30 · Dinner', '2 chapatis with paneer, soya or chicken and vegetables.'],
+    ],
+    swaps: ['Biscuits with tea → boiled egg or nuts', 'Sweetened juice → whole fruit', 'Parotta → chapati or ragi dosa', 'Skipped breakfast → never on session days'],
+    grocery: ['Eggs, fish, chicken, paneer, soya chunks', 'Kadala, cherupayar, dal, peanuts, roasted chana', 'Matta rice, wheat atta, puttu podi, oats', 'Bananas and seasonal fruit', 'Milk, curd, buttermilk', 'Vegetables for thoran and curry'],
+    water: ['On waking: 1 glass', 'With each meal: 1 glass', '2 glasses in the hour before EMS and 2 after', 'Aim: about 10–12 glasses (2.5–3 L) a day, unless your doctor advises otherwise'],
+  },
+  'hormone-support': {
+    name: 'PCOS & thyroid support meal guide', icon: 'heart-pulse',
+    intro: 'A steady-sugar Kerala meal pattern that supports women with PCOS or thyroid-related weight gain. It works alongside — never instead of — your doctor\'s treatment and medicines.',
+    plate: ['Half the plate: vegetables and greens (cooked well if you have thyroid issues)', 'A quarter: protein — fish, egg, chicken, dal, kadala, curd', 'A quarter: slow carbs — matta rice (¾ cup), ragi, oats, millets'],
+    day: [
+      ['sun', '7:30 · Breakfast', 'Ragi dosa or oats with an egg or dal; or 2 idli with sambar and a boiled egg. If you take thyroid tablets, keep the gap your doctor advised before eating.'],
+      ['apple', '10:30 · Mid-morning', 'A guava, apple or orange with a few almonds.'],
+      ['utensils', '1:00 · Lunch', '¾ cup matta rice or millet, fish curry, a green thoran and a salad.'],
+      ['coffee', '4:30 · Evening', 'Sprouts or roasted chana with unsweetened tea.'],
+      ['soup', '7:30 · Dinner', '2 chapatis or a millet roti with a protein curry and vegetables. Finish by 8 pm.'],
+    ],
+    swaps: ['White rice in large portions → ¾ cup matta rice or millets', 'Sweets and bakery items → fruit with a few nuts', 'Sugary drinks → buttermilk or water', 'Late-night snacking → herbal tea and an early dinner'],
+    grocery: ['Matta rice, millets (ragi, varagu), oats', 'Fish, eggs, chicken, dal, kadala, cherupayar', 'Leafy greens, beans, carrot, cucumber, bottle gourd', 'Guava, apple, orange, berries when available', 'Almonds, walnuts, flax seeds', 'Curd, buttermilk'],
+    water: ['On waking: 1 glass (after your thyroid tablet, if you take one)', 'With each meal: 1 glass', 'Between meals: 1 glass every 1–2 hours', 'Aim: about 10 glasses (2.5 L) a day, unless your doctor advises otherwise'],
+  },
 };
 export const DIET_NOTE = 'General lifestyle guidance from the Hasta team, not a medical diet. If you have a medical condition, are pregnant or take regular medicines, follow your doctor\'s advice first.';
 
@@ -404,6 +449,8 @@ export function dietView(key, t) {
     <div><h4 style="margin-bottom:8px">Build your plate</h4><ul class="dots">${d.plate.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>
     <div><h4 style="margin-bottom:4px">A day on this plan</h4>${d.day.map(([ic, t, x]) => `<div class="meal"><span class="hic">${icon(ic, 18)}</span><div><b>${esc(t)}</b><p>${esc(x)}</p></div></div>`).join('')}</div>
     <div><h4 style="margin-bottom:8px">Easy swaps</h4><ul class="dots">${d.swaps.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>
+    ${d.water ? `<div><h4 style="margin-bottom:8px">Water schedule</h4><ul class="dots">${d.water.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>` : ''}
+    ${d.grocery ? `<div><h4 style="margin-bottom:8px">Grocery list</h4><ul class="dots">${d.grocery.map(p => `<li>${esc(p)}</li>`).join('')}</ul></div>` : ''}
     <p class="note">${esc(DIET_NOTE)}</p></div>`;
 }
 
@@ -464,3 +511,67 @@ export function sigPad(el) {
 }
 
 export const unitLabel = (units, id) => { const u = (units || []).find(x => x.id === id); return u ? u.name : ''; };
+
+/* ---------- Programme journey, progress photos and progress card (shared by staff and client) ---------- */
+export function journeyPanel(j) {
+  if (!j) return '';
+  const pct = Math.round(Math.min(1, (j.day - 1) / (j.weeks * 7)) * 100);
+  return `<section class="panel journey"><div class="panel-h"><div class="t">${icon('flag', 20)}<h3>${esc(j.name)}</h3></div><span class="small muted">Week ${j.week} of ${j.weeks}</span></div>
+    <p class="muted" style="margin:0 0 10px">${esc(j.tagline)}</p>
+    <div class="bar" style="margin-bottom:8px"><i style="width:${pct}%"></i></div>
+    <div class="jchecks">${j.checkpoints.map(c => `<span class="${c.date <= today() ? 'done' : ''}">${icon(c.date <= today() ? 'check-circle' : 'clipboard-check', 15)}${c.week === 0 ? 'Start' : 'Week ' + c.week} assessment · ${esc(fDate(c.date))}</span>`).join('')}</div>
+    ${j.next_check ? `<p class="small" style="margin:10px 0 0"><b>Next body-composition check:</b> ${esc(fDate(j.next_check))}</p>` : ''}
+    <ul class="dots" style="margin-top:10px">${j.focus.map(f => `<li>${esc(f)}</li>`).join('')}</ul></section>`;
+}
+
+// base: '/staff/clients/<id>' or '/client'
+export function photoPanel(photos, base, opts = {}) {
+  const POSE = { front: 'Front', side: 'Side', back: 'Back' };
+  const byDate = {};
+  for (const p of photos) (byDate[p.taken_on] ||= []).push(p);
+  const dates = Object.keys(byDate).sort();
+  const firstD = dates[0], lastD = dates[dates.length - 1];
+  const img = p => `<figure class="ph"><img loading="lazy" src="${BASE}/api${base}/photos/${p.id}" alt="${esc(POSE[p.pose])} photo, ${esc(fDate(p.taken_on))}"><figcaption>${esc(POSE[p.pose])}${opts.canDelete ? ` <button type="button" class="linkish" data-phdel="${p.id}">Remove</button>` : ''}</figcaption></figure>`;
+  const compare = dates.length > 1 ? `<div class="phcmp">${['front', 'side', 'back'].map(pose => {
+      const a = byDate[firstD].find(p => p.pose === pose), b = byDate[lastD].find(p => p.pose === pose);
+      return a && b ? `<div><h4>${POSE[pose]}</h4><div class="pair">${img(a)}${img(b)}</div><p class="small muted">${esc(fDate(firstD))} → ${esc(fDate(lastD))}</p></div>` : '';
+    }).join('')}</div>` : '';
+  return `<section class="panel"><div class="panel-h"><div class="t">${icon('camera', 20)}<h3>Progress photos</h3></div>
+      <div class="acts"><button class="btn sm ghost" data-phadd>${icon('plus', 16)}Add photo</button></div></div>
+    <p class="small muted" style="margin-top:0">Private: seen only by ${opts.client ? 'you and your coach and clinician' : 'the client, their coach and clinician'}. Same pose, same place and light each time.</p>
+    ${photos.length ? (compare ? `<h4 style="margin:6px 0">Before and now</h4>${compare}` : '') + `<details${compare ? '' : ' open'}><summary class="small">All photos (${photos.length})</summary>${dates.slice().reverse().map(d => `<div class="phday"><b class="small">${esc(fDate(d))}</b><div class="phrow">${byDate[d].map(img).join('')}</div></div>`).join('')}</details>` : `<p class="muted">No photos yet. Take front, side and back photos at the start and at each assessment.</p>`}
+    ${opts.consent !== undefined ? `<label class="check" style="margin-top:12px"><input type="checkbox" data-phconsent ${opts.consent ? 'checked' : ''}> ${opts.client ? 'I allow Hasta Wellness to use my before-and-after photos in its marketing, with my face hidden and without my name. I can withdraw this at any time.' : 'Client has given consent to use before-and-after photos in marketing (face hidden, no name). Only tick this with the client\'s signed or in-app consent.'}</label>` : ''}
+  </section>`;
+}
+
+export function wirePhotoPanel(root, base, after) {
+  const add = root.querySelector('[data-phadd]');
+  if (add) add.addEventListener('click', () => modal({
+    title: 'Add a progress photo',
+    body: `<form data-f class="stack">${field('Pose', sel('pose', [['front', 'Front'], ['side', 'Side'], ['back', 'Back']]))}${field('Date taken', inp('taken_on', today(), 'type="date"'))}
+      <input type="file" name="photo" accept="image/jpeg,image/png,image/webp" capture="environment"><p class="small muted">JPG, PNG or WebP, up to 6 MB. Plain background, fitted clothing, arms slightly away from the body.</p></form>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>${icon('upload', 18)}Upload</button>`,
+    onMount(el, close) {
+      const b = el.querySelector('[data-save]'), f = el.querySelector('[data-f]');
+      b.addEventListener('click', () => {
+        if (!f.photo.files[0]) return toast('Choose a photo.', true);
+        const fd = new FormData(f);
+        busy(b, async () => {
+          const res = await fetch(BASE + '/api' + base + '/photos', { method: 'POST', body: fd, credentials: 'same-origin' });
+          const data = await res.json().catch(() => ({}));
+          if (!res.ok || !data.ok) throw new Error(data.error || 'Upload failed.');
+        }).then(() => { close(); toast('Photo saved'); after(); }).catch(() => {});
+      });
+    },
+  }));
+  root.querySelectorAll('[data-phdel]').forEach(b => b.addEventListener('click', () => {
+    if (!confirm('Remove this photo permanently?')) return;
+    api(`${base}/photos/${b.dataset.phdel}`, { method: 'DELETE' }).then(() => { toast('Photo removed'); after(); }).catch(e => toast(e.message, true));
+  }));
+  const cb = root.querySelector('[data-phconsent]');
+  if (cb) cb.addEventListener('change', () => api(`${base}/photo-consent`, { method: 'PUT', body: { on: cb.checked } }).then(() => toast(cb.checked ? 'Consent recorded' : 'Consent withdrawn')).catch(e => { cb.checked = !cb.checked; toast(e.message, true); }));
+}
+
+export function progressCardLinks(base) {
+  return `<div class="acts" style="display:flex;gap:8px;flex-wrap:wrap">${[30, 60, 90].map(n => `<a class="btn sm ghost" href="${BASE}/api${base}/progress-card?days=${n}" target="_blank" rel="noopener">${icon('download', 16)}${n}-day progress card</a>`).join('')}</div>`;
+}

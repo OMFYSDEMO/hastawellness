@@ -3,9 +3,9 @@ import {
   measureSeries, dietView, DIETS, SCREENING, today, nowLocal, addDays, dayDiff, fDay, fDate, fWeekday, fLong, fTime, fWhen, inr, kg, initials, first,
   ageFrom, prettyPhone, wa, pill, KIND_LABEL, APP_URL, BASE,
   includesText, PROGRAMME_LABEL, ADM_LABEL, admState, admPill, admSteps, letterBox, screeningForm, readScreening, sigPad,
-  toIn, cmIn, ftIn, lenField, wireLen, lenToCm } from './core.js?v=13';
+  toIn, cmIn, ftIn, lenField, wireLen, lenToCm, journeyPanel, photoPanel, wirePhotoPanel, progressCardLinks } from './core.js?v=14';
 import { bodyComp, latestMerged, nutritionTargets, suggestDiets, defaultAim, TAPE, BIA, ACTIVITY, AIMS, FOOD_PREF } from './body.js?v=1';
-import { viewAcademy } from './academy.js?v=13';
+import { viewAcademy } from './academy.js?v=17';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
 const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';
@@ -18,7 +18,7 @@ async function team(fresh = false) { if (!TEAM || fresh) TEAM = (await api('/sta
 const coachOptions = (list, value) => [['', 'Not allocated']].concat(list.map(t => [t.id, t.name + (t.role === 'admin' ? ' (admin)' : '')]));
 const NAV = [
   ['', 'layout-dashboard', 'Dashboard'], ['schedule', 'calendar-days', 'Schedule'], ['clients', 'users', 'Clients'],
-  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['payments', 'wallet', 'Payments'], ['quest', 'trophy', 'Quest demo'], ['academy', 'graduation-cap', 'Academy'],
+  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['weekly', 'message-circle', 'Weekly check-ins'], ['payments', 'wallet', 'Payments'], ['quest', 'trophy', 'Quest demo'], ['academy', 'graduation-cap', 'Academy'],
 ];
 
 export function mount(app, me) {
@@ -76,6 +76,7 @@ async function route() {
     else if (top === 'rota') await viewRota();
     else if (top === 'settings') await viewSettings();
     else if (top === 'quest') await viewQuestDemo();
+    else if (top === 'weekly') await viewWeekly();
     else if (top === 'academy') await viewAcademy(MAIN, ME, MACHINES, q.get('tab') || 'overview', go);
     else MAIN.innerHTML = emptyState('info', 'Page not found.');
   } catch (e) { MAIN.innerHTML = `<div class="panel"><p class="err">${esc(e.message)}</p></div>`; }
@@ -705,7 +706,9 @@ function tabProgress(el, d, after) {
   const lm = latestMerged(d.measurements), comp = bodyComp(d.client, lm.m, lm.date);
   const tapeKeys = TAPE.map(t => t[0]).filter(k => d.measurements.some(m => m[k] != null));
   el.innerHTML = `<div class="stack">
-    <section class="panel">${metricStrip(d)}</section>
+    ${journeyPanel(d.journey)}
+    <section class="panel">${metricStrip(d)}<div style="margin-top:12px">${progressCardLinks('/staff/clients/' + d.client.id)}</div></section>
+    <div data-photos>${photoPanel(d.photos || [], '/staff/clients/' + d.client.id, { canDelete: true, consent: !!d.client.photo_marketing })}</div>
     <section class="panel">${compPanel(comp)}${lm.date ? `<p class="small faint">Latest values up to ${esc(fDate(lm.date))}.</p>` : ''}</section>
     <div class="grid2" style="gap:18px">
       <section class="panel"><div class="panel-h"><div class="t">${icon('line-chart', 20)}<h3>Weight</h3></div></div><div data-w></div></section>
@@ -724,6 +727,7 @@ function tabProgress(el, d, after) {
   lineChart(el.querySelector('[data-mm]'), { series: [{ name: 'Muscle', color: '#2f7d58', points: measureSeries(d.measurements, 'muscle_mass') }], unit: ' kg', height: 200 });
   const COLS = { neck: '#7a8a8a', chest: '#5b7fa6', arm: '#9a6fb0', belly: '#a8642c', lower_belly: '#c4a45b', thigh: '#2f7d58' };
   if (el.querySelector('[data-tape]')) lineChart(el.querySelector('[data-tape]'), { series: tapeKeys.filter(k => COLS[k]).map(k => ({ name: TAPE.find(t => t[0] === k)[1], color: COLS[k], points: measureSeries(d.measurements, k) })), unit: ' cm', height: 200 });
+  wirePhotoPanel(el.querySelector('[data-photos]'), '/staff/clients/' + d.client.id, after);
   el.querySelector('[data-add]').addEventListener('click', () => d.access.measurements ? measureModal(d.client, after) : toast('Progress measurements are not included in this client\'s package.', true));
   el.querySelectorAll('[data-del]').forEach(b => b.addEventListener('click', () => { if (confirm('Delete this measurement?')) busy(b, () => api('/staff/measurements/' + b.dataset.del, { method: 'DELETE', body: {} })).then(() => { toast('Deleted'); after(); }).catch(() => {}); }));
 }
@@ -995,6 +999,7 @@ async function pkgDefModal(p) {
     title: p.id ? 'Package builder · ' + p.name : 'Package builder', wide: true,
     body: `<form class="stack" style="gap:14px" data-f>
       <div class="grid3">${field('Package name', inp('name', p.name, 'maxlength="80" placeholder="e.g. EMS Starter"'))}${field('Programme', sel('programme', [['ems', 'EMS programme'], ['weight', 'Weight management only'], ['combined', 'EMS + weight management']], p.programme || 'ems'), 'admission must cover this')}${field('Valid for (days)', inp('validity_days', p.validity_days, 'type="number" min="7"'))}</div>
+      ${field('Programme track', sel('track', [['', 'None (plain package)'], ['transformation', 'Body Transformation'], ['bridal', '90-Day Bridal Sculpt'], ['groom', 'Groom Fit in 60 Days'], ['women', "Women's Metabolic Health"], ['sports', 'Performance Conditioning']], p.track || ''), 'shows the client their programme journey, weeks and assessment dates')}
       <div><h4 style="margin-bottom:8px">What's included</h4><div class="qs">
         <div class="q"><p><b>EMS sessions</b><br><span class="small muted">${inr(P.ems_session.price)} each · cost ${inr(P.ems_session.cost)}</span></p><input class="in" name="sessions" type="number" min="0" max="200" value="${p.sessions ?? 0}" style="width:100px;text-align:right"></div>
         <div class="q"><p><b>Session length</b> <span class="small muted">(minutes; leave blank for the centre's standard slot)</span></p><input class="in" name="session_minutes" type="number" min="10" max="120" placeholder="standard" value="${(p.ent && p.ent.session_minutes) || ''}" style="width:100px;text-align:right"></div>
@@ -1320,8 +1325,26 @@ const QSTEPS = [
   { view: 'quest', hl: '.badges', title: 'Badges and level-ups', say: ['17 badges: first session, 10 / 25 / 50 sessions, 7- and 30-day streaks, Hydration hero, First kilo, Inches off, Never miss a beat (renewing on time) and more.', 'Grey ones are still to unlock.', 'When you reach a new level you get a celebration screen.'] },
   { view: 'home', hl: '[data-board]', title: 'Your coach sees it too', say: ['I see the same goal board on my screen, so we talk about what is red at each session.', 'No one else sees your data. Nothing here is about being perfect — it is about showing up.', 'Let\'s set up your app now: your mobile number and the 6-digit PIN.'] },
 ];
+// Weekly accountability: every active client gets a weigh-in or a check-in each week.
+async function viewWeekly() {
+  const d = await api('/staff/weekly');
+  const due = d.clients.filter(c => c.due), done = d.clients.filter(c => !c.due);
+  const msg = c => `Hi ${first(c.name)}, this is Hasta Wellness 👋 Your weekly check-in: how was this week? Please send your weight today (or come in for a quick weigh-in)${c.next_session ? `, and see you at your next session on ${fWhen(c.next_session)}` : ''}. Keep going — consistency is what brings results! 💪`;
+  const row = c => `<div class="wkrow"><div><a href="#/clients/${c.id}?tab=progress"><b>${esc(c.name)}</b></a><div class="small muted">${esc(prettyPhone(c.phone))}${c.coach_name ? ' · Coach: ' + esc(c.coach_name) : ''}</div></div>
+      <div class="small">Last weigh-in<br><b>${c.last_weigh ? esc(fDate(c.last_weigh)) : '—'}</b></div>
+      <div class="small">${c.contacted ? `Contacted<br><b>${esc(c.contacted)}</b>` : c.next_session ? `Next session<br><b>${esc(fWhen(c.next_session))}</b>` : '<span style="color:var(--warn)">No session booked</span>'}</div>
+      <div class="acts" style="display:flex;gap:6px;flex-wrap:wrap"><a class="btn sm ghost" href="${esc(wa(c.phone, msg(c)))}" target="_blank" rel="noopener" data-wa="${c.id}">${icon('message-circle', 16)}WhatsApp</a>
+        <button class="btn sm ghost" data-done="${c.id}">${icon('check', 16)}Contacted</button></div></div>`;
+  MAIN.innerHTML = `<div class="head"><div><h1>Weekly check-ins</h1><p>Week of ${esc(fDate(d.week))}. Every active client should get a weigh-in or a check-in each week: it keeps them coming and completing their programme.</p></div></div>
+    <section class="panel"><div class="panel-h"><div class="t">${icon('bell', 20)}<h3>Due this week (${due.length})</h3></div></div>${due.length ? due.map(row).join('') : emptyState('check-circle', 'Everyone is checked in', 'All active clients have weighed in or been contacted this week.')}</section>
+    <section class="panel"><div class="panel-h"><div class="t">${icon('check-circle', 20)}<h3>Done this week (${done.length})</h3></div></div>${done.length ? done.map(row).join('') : '<p class="muted">None yet.</p>'}</section>`;
+  const log = (id, channel) => api(`/staff/clients/${id}/weekly-contact`, { method: 'POST', body: { channel } });
+  MAIN.querySelectorAll('[data-wa]').forEach(a => a.addEventListener('click', () => log(a.dataset.wa, 'whatsapp').then(() => setTimeout(viewWeekly, 800)).catch(() => {})));
+  MAIN.querySelectorAll('[data-done]').forEach(b => b.addEventListener('click', () => busy(b, () => log(b.dataset.done, 'call')).then(() => { toast('Recorded'); viewWeekly(); }).catch(() => {})));
+}
+
 async function viewQuestDemo() {
-  const C = await import('./client.js?v=12');
+  const C = await import('./client.js?v=16');
   let step = 0, profile = 'green', view = 'home', extra = { meals: [] }, data = null, forced = false;
   MAIN.innerHTML = `<div class="head"><div><h1>Hasta Quest — client demo</h1><p>Walk a client through how the game works. This is a sample client; nothing is saved.</p></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap"><div class="seg" data-prof>${[['green', 'On track'], ['amber', 'Slipping'], ['red', 'Off track']].map(([k, l]) => `<button data-p="${k}">${l}</button>`).join('')}</div><button class="btn ghost" data-reset>${icon('refresh-cw', 16)}Reset</button></div></div>

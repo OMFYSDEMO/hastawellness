@@ -19,6 +19,7 @@ import { listUnits, getUnit, publicUnit, scopeOf, selectedUnits, unitSlots, allo
 import { entOf, priceList, savePriceList, valuation, readEntitlements, usage, access, NOT_INCLUDED, clinicTreatments, resolveTreatments } from './packages.js';
 import { EMS_DUE, clinicForClient, link as clinicLink, unlink as clinicUnlink, recheck as linkRecheck, confirmedPatient, billPackage, rebillPackage, createPatientFor } from './emslink.js';
 import { eligible, needsProgrammes, latestAdmission, publicAdmission, startAdmission, saveScreening, saveAssessment, clientSign, withdraw, admissionPdf, stepLabel, PROGRAMMES, SCREEN_QS, TRIAL_VERSION, TRIAL_TEXT, trialSigOk, screeningStop } from './admission.js';
+import { TRACKS, trackOf, journey, uploadPhoto, listPhotos, servePhoto, deletePhoto, setPhotoConsent, weeklyList, logContact, progressCard } from './programmes.js';
 
 const STAFF_TTL_H = 12;
 const CLIENT_TTL_D = 30;
@@ -29,7 +30,7 @@ const APPT_KINDS = ['session', 'trial', 'consultation', 'review', 'wm_consult'];
 const PAY_METHODS = ['UPI', 'Cash', 'Card', 'Bank transfer'];
 const LEAD_STATUSES = ['new', 'contacted', 'booked', 'not interested'];
 import { game, demoData } from './emsgame.js';
-const DIETS = ['kerala-balanced', 'vegetarian', 'high-protein', 'low-gi', 'calorie-smart', 'fish-forward', 'eggetarian', 'veg-high-protein', 'vegan', 'healthy-gain'];
+const DIETS = ['kerala-balanced', 'vegetarian', 'high-protein', 'low-gi', 'calorie-smart', 'fish-forward', 'eggetarian', 'veg-high-protein', 'vegan', 'healthy-gain', 'fat-loss-5', 'tone-5', 'hormone-support'];
 const SCREENING = ['pacemaker', 'pregnancy', 'epilepsy', 'heart', 'surgery', 'implants', 'cancer', 'diabetes', 'bp', 'skin'];
 
 /* ---------------- Time (IST) ---------------- */
@@ -183,9 +184,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=12">
+<link rel="stylesheet" href="/ems/app.css?v=13">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=22"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=23"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -200,6 +201,17 @@ async function route(request, env, url, ctx, base, p) {
     if (!me || me.role !== 'trainee') return api({ ok: false, error: 'Not available.' }, 403);
     const [st, e] = await BR.uploadBls(env, me, request);
     return st === 200 ? api({ ok: true }) : api({ ok: false, error: e }, st);
+  }
+  // Progress photos (multipart upload): staff for any client in their scope, a client for themselves.
+  {
+    const pm = p.match(/^\/staff\/clients\/(\d+)\/photos$/);
+    if ((pm || p === '/client/photos') && m === 'POST') {
+      if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
+      const me = await getSession(request, env);
+      if (!me || (pm ? me.kind !== 'staff' || me.role === 'trainee' : me.kind !== 'client')) return api({ ok: false, error: 'Not available.' }, 403);
+      if (parseInt(request.headers.get('content-length') || '0', 10) > 6.5 * 1024 * 1024) return api({ ok: false, error: 'That photo is too large (6 MB at most).' }, 413);
+      return uploadPhoto(env, me, pm ? +pm[1] : me.id, request);
+    }
   }
   if (m !== 'GET') {
     if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
@@ -276,6 +288,11 @@ async function route(request, env, url, ctx, base, p) {
       if (r[0] === 200) { const al = notify(env, `Consent signed: ${c.name}`, [['Client', c.name], ['Mobile', c.phone], ['Programme', (JSON.parse(a.programmes) || []).map(k => PROGRAMMES[k]).join(', ')]], `/#/clients/${c.id}?tab=admission`, emsOrigin(env, url)); if (ctx && ctx.waitUntil) ctx.waitUntil(al); }
       return done(r);
     }
+    if (p === '/client/photos' && m === 'GET') return api({ ok: true, photos: await listPhotos(env, me.id) });
+    if ((r = p.match(/^\/client\/photos\/(\d+)$/)) && m === 'GET') return servePhoto(env, me.id, +r[1]);
+    if ((r = p.match(/^\/client\/photos\/(\d+)$/)) && m === 'DELETE') return deletePhoto(env, me.id, +r[1]);
+    if (p === '/client/photo-consent' && m === 'PUT') return setPhotoConsent(env, me.id, body.on === true);
+    if (p === '/client/progress-card' && m === 'GET') return progressCard(env, me.id, [30, 60, 90].includes(+url.searchParams.get('days')) ? +url.searchParams.get('days') : 30);
     if (p === '/client/admission/pdf' && m === 'GET') {
       const id = parseInt(url.searchParams.get('id'), 10);
       const a = id ? await env.DB.prepare('SELECT * FROM ems_admissions WHERE id=? AND client_id=?').bind(id, me.id).first() : await latestAdmission(env, me.id);
@@ -290,6 +307,14 @@ async function route(request, env, url, ctx, base, p) {
   const scope = await scopeOf(env, me);
   const sc = selectedUnits(url, scope);
   let r;
+  if (p === '/staff/weekly' && m === 'GET') return weeklyList(env, scope.units);
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/weekly-contact$/)) && m === 'POST') return logContact(env, me, +r[1], body);
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/photos$/)) && m === 'GET') return api({ ok: true, photos: await listPhotos(env, +r[1]) });
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/photos\/(\d+)$/)) && m === 'GET') return servePhoto(env, +r[1], +r[2]);
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/photos\/(\d+)$/)) && m === 'DELETE') return deletePhoto(env, +r[1], +r[2]);
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/photo-consent$/)) && m === 'PUT') return setPhotoConsent(env, +r[1], body.on === true);
+  if ((r = p.match(/^\/staff\/clients\/(\d+)\/progress-card$/)) && m === 'GET') return progressCard(env, +r[1], [30, 60, 90].includes(+url.searchParams.get('days')) ? +url.searchParams.get('days') : 30);
+  if (p === '/staff/tracks' && m === 'GET') return api({ ok: true, tracks: Object.entries(TRACKS).map(([key, t]) => ({ key, ...t })) });
   if (p === '/staff/units' && m === 'GET') {
     const all = await listUnits(env);
     return api({ ok: true, units: all.filter(u => scope.units.includes(u.id)), all_units: all.map(u => ({ id: u.id, name: u.name, code: u.code, active: u.active })), role: me.role, skills: SKILLS });
@@ -1054,6 +1079,14 @@ async function clientView(env, id, staff) {
   data.insights = insights(data, staff);
   data.meal_logs = mealLogs || [];
   data.game = game(data);
+  {
+    // The client's programme: the most recent active package that belongs to a track.
+    const ids = [...new Set((pkgs || []).map(x => x.package_id).filter(Boolean))];
+    const tracks = ids.length ? Object.fromEntries(((await env.DB.prepare(`SELECT id, track FROM ems_packages WHERE id IN (${ids.join(',')})`).all()).results || []).map(r => [r.id, r.track])) : {};
+    const cur = (pkgs || []).slice().reverse().find(x => x.state === 'active' && tracks[x.package_id]);
+    data.journey = cur ? journey(cur, tracks[cur.package_id]) : null;
+    data.photos = await listPhotos(env, id);
+  }
   if (!staff) {
     delete client.staff_notes; delete client.screening; delete client.lead_id;
     data.appointments = data.appointments.map(({ staff_id, notes, device_id, ...a }) => a);
@@ -1369,9 +1402,10 @@ async function savePackageDef(env, id, b) {
   const maxDisc = Math.min(50, Math.max(0, parseInt(b.max_discount, 10) || 0));
   const desc = nz(clean(b.description, 200)), active = b.active === false ? 0 : 1;
   const mts = JSON.stringify((Array.isArray(b.machine_types) ? b.machine_types : []).map(Number).filter(Boolean));
-  const vals = [name, ent.sessions, price, validity, desc, active, prog, mts, JSON.stringify(ent), v.cost, maxDisc];
-  if (id) await env.DB.prepare('UPDATE ems_packages SET name=?, sessions=?, price=?, validity_days=?, description=?, active=?, programme=?, machine_types=?, entitlements=?, cost=?, max_discount=? WHERE id=?').bind(...vals, id).run();
-  else await env.DB.prepare('INSERT INTO ems_packages (name, sessions, price, validity_days, description, active, programme, machine_types, entitlements, cost, max_discount) VALUES (?,?,?,?,?,?,?,?,?,?,?)').bind(...vals).run();
+  const track = TRACKS[b.track] ? b.track : null;
+  const vals = [name, ent.sessions, price, validity, desc, active, prog, mts, JSON.stringify(ent), v.cost, maxDisc, track];
+  if (id) await env.DB.prepare('UPDATE ems_packages SET name=?, sessions=?, price=?, validity_days=?, description=?, active=?, programme=?, machine_types=?, entitlements=?, cost=?, max_discount=?, track=? WHERE id=?').bind(...vals, id).run();
+  else await env.DB.prepare('INSERT INTO ems_packages (name, sessions, price, validity_days, description, active, programme, machine_types, entitlements, cost, max_discount, track) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').bind(...vals).run();
   return api({ ok: true });
 }
 

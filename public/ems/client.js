@@ -2,7 +2,7 @@ import {
   api, esc, icon, toast, modal, formData, busy, field, inp, emptyState, slotPicker, lineChart, ring, insightList, deltaTag, measureSeries,
   dietView, today, nowLocal, dayDiff, fDay, fDate, fLong, fTime, fWhen, inr, kg, first, prettyPhone, pill, KIND_LABEL, CLINIC_PHONE, CLINIC_TEL,
   BASE, includesText, PROGRAMME_LABEL, admState, admSteps, letterBox, screeningForm, readScreening, sigPad,
-  toIn, cmIn } from './core.js?v=13';
+  toIn, cmIn, journeyPanel, photoPanel, wirePhotoPanel, progressCardLinks } from './core.js?v=14';
 import { bodyComp, latestMerged } from './body.js?v=1';
 
 let ME, APP, BODY, DATA, DEMO = null;
@@ -78,6 +78,7 @@ function home() {
     <section class="panel"><div class="panel-h"><div class="t">${icon('sparkles', 20)}<h3>Guidance for you</h3></div></div>${insightList(DATA.insights.items, 5)}</section>
     ${DATA.measurements.filter(m => m.weight != null).length > 1 ? `<section class="panel"><div class="panel-h"><div class="t">${icon('line-chart', 20)}<h3>Weight trend</h3></div><a class="btn sm quiet" href="#/progress">All progress</a></div><div data-w></div></section>` : ''}`;
   wireWeighIn();
+  if (DATA.journey) { const j = DATA.journey; BODY.querySelector('.hero')?.insertAdjacentHTML('afterend', `<a class="panel" href="#/progress" style="display:block;text-decoration:none;color:inherit"><div class="panel-h"><div class="t">${icon('flag', 20)}<h3>${esc(j.name)}</h3></div><span class="small muted">Week ${j.week} of ${j.weeks}</span></div><div class="bar"><i style="width:${Math.round(Math.min(1, (j.day - 1) / (j.weeks * 7)) * 100)}%"></i></div>${j.next_check ? `<p class="small" style="margin:8px 0 0">Next body-composition check: <b>${esc(fDate(j.next_check))}</b></p>` : ''}</a>`); }
   const wEl = BODY.querySelector('[data-w]');
   wEl && lineChart(wEl, { series: [{ name: 'Weight', color: '#34595e', points: measureSeries(DATA.measurements, 'weight') }], unit: ' kg', target: DATA.client.target_weight, height: 200 });
 }
@@ -124,7 +125,7 @@ function progress() {
   const M = DATA.insights.metrics, ch = M.change;
   const last = k => { for (let i = DATA.measurements.length - 1; i >= 0; i--) if (DATA.measurements[i][k] != null) return DATA.measurements[i][k]; return null; };
   const tile = (l, k, u) => `<div class="metric"><div class="l">${l}</div><div class="v">${last(k) != null ? kg(last(k)) : '—'}<small>${last(k) != null ? u : ''}</small>${u === 'cm' && last(k) != null ? `<span class="alt">${toIn(last(k))} in</span>` : ''}</div>${ch[k] ? deltaTag(ch[k].diff, u === '%' ? '%' : ' ' + u, k !== 'muscle_mass') : '<span class="small faint">—</span>'}</div>`;
-  BODY.innerHTML = `<div class="head" style="margin:4px 4px 0"><div><h1>Your progress</h1><p>${DATA.measurements.length ? `Last measured ${fDate(DATA.measurements[DATA.measurements.length - 1].measured_on)}` : 'Measurements are taken at the clinic'}</p></div></div>
+  BODY.innerHTML = `${journeyPanel(DATA.journey)}<div class="head" style="margin:4px 4px 0"><div><h1>Your progress</h1><p>${DATA.measurements.length ? `Last measured ${fDate(DATA.measurements[DATA.measurements.length - 1].measured_on)}` : 'Measurements are taken at the clinic'}</p></div></div>
     <section class="panel" style="padding:0;overflow:hidden"><div class="metrics" style="border:0;border-radius:0">${tile('Weight', 'weight', 'kg')}${tile('Waist', 'waist', 'cm')}${tile('Hips', 'hips', 'cm')}${tile('Body fat', 'body_fat', '%')}</div></section>
     ${M.bmi || M.whr ? `<section class="panel"><div class="grid2" style="grid-template-columns:1fr 1fr">${M.bmi ? `<div><p class="small muted">BMI</p><p class="num" style="font-size:22px;font-weight:700">${M.bmi.value}</p><p class="small">${esc(M.bmi.band)}</p></div>` : ''}${M.whr ? `<div><p class="small muted">Waist-to-hip ratio</p><p class="num" style="font-size:22px;font-weight:700">${M.whr.value}</p><p class="small">${M.whr.ok ? 'In the healthy range' : `Aim for ${M.whr.limit} or less`}</p></div>` : ''}</div>
       <p class="small faint" style="margin-top:10px">BMI uses the ranges recommended for South Asian adults. These numbers are a guide, not a diagnosis.</p></section>` : ''}
@@ -138,12 +139,19 @@ function progress() {
     <section class="panel"><div class="panel-h"><div class="t">${icon('line-chart', 20)}<h3>Weight</h3></div></div><div data-w></div></section>
     <section class="panel"><div class="panel-h"><div class="t">${icon('ruler', 20)}<h3>Waist and hips</h3></div></div><div data-wh></div></section>
     <section class="panel"><div class="panel-h"><div class="t">${icon('activity', 20)}<h3>Body fat</h3></div></div><div data-bf></div></section>
+    ${DATA.measurements.some(m => m.muscle_mass != null) ? `<section class="panel"><div class="panel-h"><div class="t">${icon('dumbbell', 20)}<h3>Muscle mass</h3></div></div><div data-mm></div></section>` : ''}
+    ${DATA.measurements.some(m => m.visceral_fat != null) ? `<section class="panel"><div class="panel-h"><div class="t">${icon('heart-pulse', 20)}<h3>Visceral (belly) fat level</h3></div></div><div data-vf></div><p class="small faint">Lower is better. Below 10 is the healthy range on most analysers.</p></section>` : ''}
+    <section class="panel"><div class="panel-h"><div class="t">${icon('download', 20)}<h3>Progress card</h3></div></div><p class="small muted" style="margin-top:0">A one-page summary of your change: weight, body fat, muscle, inches lost and sessions.</p>${progressCardLinks('/client')}</section>
+    <div data-photos>${photoPanel(DATA.photos || [], '/client', { client: true, canDelete: true, consent: !!DATA.client.photo_marketing })}</div>
     <section class="panel flush"><div class="panel-h" style="padding:16px 16px 0"><div class="t">${icon('clipboard-check', 20)}<h3>History</h3></div></div>
       ${DATA.measurements.length ? `<table class="t" style="margin-top:6px"><thead><tr><th>Date</th><th class="n">Weight</th><th class="n">Waist</th><th class="n">Hips</th></tr></thead><tbody>${DATA.measurements.slice().reverse().map(m => `<tr><td>${esc(fDay(m.measured_on))}</td><td class="n">${m.weight != null ? kg(m.weight) : '—'}</td><td class="n">${cmIn(m.waist)}</td><td class="n">${cmIn(m.hips)}</td></tr>`).join('')}</tbody></table>`
         : emptyState('ruler', 'Your first measurements will appear here after your assessment.')}</section>`;
   lineChart(BODY.querySelector('[data-w]'), { series: [{ name: 'Weight', color: '#34595e', points: measureSeries(DATA.measurements, 'weight') }], unit: ' kg', target: DATA.client.target_weight, targetLabel: 'Goal', height: 210 });
   lineChart(BODY.querySelector('[data-wh]'), { series: [{ name: 'Waist', color: '#34595e', points: measureSeries(DATA.measurements, 'waist') }, { name: 'Hips', color: '#c4a45b', points: measureSeries(DATA.measurements, 'hips') }], unit: ' cm', height: 210 });
   lineChart(BODY.querySelector('[data-bf]'), { series: [{ name: 'Body fat', color: '#a8642c', points: measureSeries(DATA.measurements, 'body_fat') }], unit: '%', height: 200 });
+  const mm = BODY.querySelector('[data-mm]'); if (mm) lineChart(mm, { series: [{ name: 'Muscle mass', color: '#2f7d58', points: measureSeries(DATA.measurements, 'muscle_mass') }], unit: ' kg', height: 200 });
+  const vf = BODY.querySelector('[data-vf]'); if (vf) lineChart(vf, { series: [{ name: 'Visceral fat', color: '#c0453a', points: measureSeries(DATA.measurements, 'visceral_fat') }], unit: '', height: 200 });
+  wirePhotoPanel(BODY.querySelector('[data-photos]'), '/client', () => load().then(progress));
 }
 
 /* ---------- Plan & check-in ---------- */

@@ -430,3 +430,18 @@ h4.h-ic{display:flex;align-items:center;gap:8px;margin:6px 0 -4px}
 .picker .list{position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:20;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 10px 30px rgba(29,52,55,.15);max-height:320px;overflow:auto}
 .picker .opt{display:flex;justify-content:space-between;gap:12px;padding:9px 12px;cursor:pointer;font-size:13.5px;border-top:1px solid var(--line-soft)}
 .picker .opt:first-child{border-top:0}
+
+/* Programme journey, progress photos */
+.journey .jchecks{display:flex;flex-wrap:wrap;gap:8px}
+.journey .jchecks span{display:inline-flex;align-items:center;gap:6px;font-size:13px;padding:5px 10px;border-radius:999px;background:var(--soft,#eef5f4);color:var(--muted,#5d6b70)}
+.journey .jchecks span.done{color:#2f7d58}
+.phrow{display:flex;gap:10px;flex-wrap:wrap;margin:6px 0 12px}
+.ph{margin:0;width:120px}
+.ph img{width:120px;height:160px;object-fit:cover;border-radius:10px;background:#eef2f2;display:block}
+.ph figcaption{font-size:12px;color:var(--muted,#5d6b70);margin-top:4px;display:flex;justify-content:space-between;gap:6px}
+.phcmp{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:14px;margin-bottom:10px}
+.phcmp h4{margin:0 0 6px}
+.phcmp .pair{display:flex;gap:8px}
+.linkish{background:none;border:0;padding:0;color:var(--alert,#c0453a);font:inherit;font-size:12px;cursor:pointer}
+.wkrow{display:grid;grid-template-columns:1.4fr 1fr 1fr auto;gap:10px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line,#e3eaea)}
+@media(max-width:700px){.wkrow{grid-template-columns:1fr;gap:4px}}
