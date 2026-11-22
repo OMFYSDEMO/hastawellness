@@ -650,11 +650,13 @@ async function viewPatient(id, tab) {
       ${d.advance > 0 ? `<p class="small muted" style="margin-top:10px">${money(d.advance)} is held as advance. It is applied automatically to this patient's next invoice when it is finalised.</p>` : ''}`;
     body.querySelectorAll('[data-void]').forEach(b => b.onclick = () => { const reason = prompt('Why are you voiding this payment? (e.g. entered twice)'); if (!reason) return; busy(b, () => api(`/clinic/payments/${b.dataset.void}/void`, { method: 'POST', body: { reason } })).then(() => { toast('Payment voided'); after(); }).catch(() => {}); });
   } else if (tab === 'packages') {
-    body.innerHTML = d.packages.length ? d.packages.map(pp => `<section class="panel" style="margin-bottom:14px"><div class="panel-h"><div class="t">${icon('package', 20)}<div><h3>${esc(pp.name)}</h3><p class="small muted">Sold ${esc(fDate(pp.start_date))}${pp.invoice_no ? ' on ' + esc(pp.invoice_no) : ''} · valid to ${esc(fDate(pp.expiry_date))}</p></div></div>
+    const legacyBtn = canManage() ? `<div style="display:flex;justify-content:flex-end;margin-bottom:12px"><button class="btn ghost sm" data-legacy>${icon('package', 16)}Add package paid in previous system</button></div>` : '';
+    body.innerHTML = legacyBtn + (d.packages.length ? d.packages.map(pp => `<section class="panel" style="margin-bottom:14px"><div class="panel-h"><div class="t">${icon('package', 20)}<div><h3>${esc(pp.name)}</h3><p class="small muted">${pp.legacy_paid != null ? `Paid in the previous system ${esc(fDate(pp.start_date))} · ${money(pp.legacy_paid)}${pp.legacy_ref ? ' · ref ' + esc(pp.legacy_ref) : ''}` : `Sold ${esc(fDate(pp.start_date))}${pp.invoice_no ? ' on ' + esc(pp.invoice_no) : ''}`} · valid to ${esc(fDate(pp.expiry_date))}</p>${pp.legacy_note ? `<p class="small muted">${esc(pp.legacy_note)}</p>` : ''}</div></div>
         <div style="display:flex;gap:8px;align-items:center">${pp.status === 'cancelled' ? st('cancelled') : pp.expired ? st('expired', 'Expired') : pp.status === 'closed' ? st('closed', 'Used up') : st('active', 'Active')}${pp.usable ? `<button class="btn sm gold" data-use="${pp.id}">Use</button>` : ''}</div></div>
       <table class="t"><thead><tr><th>Service</th><th class="n">Included</th><th class="n">Used</th><th class="n">Left</th></tr></thead><tbody>${pp.items.map(x => `<tr><td>${esc(x.name)}</td><td class="n">${x.qty}</td><td class="n">${x.used}</td><td class="n"><b>${x.left}</b></td></tr>`).join('')}</tbody></table>
-      ${pp.redemptions.length ? `<details style="margin-top:10px"><summary class="small">History (${pp.redemptions.length})</summary><div class="small" style="margin-top:6px">${pp.redemptions.map(r => `<div style="display:flex;gap:8px;align-items:center;padding:3px 0${r.voided ? ';opacity:.5;text-decoration:line-through' : ''}">${esc(fDate(r.redeemed_on))} · ${esc(r.item_name)} × ${r.qty} · ${esc(r.staff_name || '')}${!r.voided && canManage() ? ` <button class="btn sm quiet" data-vr="${r.id}">Undo</button>` : ''}</div>`).join('')}</div></details>` : ''}</section>`).join('')
-      : `<section class="panel">${emptyState('package', 'No packages yet. Use “Sell package” above.')}</section>`;
+      ${pp.redemptions.length ? `<details style="margin-top:10px"><summary class="small">History (${pp.redemptions.length})</summary><div class="small" style="margin-top:6px">${pp.redemptions.map(r => `<div style="display:flex;gap:8px;align-items:center;padding:3px 0${r.voided ? ';opacity:.5;text-decoration:line-through' : ''}">${r.legacy ? 'Before this app' : esc(fDate(r.redeemed_on))} · ${esc(r.item_name)} × ${r.qty}${r.legacy ? ' · used in the previous system' : ' · ' + esc(r.staff_name || '')}${!r.voided && canManage() ? ` <button class="btn sm quiet" data-vr="${r.id}">Undo</button>` : ''}</div>`).join('')}</div></details>` : ''}</section>`).join('')
+      : `<section class="panel">${emptyState('package', 'No packages yet. Use “Sell package” above.')}</section>`);
+    const lb = body.querySelector('[data-legacy]'); if (lb) lb.onclick = () => legacyPackageModal(p, after);
     body.querySelectorAll('[data-use]').forEach(b => b.onclick = () => redeemModal(id, null, after, +b.dataset.use));
     body.querySelectorAll('[data-vr]').forEach(b => b.onclick = () => { const reason = prompt('Reason for undoing this redemption?'); if (!reason) return; busy(b, () => api(`/clinic/redemptions/${b.dataset.vr}/void`, { method: 'POST', body: { reason } })).then(() => { toast('Redemption undone'); after(); }).catch(() => {}); });
   } else if (['notes', 'dental', 'plans', 'photos', 'followups'].includes(tab)) {
@@ -681,6 +683,30 @@ async function redeemModal(patientId, appt, after, onlyPkg) {
       s.onclick = () => { const v = formData(f); const pp = usable.find(x => x.id === +v.pp); const items = pp.items.map(x => ({ item_id: x.item_id, qty: parseInt(v['q' + x.item_id], 10) || 0 })).filter(x => x.qty > 0);
         if (!items.length) return toast('Enter how many of each service were used.', true);
         busy(s, () => api('/clinic/redeem', { method: 'POST', body: { patient_package_id: pp.id, items, appointment_id: appt ? appt.id : null } })).then(() => { close(); toast('Package use recorded'); after(); }).catch(() => {}); };
+    } });
+}
+// A package the patient paid for in the previous system: no bill here, only the sessions left to redeem.
+function legacyPackageModal(p, after) {
+  let rows = [];
+  modal({ title: 'Package paid in previous system · ' + p.name, wide: true,
+    body: `<form data-f class="stack" style="gap:12px">
+      ${field('Package name', '<input class="in" name="name" maxlength="100" placeholder="e.g. LHR Underarm — 6 sessions">')}
+      <div class="grid2">${field('Bought on', `<input class="in" type="date" name="purchased_on" max="${today()}">`)}${field('Valid until', `<input class="in" type="date" name="expiry_date" min="${today()}">`)}</div>
+      <div class="grid2">${field('Amount paid (₹)', '<input class="in" type="number" name="amount_paid" min="1" step="1">')}${field('Old bill / receipt no.', '<input class="in" name="reference" maxlength="60">')}</div>
+      ${field('Note (optional)', '<input class="in" name="note" maxlength="200" placeholder="e.g. Paid in full, checked against old system by Sherly">')}
+      <div><p style="margin:0 0 6px;font-weight:600">Treatments in the package</p><div data-pick></div><div data-rows style="margin-top:8px"></div></div></form>
+      <p class="small muted">No bill is made and nothing is added to today's takings: the money was received in the previous system. Enter the sessions already given there so the app shows what is left.</p>`,
+    actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn gold" data-save>${icon('package', 18)}Add package</button>`,
+    async onMount(el, close) {
+      const f = el.querySelector('[data-f]'), box = el.querySelector('[data-rows]');
+      const draw = () => { box.innerHTML = rows.length ? `<table class="t"><thead><tr><th>Treatment</th><th class="n">Sessions in package</th><th class="n">Already given</th><th></th></tr></thead><tbody>${rows.map((r, i) => `<tr><td>${esc(r.name)}</td><td class="n"><input class="in" type="number" min="1" max="50" value="${r.qty}" data-q="${i}" style="width:80px;margin-left:auto"></td><td class="n"><input class="in" type="number" min="0" max="50" value="${r.used}" data-u="${i}" style="width:80px;margin-left:auto"></td><td><button type="button" class="btn sm quiet" data-x="${i}">Remove</button></td></tr>`).join('')}</tbody></table>` : '<p class="small muted">Search above to add the treatment.</p>';
+        box.querySelectorAll('[data-q]').forEach(x => x.oninput = () => rows[+x.dataset.q].qty = parseInt(x.value, 10) || 0);
+        box.querySelectorAll('[data-u]').forEach(x => x.oninput = () => rows[+x.dataset.u].used = parseInt(x.value, 10) || 0);
+        box.querySelectorAll('[data-x]').forEach(x => x.onclick = () => { rows.splice(+x.dataset.x, 1); draw(); }); };
+      await itemPicker(el.querySelector('[data-pick]'), it => { if (it.kind !== 'service') return toast('Only services can be in a package.', true); if (!rows.some(r => r.item_id === it.id)) rows.push({ item_id: it.id, name: it.name, qty: 6, used: 0 }); draw(); }, { placeholder: 'Add a treatment — e.g. LHR Under Arm' });
+      draw();
+      const s = el.querySelector('[data-save]');
+      s.onclick = () => { const v = formData(f); busy(s, () => api(`/clinic/patients/${p.id}/legacy-package`, { method: 'POST', body: { ...v, items: rows } })).then(() => { close(); toast('Package added. Use it at each visit.'); after(); }).catch(() => {}); };
     } });
 }
 function sellPackageModal(p) {

@@ -124,9 +124,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=13"><link rel="stylesheet" href="/clinic/clinic.css?v=11">
-<link rel="modulepreload" href="/clinic/app.js?v=35"><link rel="modulepreload" href="/ems/core.js?v=14">
+<link rel="modulepreload" href="/clinic/app.js?v=36"><link rel="modulepreload" href="/ems/core.js?v=14">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=35"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=36"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -210,6 +210,7 @@ async function route(request, env, url, p, base) {
   if (p === '/packages' && m === 'POST') { if (!me.admin) return api({ ok: false, error: 'Admins only.' }, 403); return done(await savePackageDef(env, me, null, b)); }
   if ((r = p.match(/^\/packages\/(\d+)$/)) && m === 'PUT') { if (!me.admin) return api({ ok: false, error: 'Admins only.' }, 403); return done(await savePackageDef(env, me, +r[1], b)); }
   if (p === '/redeem' && m === 'POST') return done(await redeem(env, me, b));
+  if ((r = p.match(/^\/patients\/(\d+)\/legacy-package$/)) && m === 'POST') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return done(await addLegacyPackage(env, me, +r[1], b)); }
   if ((r = p.match(/^\/redemptions\/(\d+)\/void$/)) && m === 'POST') { if (!canManage(me)) return api({ ok: false, error: 'Managers or admins only.' }, 403); return done(await voidRedemption(env, me, +r[1], b)); }
 
   // Patients & leads
@@ -520,6 +521,36 @@ async function patientPackages(env, patientId) {
     const expired = pp.expiry_date < today();
     return { ...pp, items, expired, usable: pp.status === 'active' && !expired && items.some(x => x.left > 0), redemptions: (red || []).filter(r => r.patient_package_id === pp.id) };
   });
+}
+// A package paid for in the previous system: recorded without a bill so the sessions left can be redeemed here.
+// Sessions already given before are recorded as used (marked legacy), so "left" is right from day one.
+async function addLegacyPackage(env, me, patientId, b) {
+  if (!(await env.DB.prepare("SELECT 1 FROM cl_patients WHERE id=?").bind(patientId).first())) return R(404, 'Patient not found.');
+  const name = clean(b.name, 100), ref = clean(b.reference, 60), note = clean(b.note, 200), paid = r2(b.amount_paid);
+  const bought = isDate(b.purchased_on) ? b.purchased_on : null, until = isDate(b.expiry_date) ? b.expiry_date : null;
+  if (name.length < 3) return R(400, 'Enter the package name (for example, LHR Face — 6 sessions).');
+  if (!bought || bought > today()) return R(400, 'Enter the date it was bought (not in the future).');
+  if (!until || until < today()) return R(400, 'Enter the date it is valid until (today or later).');
+  if (until <= bought) return R(400, 'The valid-until date must be after the date it was bought.');
+  if (!(paid > 0)) return R(400, 'Enter the amount the patient paid in the previous system.');
+  if (ref.length < 2 && note.length < 5) return R(400, 'Enter the old bill or receipt number, or a note on how the payment was checked.');
+  const raw = (Array.isArray(b.items) ? b.items : []).map(x => ({ item_id: parseInt(x.item_id, 10), qty: parseInt(x.qty, 10), used: parseInt(x.used, 10) || 0 })).filter(x => x.item_id);
+  if (!raw.length) return R(400, 'Add the treatment(s) in the package.');
+  const map = await itemMap(env, raw.map(x => x.item_id));
+  for (const x of raw) {
+    const it = map.get(x.item_id);
+    if (!it || it.kind !== 'service' || !it.sellable) return R(400, 'Only clinic services can be in a package.');
+    if (!(x.qty >= 1 && x.qty <= 50)) return R(400, `Sessions in the package for ${it.name} must be 1–50.`);
+    if (!(x.used >= 0 && x.used <= x.qty)) return R(400, `Sessions already given for ${it.name} must be between 0 and ${x.qty}.`);
+  }
+  if (raw.every(x => x.used >= x.qty)) return R(400, 'Every session is already used, so there is nothing left to redeem.');
+  const items = raw.map(x => ({ item_id: x.item_id, name: map.get(x.item_id).name, qty: x.qty }));
+  const res = await env.DB.prepare(`INSERT INTO cl_patient_packages (patient_id, def_id, name, items, invoice_id, line_id, start_date, expiry_date, legacy_ref, legacy_paid, legacy_note, created_by)
+    VALUES (?,0,?,?,NULL,NULL,?,?,?,?,?,?)`).bind(patientId, name, JSON.stringify(items), bought, until, nz(ref), paid, nz(note), me.id).run();
+  const ppId = res.meta.last_row_id;
+  for (const x of raw) if (x.used > 0) await env.DB.prepare('INSERT INTO cl_redemptions (patient_package_id, item_id, qty, appointment_id, redeemed_on, staff_id, legacy) VALUES (?,?,?,NULL,?,?,1)').bind(ppId, x.item_id, x.used, bought, me.id).run();
+  await audit(env, me, 'package.legacy_add', 'patient_package', ppId, `${name} · paid ₹${paid} in previous system${ref ? ' · ref ' + ref : ''} · ${raw.map(x => `${x.qty} (${x.used} used) × ${map.get(x.item_id).name}`).join(', ')}`);
+  return OK({ id: ppId });
 }
 async function redeem(env, me, b) {
   const pp = await env.DB.prepare('SELECT * FROM cl_patient_packages WHERE id=?').bind(parseInt(b.patient_package_id, 10)).first();
