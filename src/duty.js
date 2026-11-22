@@ -194,10 +194,10 @@ async function personal(env, day, cf, roster) {
   const out = [];
   const ids = new Set(roster.staff.map(x => x.id));
   // Doctors: a clinical note for every completed visit they treated.
-  const done = await env.DB.prepare(`SELECT a.id, a.start_at, a.doctor_id, p.name, p.patient_no FROM cl_appointments a JOIN cl_patients p ON p.id=a.patient_id
+  const done = await env.DB.prepare(`SELECT a.id, a.start_at, a.doctor_id, p.name, p.patient_no, dp.name dept FROM cl_appointments a JOIN cl_patients p ON p.id=a.patient_id LEFT JOIN cl_departments dp ON dp.id=a.dept_id
       WHERE substr(a.start_at,1,10)=? AND a.status='completed' AND a.doctor_id IS NOT NULL
         AND NOT EXISTS (SELECT 1 FROM cl_notes n WHERE n.appointment_id=a.id OR (n.patient_id=a.patient_id AND n.visit_date=substr(a.start_at,1,10)))`).bind(day).all().then(r => r.results || []);
-  for (const a of done) if (ids.has(a.doctor_id)) out.push({ staff_id: a.doctor_id, code: 'notes_missing', ref_type: 'appointment', ref_id: a.id, detail: `${a.name}${a.patient_no ? ' (' + a.patient_no + ')' : ''} · ${ft(a.start_at)}` });
+  for (const a of done) if (ids.has(a.doctor_id)) out.push({ staff_id: a.doctor_id, code: 'notes_missing', ref_type: 'appointment', ref_id: a.id, detail: `${a.name}${a.patient_no ? ' (' + a.patient_no + ')' : ''} · ${ft(a.start_at)}${a.dept ? ' · ' + a.dept : ''}` });
   // Operations Head: disputed duty notices not reviewed in 3 days; disciplinary cases left without a next step.
   const ops = cf.writtenBy.filter(id => ids.has(id));
   if (ops.length) {
@@ -404,7 +404,9 @@ async function escalate(env, cf, day) {
 async function board(env, cf, month, onlyId) {
   const { results: staff } = await env.DB.prepare(`SELECT s.id, s.name, s.role, s.skills, p.designation FROM ems_staff s LEFT JOIN cl_staff_pay p ON p.staff_id=s.id
       WHERE s.active=1 AND s.external=0 AND s.role <> 'trainee' AND s.username <> 'hasta' ORDER BY s.name`).all();
-  const { results: lapses } = await env.DB.prepare(`SELECT l.*, d.ref_no notice_ref, r.ack_at notice_ack, r.response notice_response, r.ack_comment notice_comment, c.case_no
+  const { results: lapses } = await env.DB.prepare(`SELECT l.*, d.ref_no notice_ref, r.ack_at notice_ack, r.response notice_response, r.ack_comment notice_comment, c.case_no,
+      CASE WHEN l.ref_type='appointment' THEN (SELECT a.patient_id FROM cl_appointments a WHERE a.id=l.ref_id) END patient_id,
+      CASE WHEN l.code='notes_missing' THEN (SELECT MIN(n.created_at) FROM cl_notes n JOIN cl_appointments a ON a.id=l.ref_id WHERE n.appointment_id=a.id OR (n.patient_id=a.patient_id AND n.visit_date=substr(a.start_at,1,10))) END note_later
       FROM cl_duty_lapses l LEFT JOIN cl_docs d ON d.id=l.notice_doc_id LEFT JOIN cl_doc_recipients r ON r.doc_id=l.notice_doc_id AND r.staff_id=l.staff_id
       LEFT JOIN cl_disc_cases c ON c.id=l.case_id WHERE substr(l.day,1,7)=? ${onlyId != null ? 'AND l.staff_id=?' : ''} ORDER BY l.day DESC, l.id DESC`).bind(...[month, ...(onlyId != null ? [onlyId] : [])]).all();
   const L = lapses || [];

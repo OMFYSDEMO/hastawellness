@@ -2361,6 +2361,8 @@ async function viewDiscCase(id, head) {
 }
 
 /* ---------------- Duty Watch ---------------- */
+// Missing clinical note: link straight to the patient's notes, and show if the note was written afterwards.
+const noteBits = l => l.code !== 'notes_missing' || !l.patient_id ? '' : `<div class="small">${l.note_later ? `<span class="muted">Note written later, ${esc(fDate(l.note_later.slice(0, 10)))} (the lapse stands: notes are due the same day)</span>` : `<a href="#/patient/${l.patient_id}?tab=notes">Write the note now →</a>`}</div>`;
 const BANDPILL = { good: 'final', attention: 'draft', poor: 'cancelled' };
 // Today page: who has the front desk, and what would be recorded if the day closed now.
 async function dutyStrip(el) {
@@ -2387,7 +2389,7 @@ async function viewDuty(head, q) {
   const sid = +q.get('s') || 0, row = d.rows.find(r => r.staff_id === sid);
   const lab = k => esc((d.codes[k] || {}).label || k);
   const acts = `<button class="btn ghost icon" data-pm>${icon('chevron-left', 18)}</button><button class="btn ghost icon" data-nm>${icon('chevron-right', 18)}</button>${d.sup ? `<button class="btn ghost" data-closeday>${icon('calendar-check', 18)}Close a day</button><button class="btn ghost" data-set>${icon('settings', 18)}Rules & points</button>` : ''}`;
-  const lapseRow = l => `<div class="row"><div class="grow"><b>${esc(fDay(l.day))} · ${lab(l.code)} <small class="muted">${l.status === 'excused' ? 'excused' : l.points + ' pt'}</small></b><span>${esc(l.detail || '')}${l.how ? ` · <i>${esc(l.how)}</i>` : ''}</span>
+  const lapseRow = l => `<div class="row"><div class="grow"><b>${esc(fDay(l.day))} · ${lab(l.code)} <small class="muted">${l.status === 'excused' ? 'excused' : l.points + ' pt'}</small></b><span>${esc(l.detail || '')}${l.how ? ` · <i>${esc(l.how)}</i>` : ''}</span>${noteBits(l)}
       ${l.notice_ref ? `<div class="small">Notice <a href="#/doc/${l.notice_doc_id}">${esc(l.notice_ref)}</a> · ${l.notice_ack ? (l.notice_response === 'disputed' ? `<b style="color:var(--alert)">disputed: ${esc(l.notice_comment || '')}</b>` : 'signed') : 'not signed yet'}</div>` : ''}
       ${l.status === 'excused' ? `<div class="small muted">Excused by ${esc(l.excused_by_name)}: ${esc(l.excused_reason)}</div>` : ''}${l.status === 'upheld' ? `<div class="small muted">Dispute reviewed — upheld by ${esc(l.reviewed_by_name)}: ${esc(l.review_note)}</div>` : ''}${l.case_no ? `<div class="small"><b>Referred: ${esc(l.case_no)}</b></div>` : ''}</div>
     ${l.staff_id === 0 ? `<button class="btn sm ghost" data-assign="${l.id}">Assign</button>` : ''}${l.status === 'open' && l.notice_response === 'disputed' && !l.case_id && l.staff_id !== ME.id ? `<button class="btn sm ghost" data-uphold="${l.id}">Uphold</button>` : ''}${l.status !== 'excused' && !l.case_id && l.staff_id !== ME.id ? `<button class="btn sm quiet" data-excuse="${l.id}">Excuse</button>` : ''}${l.status === 'excused' && l.staff_id !== ME.id ? `<button class="btn sm quiet" data-reinstate="${l.id}">Reinstate</button>` : ''}</div>`;
@@ -2440,6 +2442,6 @@ async function myDuty(el, month) {
   const r = d.row;
   el.innerHTML = `<section class="panel"><div class="panel-h"><div class="t">${icon('shield-check', 20)}<h3>My duty score · ${esc(fMonth(month))}</h3></div>${pdfLink(`/hr/duty/report?month=${month}`, 'My report')}</div>
     <div class="kpis small-kpis"><div><span>Score</span><b>${r.score}</b><small>${esc(r.band.label)}</small></div><div><span>Points</span><b>${r.points}</b><small>${r.lapses} lapse(s)</small></div><div><span>Excused</span><b>${r.excused}</b><small>after review</small></div></div>
-    ${d.lapses.length ? `<div class="rows" style="margin-top:8px">${d.lapses.map(l => `<div class="row"><div class="grow"><b>${esc(fDay(l.day))} · ${esc(d.labels[l.code])} <small class="muted">${l.status === 'excused' ? 'excused' : l.points + ' pt'}</small></b><span>${esc(l.detail || '')}${l.status === 'excused' ? ` · excused: ${esc(l.excused_reason)}` : l.status === 'upheld' ? ` · dispute reviewed, upheld: ${esc(l.review_note)}` : ''}</span></div>${l.notice_doc_id ? `<a class="btn sm quiet" href="#/doc/${l.notice_doc_id}">Notice</a>` : ''}</div>`).join('')}</div>` : '<p class="muted">No lapses — well done.</p>'}
+    ${d.lapses.length ? `<div class="rows" style="margin-top:8px">${d.lapses.map(l => `<div class="row"><div class="grow"><b>${esc(fDay(l.day))} · ${esc(d.labels[l.code])} <small class="muted">${l.status === 'excused' ? 'excused' : l.points + ' pt'}</small></b><span>${esc(l.detail || '')}${l.status === 'excused' ? ` · excused: ${esc(l.excused_reason)}` : l.status === 'upheld' ? ` · dispute reviewed, upheld: ${esc(l.review_note)}` : ''}</span>${noteBits(l)}</div>${l.notice_doc_id ? `<a class="btn sm quiet" href="#/doc/${l.notice_doc_id}">Notice</a>` : ''}</div>`).join('')}</div>` : '<p class="muted">No lapses — well done.</p>'}
     <p class="small muted" style="margin-top:8px">Every month starts at 100. If a lapse is wrong, open its notice, choose "I disagree" and explain — your manager reviews it.</p></section>`;
 }
