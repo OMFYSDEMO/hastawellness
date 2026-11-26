@@ -36,12 +36,12 @@ export default {
     }
     // Clinic app: clinicapp.* subdomain, or /clinicapp on any other host (local testing).
     if (url.hostname.startsWith('clinicapp.')) return handleClinic(request, env, url, ctx, '', serveAsset);
-    if (path === '/clinicapp' || path.startsWith('/clinicapp/')) return handleClinic(request, env, url, ctx, '/clinicapp', serveAsset);
+    if (path === '/clinicapp' || path.startsWith('/clinicapp/')) return noindex(await handleClinic(request, env, url, ctx, '/clinicapp', serveAsset));
     // EMS progress platform: ems.* subdomain, or /ems on any other host.
     if (url.hostname.startsWith('ems.')) return handleEms(request, env, url, ctx, '', serveAsset);
     if (path === '/ems' || path.startsWith('/ems/')) {
       if (/^\/ems\/[\w.\-/]+\.\w+$/.test(path)) return handleEms(request, env, url, ctx, '', serveAsset);
-      return handleEms(request, env, url, ctx, '/ems', serveAsset);
+      return noindex(await handleEms(request, env, url, ctx, '/ems', serveAsset));
     }
     try {
       if (path === '/api/lead') return await handleLead(request, env, ctx);
@@ -90,13 +90,16 @@ export default {
 
 /* ---------------- Site + SEO ---------------- */
 
-const SITE_LASTMOD = '2026-10-23';
+const SITE_LASTMOD = '2026-11-26';
 const isPreviewHost = host => host.endsWith('.workers.dev') || host.startsWith('localhost') || host.startsWith('127.');
 
+// Staff and client apps on the main site stay out of search results without a robots.txt rule
+// (a rule like "/ems" would also match /ems-weight-management-kazhakkoottam/ in many crawlers).
+function noindex(res) { const r = new Response(res.body, res); r.headers.set('x-robots-tag', 'noindex, nofollow'); return r; }
 function robots(url) {
   const body = isPreviewHost(url.hostname)
     ? 'User-agent: *\nDisallow: /\n'
-    : `User-agent: *\nAllow: /\nDisallow: /admin\nDisallow: /api/\nDisallow: /ems/\nDisallow: /ems$\nDisallow: /clinicapp/\nDisallow: /clinicapp$\n\nSitemap: ${url.origin}/sitemap.xml\n`;
+    : `User-agent: *\nAllow: /\nAllow: /ems-weight-management-kazhakkoottam/\nDisallow: /admin\nDisallow: /api/\nDisallow: /ems/\nDisallow: /clinicapp/\n\nSitemap: ${url.origin}/sitemap.xml\n`;
   return new Response(body, { headers: { 'content-type': 'text/plain; charset=utf-8', 'cache-control': 'public, max-age=3600' } });
 }
 
