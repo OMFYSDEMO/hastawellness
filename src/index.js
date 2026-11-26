@@ -90,7 +90,7 @@ export default {
 
 /* ---------------- Site + SEO ---------------- */
 
-const SITE_LASTMOD = '2026-11-26';
+const SITE_LASTMOD = '2026-11-27';
 const isPreviewHost = host => host.endsWith('.workers.dev') || host.startsWith('localhost') || host.startsWith('127.');
 
 // Staff and client apps on the main site stay out of search results without a robots.txt rule
