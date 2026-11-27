@@ -6,7 +6,7 @@ import {
   toIn, cmIn, ftIn, lenField, wireLen, lenToCm, journeyPanel, photoPanel, wirePhotoPanel, progressCardLinks } from './core.js?v=14';
 import { bodyComp, latestMerged, nutritionTargets, suggestDiets, defaultAim, TAPE, BIA, ACTIVITY, AIMS, FOOD_PREF } from './body.js?v=1';
 import { viewAcademy } from './academy.js?v=17';
-import { viewBooth } from './booth.js?v=1';
+import { viewBooth } from './booth.js?v=2';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
 const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';

@@ -35,7 +35,7 @@ function card(c) {
       ${live ? pill('good', 'Live today') : c.active ? '' : pill('closed', 'Closed')}</div>
     <div class="funnel">${[['Body checks', c.checks], ['Leads (consent)', c.leads, pct(c.leads, c.checks)], ['Hot', c.hot], ['Warm', c.warm], ['Booked', c.booked, pct(c.booked, c.leads)], ['Clients', c.clients, pct(c.clients, c.leads)]]
       .map(([l, v, s]) => `<div><b>${v || 0}</b><span>${l}</span>${s ? `<small>${s}</small>` : ''}</div>`).join('')}</div>
-    ${c.offer ? `<p class="small" style="margin:10px 0 0">${icon('star', 14)} Offer: ${esc(c.offer)} <span class="faint">(${c.offer_days} days)</span></p>` : ''}
+    ${c.offer ? `<p class="small" style="margin:10px 0 0;display:flex;gap:6px;align-items:center">${icon("star", 14)}<span>Offer: ${esc(c.offer)} <span class="faint">(${c.offer_days} days)</span></span></p>` : ''}
     <div class="booth-acts">${c.active ? `<a class="btn" href="#/booth/${c.id}">${icon('activity', 18)}Open booth</a>` : ''}
       <a class="btn ghost" href="#/booth/${c.id}?tab=visitors">${icon('users', 18)}Visitors & follow-up</a>
       <button class="btn quiet sm" data-edit="${c.id}">${icon('pencil', 16)}Edit</button>
@@ -112,7 +112,7 @@ function results(MAIN, ctx, c, b, r) {
   const { comp, nt } = r;
   const tone = t => t === 'good' ? 'good' : t === 'warn' ? 'warn' : 'neutral';
   const tiles = [];
-  if (comp.ratios.bmi) tiles.push(['BMI', comp.ratios.bmi.value, '', comp.ratios.bmi.label, comp.ratios.bmi.tone, 'Indian cut-offs: healthy 18.5–22.9']);
+  if (comp.ratios.bmi) tiles.push(['BMI', comp.ratios.bmi.value, '', comp.ratios.bmi.value >= 25 ? 'Well above the healthy range' : comp.ratios.bmi.label, comp.ratios.bmi.tone, 'Indian cut-offs: healthy 18.5–22.9']);
   if (comp.bf) tiles.push(['Body fat', comp.bf.value, '%', comp.bf.band ? comp.bf.band.label : '', comp.bf.band && comp.bf.band.tone, comp.bf.source]);
   if (comp.visceral) tiles.push(['Visceral fat', comp.visceral.value, '', comp.visceral.label, comp.visceral.tone, 'fat around the organs']);
   if (comp.mass) tiles.push(['Lean mass', comp.mass.lean, 'kg', `Fat mass ${comp.mass.fat} kg`, 'neutral', comp.mass.muscle ? `Muscle ${comp.mass.muscle} kg (analyser)` : 'everything that isn\'t fat']);
@@ -159,7 +159,7 @@ function insights(comp, nt, b) {
 function reportText(c, b, r) {
   const { comp, nt } = r, n = first(b.name) || 'there';
   const lines = [`Hi ${n}, thank you for visiting the Hasta EMS Progress Studio at ${c.place || c.name} today. Your body check:`];
-  if (comp.weight) lines.push(`• Weight ${comp.weight} kg${comp.ratios.bmi ? ` · BMI ${comp.ratios.bmi.value} (${comp.ratios.bmi.label.toLowerCase()})` : ''}`);
+  if (comp.weight) lines.push(`• Weight ${comp.weight} kg${comp.ratios.bmi ? ` · BMI ${comp.ratios.bmi.value} (healthy for Indians: 18.5–22.9)` : ''}`);
   if (comp.bf) lines.push(`• Body fat ${comp.bf.value}%${comp.bf.band ? ` (${comp.bf.band.label.toLowerCase()})` : ''}${comp.visceral ? ` · visceral fat ${comp.visceral.value}` : ''}`);
   if (comp.bmr && nt) lines.push(`• You burn about ${n0(comp.bmr.value)} kcal a day at rest (BMR) and about ${n0(nt.tdee)} kcal with your usual activity`);
   if (nt) lines.push(`• Suggested target (${AIMS[nt.aim].toLowerCase()}): about ${n0(nt.kcal)} kcal a day with ${nt.protein} g protein`);
