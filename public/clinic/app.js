@@ -972,7 +972,18 @@ async function viewLeads(s, ch) {
 const fUtc = s => s ? fWhen(new Date(Date.parse(/Z$/.test(s) ? s : s + 'Z') + 330 * 60000).toISOString().slice(0, 16)) : '';
 const DOW = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAYST = { present: ['P', 'Present'], in: ['IN', 'Clocked in'], leave: ['L', 'Leave'], pending: ['?', 'Leave awaiting approval'], absent: ['A', 'Absent — no approved leave'], off: ['W', 'Weekly off'], holiday: ['H', 'Holiday'], upcoming: ['', ''], na: ['', 'Not employed'], pre: ['✓', 'Before the attendance rules started — counted as worked'] };
-const LEAVE_KIND = { annual: 'Annual leave', sick: 'Sick leave', casual: 'Casual leave', unpaid: 'Unpaid leave' };
+const LEAVE_KIND = { annual: 'Annual leave', sick: 'Sick leave', sick_unpaid: 'Sick leave (unpaid)', casual: 'Casual leave', unpaid: 'Unpaid leave' };
+const certUrl = id => `${BASE}/api/clinic/hr/leave/${id}/certificate`;
+// Medical certificate for 3+ days of sick leave: link if uploaded, otherwise an upload button (data-cert).
+const certBits = (l, canUpload) => !l.cert_required ? '' : l.cert_key ? ` · <a href="${certUrl(l.id)}" target="_blank" rel="noopener">Medical certificate</a>` : ` · <b style="color:var(--alert)">Medical certificate needed</b>${canUpload && !['rejected', 'cancelled'].includes(l.status) ? ` <button class="btn sm ghost" data-cert="${l.id}">${icon('upload', 14)}Upload</button>` : ''}`;
+function certModal(id, after) {
+  modal({ title: 'Upload medical certificate', body: `<form data-f class="stack"><input type="file" name="f" accept="application/pdf,image/jpeg,image/png,image/webp"><p class="small muted">A photo or PDF of the doctor's certificate, up to 8 MB. Needed for 3 or more days of sick leave before it can be approved.</p></form>`,
+    actions: `<button class="btn ghost" data-close>Later</button><button class="btn" data-save>${icon('upload', 16)}Upload</button>`,
+    onMount(el, close) { const sv = el.querySelector('[data-save]'); sv.onclick = () => busy(sv, async () => {
+      const file = el.querySelector('input[type=file]').files[0]; if (!file) throw new Error('Choose the file.');
+      const res = await fetch(certUrl(id), { method: 'POST', credentials: 'same-origin', headers: { 'content-type': file.type || 'application/octet-stream', 'x-file-name': encodeURIComponent(file.name) }, body: file });
+      const d = await res.json(); if (!d.ok) throw new Error(d.error || 'Upload failed.'); return d; }).then(() => { close(); toast('Certificate uploaded'); after && after(); }).catch(e => e && e.message && toast(e.message, true)); } });
+}
 const hm = min => `${Math.floor(min / 60)}h ${String(min % 60).padStart(2, '0')}m`;
 const tOnly = s => s ? fTime(s.slice(11, 16)) : '—';
 const fMonth = m => new Date(m + '-01T00:00:00Z').toLocaleDateString('en-IN', { timeZone: 'UTC', month: 'long', year: 'numeric' });
@@ -1020,7 +1031,7 @@ function renderMyAttendance(d) {
           : td && td.entries.length ? `<p class="big-status">${icon('log-out', 22)} Out · ${hm(td.minutes)} today</p>` : `<p class="big-status warn">${icon('alert-triangle', 22)} Not clocked in</p><p class="muted">Scan the QR code on the clinic desktop with your phone camera. Your phone must be at the clinic.</p>`}
         ${td && td.entries.length ? `<div class="rows" style="margin-top:8px">${td.entries.map(e => `<div class="row"><div class="grow"><b>${esc(tOnly(e.in_at))} → ${esc(e.out_at ? tOnly(e.out_at) : 'now')}</b></div>${e.source === 'manual' ? '<span class="small muted">added by manager</span>' : ''}</div>`).join('')}</div>` : ''}</section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('calendar-check', 20)}<h3>Leave balance</h3></div></div>
-        <div class="kpis small-kpis"><div><span>Annual leave</span><b>${d.balance.annual}</b><small>1 day added each month</small></div>${d.allow.sick ? `<div><span>Sick leave</span><b>${d.balance.sick}</b><small>this year</small></div>` : ''}${d.allow.casual ? `<div><span>Casual leave</span><b>${d.balance.casual}</b><small>this year</small></div>` : ''}</div>
+        <div class="kpis small-kpis"><div><span>Annual leave</span><b>${d.balance.annual}</b><small>1 day added each month</small></div>${d.allow.sick ? `<div><span>Paid sick leave</span><b>${d.balance.sick}</b><small>${d.sick_per_month} earned each month · lapses 31 Dec</small></div>` : ''}${d.allow.casual ? `<div><span>Casual leave</span><b>${d.balance.casual}</b><small>this year</small></div>` : ''}</div>
         <p class="small muted" style="margin-top:10px">Leave must be applied for <b>before</b> the day and approved by Dr Akshara. A working day missed without approved leave is an absence: the day's pay is deducted and a warning letter is issued.</p></section>
     </div>
     <section class="panel"><div class="panel-h"><div class="t">${icon('calendar-days', 20)}<h3>${esc(fMonth(d.month))}</h3></div>
@@ -1031,7 +1042,7 @@ function renderMyAttendance(d) {
           <td>${esc(x.first_in ? fTime(x.first_in) : '—')}</td><td>${esc(x.entries.length && x.entries[x.entries.length - 1].out_at ? tOnly(x.entries[x.entries.length - 1].out_at) : '—')}</td><td class="num">${x.minutes ? hm(x.minutes) : '—'}</td></tr>`).join('')}</tbody></table></div>` : emptyState('clock', 'No attendance set up.')}</section>
     <div class="grid2">
       <section class="panel"><div class="panel-h"><div class="t">${icon('file-text', 20)}<h3>My leave applications</h3></div></div>
-        ${d.leave.length ? `<div class="rows">${d.leave.map(l => `<div class="row"><div class="grow"><b>${esc(LEAVE_KIND[l.kind])} · ${esc(fDay(l.from_date))}${l.to_date !== l.from_date ? ' – ' + esc(fDay(l.to_date)) : ''}</b><span>${l.days} day(s) · ${esc(l.reason || '')}${l.decision_note ? ' · ' + esc(l.decision_note) : ''}</span></div>${pill(l.status === 'approved' ? 'final' : l.status === 'pending' ? 'draft' : 'cancelled', l.status[0].toUpperCase() + l.status.slice(1))}${l.status === 'pending' ? `<button class="btn sm quiet" data-cancel="${l.id}">Withdraw</button>` : ''}</div>`).join('')}</div>` : '<p class="muted">None yet.</p>'}</section>
+        ${d.leave.length ? `<div class="rows">${d.leave.map(l => `<div class="row"><div class="grow"><b>${esc(LEAVE_KIND[l.kind])} · ${esc(fDay(l.from_date))}${l.to_date !== l.from_date ? ' – ' + esc(fDay(l.to_date)) : ''}</b><span>${l.days} day(s) · ${esc(l.reason || '')}${l.decision_note ? ' · ' + esc(l.decision_note) : ''}${certBits(l, true)}</span></div>${pill(l.status === 'approved' ? 'final' : l.status === 'pending' ? 'draft' : 'cancelled', l.status[0].toUpperCase() + l.status.slice(1))}${l.status === 'pending' ? `<button class="btn sm quiet" data-cancel="${l.id}">Withdraw</button>` : ''}</div>`).join('')}</div>` : '<p class="muted">None yet.</p>'}</section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('alert-triangle', 20)}<h3>Warnings & payslips</h3></div></div>
         ${d.warnings.length ? `<div class="rows">${d.warnings.map(w => `<div class="row"><div class="grow"><b>${esc(w.letter_no)}</b><span>Absent ${JSON.parse(w.days).map(fDay).join(', ')}</span></div>${pdfLink(`/hr/warnings/${w.id}/pdf`, 'Letter')}</div>`).join('')}</div>` : '<p class="muted">No warnings.</p>'}
         <div data-slips class="rows" style="margin-top:10px"></div></section>
@@ -1040,19 +1051,32 @@ function renderMyAttendance(d) {
   MAIN.querySelector('[data-nm]').onclick = () => go('#/attendance?m=' + nextMonth(d.month));
   MAIN.querySelector('[data-apply]').onclick = () => leaveModal(d, null, () => route());
   myDuty(MAIN.querySelector('[data-myduty]'), d.month);
+  MAIN.querySelectorAll('[data-cert]').forEach(b => b.onclick = () => certModal(b.dataset.cert, () => route()));
   MAIN.querySelectorAll('[data-cancel]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/hr/leave/${b.dataset.cancel}/cancel`, { method: 'POST', body: {} })).then(() => { toast('Application withdrawn'); route(); }).catch(() => {}));
   api('/clinic/hr/payslips').then(r => { const el = MAIN.querySelector('[data-slips]'); if (el && r.payslips.length) el.innerHTML = r.payslips.map(p => `<div class="row"><div class="grow"><b>Payslip · ${esc(fMonth(p.month))}</b></div>${pdfLink(`/hr/payslip/${p.month}.pdf`, 'PDF')}</div>`).join(''); }).catch(() => {});
 }
 function leaveModal(d, staff, after) {
-  const kinds = [['annual', `Annual leave (paid${d ? ` · ${d.balance.annual} left` : ''})`], ...(d && d.allow.sick || staff ? [['sick', 'Sick leave (paid)']] : []), ...(d && d.allow.casual || staff ? [['casual', 'Casual leave (paid)']] : []), ['unpaid', 'Unpaid leave']];
+  const sickLeft = d && d.balance ? d.balance.sick : null;
+  const kinds = [['annual', `Annual leave (paid${d ? ` · ${d.balance.annual} left` : ''})`], ...(d && d.allow.sick || staff ? [['sick', `Sick leave (paid${sickLeft !== null ? ` · ${sickLeft} left` : ''})`]] : []), ...(d && d.allow.casual || staff ? [['casual', `Casual leave (paid${d ? ` · ${d.balance.casual} left` : ''})`]] : []), ['unpaid', 'Unpaid leave']];
   modal({ title: staff ? `Leave for ${staff.name}` : 'Apply for leave',
-    body: `<form data-f class="stack" style="gap:12px"><div class="grid2">${field('From', inp('from_date', addDays(today(), 1), `type="date" ${staff ? '' : `min="${today()}"`}`))}${field('To', inp('to_date', addDays(today(), 1), 'type="date"'))}</div>
-      ${field('Type', sel('kind', kinds, 'annual'))}${field('Reason', inp('reason', '', 'maxlength="300" placeholder="e.g. family function"'))}</form>
+    body: `<form data-f class="stack" style="gap:12px">${field('Type', sel('kind', kinds, 'annual'))}
+      <div class="grid2">${field('From', inp('from_date', addDays(today(), 1), `type="date" ${staff ? '' : `min="${today()}"`}`))}${field('To', inp('to_date', addDays(today(), 1), 'type="date"'))}</div>
+      <div data-sick hidden class="stack" style="gap:8px">${field('If paid sick leave runs out, the extra days are', sel('sick_extra', [['annual', 'Taken from my annual leave'], ['sick_unpaid', 'Unpaid sick leave']], 'annual'))}
+        <p class="small muted">Tell the Duty Manager before your shift, and apply here within 2 days of returning. For 3 or more days, upload a doctor's certificate — the leave cannot be approved without it.</p></div>
+      ${field('Reason', inp('reason', '', 'maxlength="300" placeholder="e.g. family function"'))}</form>
       <p class="small muted">${staff ? 'Recorded on their behalf. You can approve it straight away if you are the approver.' : 'Weekly off and clinic holidays are not counted. Dr Akshara will approve or reject it — you will see the decision here.'}</p>`,
     actions: `<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>${staff ? 'Save' : 'Send application'}</button>`,
     onMount(el, close) {
+      const f = el.querySelector('[data-f]'), kind = f.querySelector('[name=kind]'), fr = f.querySelector('[name=from_date]'), to = f.querySelector('[name=to_date]'), box = el.querySelector('[data-sick]'), rs = f.querySelector('[name=reason]');
+      kind.onchange = () => { const sick = kind.value === 'sick'; box.hidden = !sick; rs.placeholder = sick ? 'e.g. fever' : 'e.g. family function';
+        if (!staff) fr.min = sick ? addDays(today(), -30) : today();
+        if (sick && fr.value > today()) { fr.value = today(); to.value = today(); } };
       const s = el.querySelector('[data-save]');
-      s.onclick = () => busy(s, () => api('/clinic/hr/leave', { method: 'POST', body: { ...formData(el.querySelector('[data-f]')), ...(staff ? { staff_id: staff.staff_id } : {}) } })).then(r => { close(); toast(`Applied for ${r.days} day(s)`); after(r); }).catch(() => {});
+      s.onclick = () => busy(s, () => { const v = formData(f); if (v.kind !== 'sick') delete v.sick_extra; return api('/clinic/hr/leave', { method: 'POST', body: { ...v, ...(staff ? { staff_id: staff.staff_id } : {}) } }); }).then(r => {
+        close();
+        const sp = r.split; toast(sp ? `Sick leave: ${sp.sick} paid${sp.annual ? `, ${sp.annual} from annual leave` : ''}${sp.sick_unpaid ? `, ${sp.sick_unpaid} unpaid` : ''}` : `Applied for ${r.days} day(s)`);
+        if (r.cert_required) certModal(r.id, () => after(r)); else after(r);
+      }).catch(() => {});
     } });
 }
 
@@ -1091,11 +1115,12 @@ async function viewStaff(tab, q) {
   if (tab === 'leave') {
     const d = await api('/clinic/hr/leave' + (q.get('s') ? '?status=' + q.get('s') : ''));
     MAIN.innerHTML = head(d.can_decide ? 'You approve leave.' : 'Leave is approved by the leave approver.', `<button class="btn gold" data-onb>${icon('plus', 18)}Record leave for staff</button>`) +
-      `<section class="panel flush"><div class="rows">${d.leave.map(l => { const bal = d.balances[l.staff_id]; return `<div class="row"><div class="grow"><b>${esc(l.staff_name)} · ${esc(LEAVE_KIND[l.kind])}</b><span>${esc(fDay(l.from_date))}${l.to_date !== l.from_date ? ' – ' + esc(fDay(l.to_date)) : ''} · ${l.days} day(s) · ${esc(l.reason || '')}</span>
+      `<section class="panel flush"><div class="rows">${d.leave.map(l => { const bal = d.balances[l.staff_id]; return `<div class="row"><div class="grow"><b>${esc(l.staff_name)} · ${esc(LEAVE_KIND[l.kind])}</b><span>${esc(fDay(l.from_date))}${l.to_date !== l.from_date ? ' – ' + esc(fDay(l.to_date)) : ''} · ${l.days} day(s) · ${esc(l.reason || '')}${certBits(l, true)}</span>
         <span class="small muted">Applied ${esc(fUtc(l.applied_at))}${bal && l.status === 'pending' ? ` · balance: annual ${bal.annual}${bal.sick ? ', sick ' + bal.sick : ''}${bal.casual ? ', casual ' + bal.casual : ''}` : ''}${l.decided_by_name ? ` · ${esc(l.status)} by ${esc(l.decided_by_name)}${l.decision_note ? ': ' + esc(l.decision_note) : ''}` : ''}</span></div>
         ${l.status === 'pending' && l.can_decide ? `<button class="btn sm quiet" data-rej="${l.id}">Reject</button><button class="btn sm" data-ok="${l.id}">${icon('check', 15)}Approve</button>` : l.status === 'pending' && l.to_admin ? pill('draft', 'Pending · clinic admin approves') : pill(l.status === 'approved' ? 'final' : l.status === 'pending' ? 'draft' : 'cancelled', l.status[0].toUpperCase() + l.status.slice(1))}
         ${l.status === 'approved' && l.can_decide && l.from_date >= today() ? `<button class="btn sm quiet" data-cx="${l.id}">Cancel</button>` : ''}</div>`; }).join('') || emptyState('calendar-check', 'No leave applications.')}</div></section>`;
     MAIN.querySelector('[data-onb]').onclick = async () => { const setup = await api('/clinic/hr/month?month=' + today().slice(0, 7)); pickStaff(setup.staff, s => leaveModal(null, s, async r => { if (d.can_decide && r.can_decide !== false && confirm('Approve this leave now?')) await api(`/clinic/hr/leave/${r.id}/decide`, { method: 'POST', body: { status: 'approved', note: 'Recorded by ' + ME.name } }); route(); })); };
+    MAIN.querySelectorAll('[data-cert]').forEach(b => b.onclick = () => certModal(b.dataset.cert, () => route()));
     MAIN.querySelectorAll('[data-ok]').forEach(b => b.onclick = () => busy(b, () => api(`/clinic/hr/leave/${b.dataset.ok}/decide`, { method: 'POST', body: { status: 'approved' } })).then(() => { toast('Leave approved'); route(); }).catch(() => {}));
     MAIN.querySelectorAll('[data-rej]').forEach(b => b.onclick = () => modal({ title: 'Reject leave', body: `<form data-f>${field('Reason', inp('note', '', 'maxlength="300"'))}</form>`, actions: '<button class="btn ghost" data-close>Cancel</button><button class="btn" data-save>Reject</button>',
       onMount(el, close) { const s = el.querySelector('[data-save]'); s.onclick = () => busy(s, () => api(`/clinic/hr/leave/${b.dataset.rej}/decide`, { method: 'POST', body: { status: 'rejected', ...formData(el.querySelector('[data-f]')) } })).then(() => { close(); toast('Leave rejected'); route(); }).catch(() => {}); } }));
@@ -1158,7 +1183,7 @@ async function viewStaff(tab, q) {
         <div style="display:flex;gap:8px;flex-wrap:wrap"><button type="button" class="btn ghost" data-here>${icon('activity', 18)}Use my current location</button><button class="btn" data-savegeo>Save</button></div></form>
         <p class="small muted">Stand inside the clinic with your phone (GPS on) and press "Use my current location", then Save. Clock-in only works within this distance.</p></section>
       <section class="panel"><div class="panel-h"><div class="t">${icon('calendar-check', 20)}<h3>Leave rules</h3></div></div>
-        <form data-lv class="stack" style="gap:12px"><div class="grid2">${field('Paid annual leave per month', inp('leave_annual_per_month', S.leave_annual_per_month ?? 1, 'type="number" step="0.5" min="0" max="5"'))}${field('Sick leave per year', inp('leave_sick_per_year', S.leave_sick_per_year ?? 0, 'type="number" min="0" max="30"'))}</div>
+        <form data-lv class="stack" style="gap:12px"><div class="grid2">${field('Paid annual leave per month', inp('leave_annual_per_month', S.leave_annual_per_month ?? 1, 'type="number" step="0.5" min="0" max="5"'))}${field('Paid sick days earned per month', inp('leave_sick_per_month', S.leave_sick_per_month ?? 1, 'type="number" step="0.5" min="0" max="3"'))}</div>
         ${field('Casual leave per year', inp('leave_casual_per_year', S.leave_casual_per_year ?? 0, 'type="number" min="0" max="30"'))}
         ${ME.admin ? field('Leave approver(s)', `<div class="checks">${B.team.filter(t => t.active).map(t => `<label><input type="checkbox" name="appr" value="${t.id}"${String(S.leave_approvers || '').split(',').map(Number).includes(t.id) ? ' checked' : ''}> ${esc(t.name)}</label>`).join('')}</div>`) : `<p class="small">Leave approver: <b>${esc(String(S.leave_approvers || '').split(',').map(Number).filter(Boolean).map(staffName).join(', ') || 'admin')}</b></p>`}
         <button class="btn" data-savelv>Save</button></form></section>

@@ -40,7 +40,8 @@ const canManage = u => u.admin || u.role === 'manager';
 const deny = (m = 'Managers or admins only.') => api({ ok: false, error: m }, 403);
 const minutesBetween = (a, b) => Math.max(0, Math.round((Date.parse(b + 'Z') - Date.parse(a + 'Z')) / 60000));
 const monthDays = m => { const n = new Date(Date.UTC(+m.slice(0, 4), +m.slice(5, 7), 0)).getUTCDate(); return Array.from({ length: n }, (_, i) => `${m}-${String(i + 1).padStart(2, '0')}`); };
-const KINDS = { annual: 'Annual leave', sick: 'Sick leave', casual: 'Casual leave', unpaid: 'Unpaid leave' };
+const KINDS = { annual: 'Annual leave', sick: 'Sick leave', sick_unpaid: 'Sick leave (unpaid)', casual: 'Casual leave', unpaid: 'Unpaid leave' };
+const UNPAID_KINDS = ['unpaid', 'sick_unpaid'];
 const PAID_KINDS = ['annual', 'sick', 'casual'];
 const WINDOW_S = 30;
 
@@ -197,7 +198,7 @@ function payFor(prof, month, days) {
   const contractH = fullWorking * dh, rate = contractH ? sal / contractH : 0;
   const n = st => days.filter(d => d.working && d.status === st).length;
   const paidLeave = days.filter(d => d.working && d.status === 'leave' && PAID_KINDS.includes(d.kind)).length;
-  const unpaidLeave = days.filter(d => d.working && d.status === 'leave' && d.kind === 'unpaid').length;
+  const unpaidLeave = days.filter(d => d.working && d.status === 'leave' && UNPAID_KINDS.includes(d.kind)).length;
   const absent = n('absent'), pending = n('pending');
   // Today is still in progress: count it as a full expected day rather than the hours so far.
   const t = today(), todayRow = days.find(d => d.day === t && d.working && ['in', 'present', 'upcoming'].includes(d.status));
@@ -245,9 +246,65 @@ async function leaveBalance(env, staffId, s, prof) {
   const usedAnnual = (results || []).filter(r => r.kind === 'annual' && r.from_date >= from).reduce((n, r) => n + r.d, 0);
   return {
     annual: r2((Number(prof && prof.leave_opening) || 0) + months * (Number(s.leave_annual_per_month) || 0) - usedAnnual),
-    sick: r2((Number(s.leave_sick_per_year) || 0) - used('sick', y)),
+    sick: r2(Math.max(0, sickAccrued(s, prof, t) - used('sick', y))),
     casual: r2((Number(s.leave_casual_per_year) || 0) - used('casual', y)),
   };
+}
+// Sick leave: paid days are earned each month (default 1), build up during the calendar year and lapse on
+// 31 December. Days beyond the balance are taken from annual leave or recorded as unpaid sick leave, as the
+// staff member chooses. Three or more working days need a medical certificate before approval.
+const sickPerMonth = s => Number(s.leave_sick_per_month ?? 1) || 0;
+const CERT_DAYS = 3;
+function sickAccrued(s, prof, t) {
+  const y = t.slice(0, 4), joined = prof && prof.joined_on && prof.joined_on.slice(0, 4) === y ? +prof.joined_on.slice(5, 7) : 1;
+  return Math.max(0, +t.slice(5, 7) - joined + 1) * sickPerMonth(s);
+}
+async function workingDates(env, prof, from, to) {
+  const { results } = await env.DB.prepare('SELECT day FROM cl_holidays WHERE day >= ? AND day <= ?').bind(from, to).all();
+  const hol = new Set((results || []).map(r => r.day)), out = [];
+  for (let d = from; d <= to; d = addDays(d, 1)) if (dow(d) !== (prof ? prof.weekly_off : 0) && !hol.has(d)) out.push(d);
+  return out;
+}
+async function applySick(env, me, staffId, prof, from, to, reason, extra) {
+  const s = await settings(env), dates = await workingDates(env, prof, from, to);
+  if (!dates.length) return R(400, 'Those dates are your weekly off or clinic holidays — no leave needed.');
+  const bal = await leaveBalance(env, staffId, s, prof), paid = Math.floor(Math.max(0, bal.sick));
+  const plan = dates.map((d, i) => [d, i < paid ? 'sick' : extra]);
+  const nExtra = Math.max(0, dates.length - paid);
+  if (nExtra && !extra) return R(400, `Paid sick leave left: ${paid} day(s). Choose whether the other ${nExtra} day(s) come from annual leave or are unpaid.`);
+  if (extra === 'annual' && nExtra > bal.annual) return R(400, `Annual leave left: ${Math.max(0, bal.annual)} day(s), but ${nExtra} are needed. Choose unpaid for the extra days.`);
+  const groups = [];
+  for (const [d, k] of plan) { const g = groups[groups.length - 1]; if (g && g.kind === k) { g.to = d; g.days++; } else groups.push({ kind: k, from: d, to: d, days: 1 }); }
+  const certReq = dates.length >= CERT_DAYS ? 1 : 0, ids = [];
+  for (const g of groups) {
+    const why = g.kind === 'sick' ? reason : `Sickness (beyond paid sick leave): ${reason}`;
+    const r = await env.DB.prepare('INSERT INTO cl_leave (staff_id, from_date, to_date, days, kind, reason, applied_by, group_id, cert_required) VALUES (?,?,?,?,?,?,?,?,?)')
+      .bind(staffId, g.from, g.to, g.days, g.kind, why.slice(0, 300), me.id, ids[0] || null, certReq).run();
+    ids.push(r.meta.last_row_id);
+    await audit(env, me, 'leave.apply', 'leave', r.meta.last_row_id, `${staffId} ${g.kind} ${g.from}–${g.to} (${g.days} d)`);
+  }
+  await env.DB.prepare('UPDATE cl_leave SET group_id=? WHERE id=?').bind(ids[0], ids[0]).run();
+  const by = k => plan.filter(x => x[1] === k).length;
+  return OK({ id: ids[0], ids, days: dates.length, cert_required: !!certReq, split: { sick: by('sick'), annual: by('annual'), sick_unpaid: by('sick_unpaid') } });
+}
+const CERT_SIGS = { pdf: [[0x25, 0x50, 0x44, 0x46], 'application/pdf'], jpg: [[0xff, 0xd8, 0xff], 'image/jpeg'], png: [[0x89, 0x50, 0x4e, 0x47], 'image/png'], webp: [[0x52, 0x49, 0x46, 0x46], 'image/webp'] };
+// Raw-body upload of a medical certificate for a sick-leave application (the staff member, a manager or the approver).
+export async function uploadSickCert(request, env, me, id) {
+  const l = await env.DB.prepare('SELECT * FROM cl_leave WHERE id=?').bind(id).first();
+  const s = await settings(env), hrUser = canManage(me) || isApprover(me, s);
+  if (!l || (l.staff_id !== me.id && !hrUser)) return R(404, 'Not found.');
+  if (!l.group_id) return R(400, 'A certificate can only be added to a sick-leave application.');
+  if (['rejected', 'cancelled'].includes(l.status)) return R(400, 'This application is closed.');
+  const buf = new Uint8Array(await request.arrayBuffer());
+  if (!buf.length || buf.length > 8 * 1024 * 1024) return R(400, 'The certificate can be up to 8 MB.');
+  const ext = Object.keys(CERT_SIGS).find(e => CERT_SIGS[e][0].every((x, i) => buf[i] === x));
+  if (!ext) return R(400, 'Upload a photo (JPG, PNG) or a PDF of the certificate.');
+  const key = `hr/sick/${l.staff_id}/${l.group_id}-${crypto.randomUUID()}.${ext}`;
+  await env.CVS.put(key, buf, { httpMetadata: { contentType: CERT_SIGS[ext][1] } });
+  const name = clean(decodeURIComponent(request.headers.get('x-file-name') || `certificate.${ext}`), 100);
+  await env.DB.prepare('UPDATE cl_leave SET cert_key=?, cert_name=?, cert_type=? WHERE group_id=?').bind(key, name, CERT_SIGS[ext][1], l.group_id).run();
+  await audit(env, me, 'leave.certificate', 'leave', l.group_id, name);
+  return OK({ name });
 }
 async function workingDaysBetween(env, prof, from, to) {
   const { results } = await env.DB.prepare('SELECT day FROM cl_holidays WHERE day >= ? AND day <= ?').bind(from, to).all();
@@ -262,10 +319,13 @@ async function applyLeave(env, me, b, onBehalf) {
   if (!kind) return R(400, 'Choose the type of leave.');
   if (reason.length < 3) return R(400, 'Give a reason.');
   if (addDays(from, 60) < to) return R(400, 'Apply for at most 60 days at a time.');
-  if (!onBehalf && from < today()) return R(400, 'Leave must be applied for before the day. For a past day, ask Dr Akshara or a manager — it may be treated as an absence.');
+  if (kind === 'sick_unpaid') return R(400, 'Choose Sick leave — the app works out which days are paid.');
+  if (!onBehalf && kind === 'sick' && (to < addDays(today(), -3) || from < addDays(today(), -30))) return R(400, 'Apply for sick leave within 2 days of returning to work. For older days, ask Dr Akshara or a manager.');
+  if (!onBehalf && kind !== 'sick' && from < today()) return R(400, 'Leave must be applied for before the day. For a past day, ask Dr Akshara or a manager — it may be treated as an absence.');
   const prof = await env.DB.prepare('SELECT * FROM cl_staff_pay WHERE staff_id=?').bind(staffId).first();
   const clash = await env.DB.prepare("SELECT id FROM cl_leave WHERE staff_id=? AND status IN ('approved','pending') AND from_date <= ? AND to_date >= ?").bind(staffId, to, from).first();
   if (clash) return R(400, 'You already have leave applied for some of these days.');
+  if (kind === 'sick') return applySick(env, me, staffId, prof, from, to, reason, ['annual', 'sick_unpaid'].includes(b.sick_extra) ? b.sick_extra : null);
   const days = await workingDaysBetween(env, prof, from, to);
   if (!days) return R(400, 'Those dates are your weekly off or clinic holidays — no leave needed.');
   if (PAID_KINDS.includes(kind)) {
@@ -282,6 +342,7 @@ async function decideLeave(env, me, id, b) {
   if (l.status !== 'pending') return R(400, 'This application has already been decided.');
   const st = b.status === 'approved' ? 'approved' : b.status === 'rejected' ? 'rejected' : null;
   if (!st) return R(400, 'Approve or reject.');
+  if (st === 'approved' && l.cert_required && !l.cert_key) return R(400, 'A medical certificate is needed for 3 or more days of sick leave. Ask the staff member to upload it first.');
   if (st === 'rejected' && clean(b.note, 300).length < 3) return R(400, 'Give a reason for rejecting.');
   await env.DB.prepare('UPDATE cl_leave SET status=?, decided_by=?, decided_by_name=?, decided_at=?, decision_note=? WHERE id=?').bind(st, me.id, me.name, nowIso(), nz(clean(b.note, 300)), id).run();
   await audit(env, me, 'leave.' + st, 'leave', id, `${l.staff_id} ${l.kind} ${l.from_date}–${l.to_date}`);
@@ -490,11 +551,18 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
     if (prof) { const { rows } = await monthData(env, month, [me.id]); if (rows[0]) { days = rows[0].days; const pay = rows[0].pay; summary = { contract_hours: pay.contract_hours, worked_hours: pay.worked_hours, late_days: pay.late_days, absent_days: pay.absent_days, paid_leave_days: pay.paid_leave_days, unpaid_leave_days: pay.unpaid_leave_days }; } }
     return api({ ok: true, month, profile: prof ? { daily_hours: prof.daily_hours, weekly_off: prof.weekly_off, shift_start: prof.shift_start } : null, days, summary,
       balance: await leaveBalance(env, me.id, s, prof), leave: lv.results || [], warnings: wr.results || [], kinds: KINDS,
-      allow: { sick: Number(s.leave_sick_per_year) > 0, casual: Number(s.leave_casual_per_year) > 0 } });
+      sick_per_month: sickPerMonth(s), allow: { sick: sickPerMonth(s) > 0, casual: Number(s.leave_casual_per_year) > 0 } });
   }
   if (p === '/hr/leave' && m === 'POST') {
     if (b.staff_id && Number(b.staff_id) !== me.id) { if (!hrUser) return deny(); return done(await applyLeave(env, me, b, true)); }
     return done(await applyLeave(env, me, b, false));
+  }
+  if ((mm = p.match(/^\/hr\/leave\/(\d+)\/certificate$/)) && m === 'GET') {
+    const l = await env.DB.prepare('SELECT staff_id, cert_key, cert_name, cert_type FROM cl_leave WHERE id=?').bind(+mm[1]).first();
+    if (!l || !l.cert_key || (l.staff_id !== me.id && !hrUser)) return api({ ok: false, error: 'Not found.' }, 404);
+    const obj = await env.CVS.get(l.cert_key);
+    if (!obj) return api({ ok: false, error: 'Not found.' }, 404);
+    return new Response(obj.body, { headers: { 'content-type': l.cert_type, 'content-disposition': `inline; filename="${(l.cert_name || 'certificate').replace(/"/g, '')}"`, 'cache-control': 'private, no-store', 'x-content-type-options': 'nosniff' } });
   }
   if ((mm = p.match(/^\/hr\/leave\/(\d+)\/cancel$/)) && m === 'POST') {
     const l = await env.DB.prepare('SELECT * FROM cl_leave WHERE id=?').bind(+mm[1]).first();
@@ -592,7 +660,7 @@ export async function hrRoute(request, env, url, me, p, m, b, q, base) {
     return api({ ok: true });
   }
   if (p === '/hr/settings' && m === 'PUT') {
-    const keys = ['geo_lat', 'geo_lng', 'geo_radius_m', 'att_grace_min', 'leave_annual_per_month', 'leave_sick_per_year', 'leave_casual_per_year'].concat(me.admin ? ['leave_approvers'] : []);
+    const keys = ['geo_lat', 'geo_lng', 'geo_radius_m', 'att_grace_min', 'leave_annual_per_month', 'leave_sick_per_month', 'leave_sick_per_year', 'leave_casual_per_year'].concat(me.admin ? ['leave_approvers'] : []);
     const lat = b.geo_lat !== undefined ? Number(b.geo_lat) : null, lng = b.geo_lng !== undefined ? Number(b.geo_lng) : null;
     if (lat !== null && (!(lat >= 6 && lat <= 37) || !(lng >= 68 && lng <= 98))) return done(R(400, 'That location is not in India — check the latitude / longitude.'));
     if (b.geo_radius_m !== undefined && !(Number(b.geo_radius_m) >= 30 && Number(b.geo_radius_m) <= 1000)) return done(R(400, 'Geofence radius: 30–1000 metres.'));

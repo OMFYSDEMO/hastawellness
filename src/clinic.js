@@ -18,7 +18,7 @@ import { json, sameOrigin, clean, nz, h, normalisePhone, sha256 } from './util.j
 import { verifySecret, hashSecret, handleEms } from './ems.js';
 import { stockRoute, stockOutForInvoice, stockBackForInvoice, stockAlertStmts, stockAlertsFrom } from './stock.js';
 import { careRoute, uploadPhoto, recallStmt } from './care.js';
-import { hrRoute, kioskRoute, scanRoute } from './hr.js';
+import { hrRoute, kioskRoute, scanRoute, uploadSickCert } from './hr.js';
 import { docsRoute, uploadDocFile } from './docs.js';
 import * as EXP from './expenses.js';
 import { disciplineRoute } from './discipline.js';
@@ -57,7 +57,7 @@ const HOURS = { 0: ['10:00', '16:00'], 1: ['10:00', '20:30'], 2: ['10:00', '20:3
 const DEFAULT_DEPTS = [['Dental', '#2f6f8f'], ['Skin & Aesthetics', '#b0607a'], ['Hair', '#8a6a2f'], ['Wellness', '#34595e'], ['Body Contouring', '#6b4a8f'], ['General / Clinic', '#5e6d6c']];
 const SETTING_KEYS = { legal_name: 'HASWEL CARE Private Limited', trade_name: 'Hasta Wellness', gstin: '', address: '1st floor, Anjali Arcade, near Nippon Toyota, Technopark Phase 3 Service Road, Kazhakkoottam, Thiruvananthapuram, Kerala 695582', state: 'Kerala (32)', phone: '+91 97784 58883', email: 'hello@hastawellnessclinic.com', invoice_prefix: 'HW', discount_limit_pct: '10', discount_approvers: '', invoice_footer: 'Thank you for choosing Hasta Wellness.',
   // Attendance & leave (src/hr.js)
-  leave_approvers: '', leave_annual_per_month: '1', leave_sick_per_year: '0', leave_casual_per_year: '0', att_grace_min: '10', geo_lat: '', geo_lng: '', geo_radius_m: '150' };
+  leave_approvers: '', leave_annual_per_month: '1', leave_sick_per_month: '1', leave_sick_per_year: '0', leave_casual_per_year: '0', att_grace_min: '10', geo_lat: '', geo_lng: '', geo_radius_m: '150' };
 
 async function audit(env, me, action, entity, id, detail) {
   await env.DB.prepare('INSERT INTO cl_audit (staff_id, staff_name, action, entity, entity_id, detail) VALUES (?,?,?,?,?,?)').bind(me.id, me.name, action, entity, id || null, detail ? String(detail).slice(0, 500) : null).run();
@@ -124,9 +124,9 @@ function shell(base) {
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/ems/app.css?v=13"><link rel="stylesheet" href="/clinic/clinic.css?v=11">
-<link rel="modulepreload" href="/clinic/app.js?v=37"><link rel="modulepreload" href="/ems/core.js?v=14">
+<link rel="modulepreload" href="/clinic/app.js?v=38"><link rel="modulepreload" href="/ems/core.js?v=14">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/clinic/app.js?v=37"></script></body></html>`;
+<script type="module" src="/clinic/app.js?v=38"></script></body></html>`;
 }
 
 // Attendance screen for the clinic desktop: shows the rotating clock-in QR code.
@@ -155,6 +155,15 @@ async function route(request, env, url, p, base) {
     const { me: u } = await clinicSession(request, env);
     if (!u) return api({ ok: false, error: 'Please sign in.' }, 401);
     return uploadDocFile(request, env, u);
+  }
+  // Sick-leave medical certificate: raw file body.
+  const certM = m === 'POST' && p.match(/^\/hr\/leave\/(\d+)\/certificate$/);
+  if (certM) {
+    if (!sameOrigin(request)) return api({ ok: false, error: 'Forbidden' }, 403);
+    const { me: u } = await clinicSession(request, env);
+    if (!u) return api({ ok: false, error: 'Please sign in.' }, 401);
+    const [st, e, x] = await uploadSickCert(request, env, u, +certM[1]);
+    return st === 200 ? api({ ok: true, ...x }) : api({ ok: false, error: e }, st);
   }
   // Expense receipt upload: raw file body.
   if (p === '/expenses/file' && m === 'POST') {
