@@ -932,7 +932,7 @@ async function viewPayments(from, to) {
 }
 
 /* ---------------- Leads ---------------- */
-const CHANNEL = { instagram: 'Instagram', facebook: 'Facebook', whatsapp: 'WhatsApp', google: 'Google', youtube: 'YouTube', website: 'Website', phone: 'Phone call', 'walk-in': 'Walk-in', referral: 'Referral', other: 'Other' };
+const CHANNEL = { instagram: 'Instagram', facebook: 'Facebook', whatsapp: 'WhatsApp', google: 'Google', youtube: 'YouTube', website: 'Website', phone: 'Phone call', 'walk-in': 'Walk-in', referral: 'Referral', event: 'Event / booth', other: 'Other' };
 const chTag = c => c ? `<span class="pill" style="margin-left:6px">${esc(CHANNEL[c] || c)}</span>` : '';
 function leadModal(after) {
   const ints = ['Dental', 'Skin', 'Laser hair reduction', 'Hair', 'EMS & weight management', 'Wellness / IV therapy', 'Body contouring', 'Not sure yet'];

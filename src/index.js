@@ -1,4 +1,5 @@
 import { PAGES } from './pages.js';
+import { purgeBooth } from './booth.js';
 import { authorised, authResponse, json, adminHeaders, sameOrigin, clean, nz, normalisePhone, h, sha256, adminShell, ist, waLink, notify, channelFromVisit, channelCookie, leadChannel } from './util.js';
 import { handleEms, emsDaily } from './ems.js';
 import { verifyPage } from './academy.js';
@@ -79,6 +80,7 @@ export default {
     const r = await env.DB.prepare(
       "DELETE FROM leads WHERE created_at < strftime('%Y-%m-%dT%H:%M:%SZ','now', ?)"
     ).bind(`-${days} days`).run();
+    await purgeBooth(env, days).catch(e => console.error('booth purge', e));
     console.log('Lead retention clean-up removed', r.meta && r.meta.changes, 'rows');
     await purgeOldApplications(env);
     await purgeAcademyDocs(env).catch(e => console.error('academy purge', e));

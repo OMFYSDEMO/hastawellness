@@ -6,6 +6,7 @@ import {
   toIn, cmIn, ftIn, lenField, wireLen, lenToCm, journeyPanel, photoPanel, wirePhotoPanel, progressCardLinks } from './core.js?v=14';
 import { bodyComp, latestMerged, nutritionTargets, suggestDiets, defaultAim, TAPE, BIA, ACTIVITY, AIMS, FOOD_PREF } from './body.js?v=1';
 import { viewAcademy } from './academy.js?v=17';
+import { viewBooth } from './booth.js?v=1';
 
 let ME, APP, MAIN, BADGES = {}, TEAM = null, UNITS = [], ALL_UNITS = [], UNIT = null, SKILLS = {}, MACHINES = [], CATEGORIES = [];
 const machineName = id => (MACHINES.find(m => m.id === id) || {}).name || 'Unknown machine';
@@ -18,7 +19,7 @@ async function team(fresh = false) { if (!TEAM || fresh) TEAM = (await api('/sta
 const coachOptions = (list, value) => [['', 'Not allocated']].concat(list.map(t => [t.id, t.name + (t.role === 'admin' ? ' (admin)' : '')]));
 const NAV = [
   ['', 'layout-dashboard', 'Dashboard'], ['schedule', 'calendar-days', 'Schedule'], ['clients', 'users', 'Clients'],
-  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['weekly', 'message-circle', 'Weekly check-ins'], ['payments', 'wallet', 'Payments'], ['quest', 'trophy', 'Quest demo'], ['academy', 'graduation-cap', 'Academy'],
+  ['rota', 'clock', 'Rota'], ['leads', 'inbox', 'Website leads', 'new_leads'], ['booth', 'flag', 'Outreach booth'], ['reminders', 'bell', 'Follow-ups', 'reminders'], ['weekly', 'message-circle', 'Weekly check-ins'], ['payments', 'wallet', 'Payments'], ['quest', 'trophy', 'Quest demo'], ['academy', 'graduation-cap', 'Academy'],
 ];
 
 export function mount(app, me) {
@@ -71,6 +72,7 @@ async function route() {
     else if (top === 'clients' && parts[1]) await viewClient(+parts[1], q.get('tab'));
     else if (top === 'clients') await viewClients(q);
     else if (top === 'leads') await viewLeads(q);
+    else if (top === 'booth') await viewBooth(MAIN, { reload, go, bookModal, clientModal, units: UNITS }, parts, q);
     else if (top === 'reminders') await viewReminders();
     else if (top === 'payments') await viewPayments(q);
     else if (top === 'rota') await viewRota();

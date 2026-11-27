@@ -30,6 +30,7 @@ const APPT_KINDS = ['session', 'trial', 'consultation', 'review', 'wm_consult'];
 const PAY_METHODS = ['UPI', 'Cash', 'Card', 'Bank transfer'];
 const LEAD_STATUSES = ['new', 'contacted', 'booked', 'not interested'];
 import { game, demoData } from './emsgame.js';
+import * as BOOTH from './booth.js';
 const DIETS = ['kerala-balanced', 'vegetarian', 'high-protein', 'low-gi', 'calorie-smart', 'fish-forward', 'eggetarian', 'veg-high-protein', 'vegan', 'healthy-gain', 'fat-loss-5', 'tone-5', 'hormone-support'];
 const SCREENING = ['pacemaker', 'pregnancy', 'epilepsy', 'heart', 'surgery', 'implants', 'cancer', 'diabetes', 'bp', 'skin'];
 
@@ -184,9 +185,9 @@ function shell(base) {
 <title>Hasta EMS · Progress Studio</title>
 <link rel="icon" href="/favicon.ico"><link rel="apple-touch-icon" href="/apple-touch-icon.png">
 <link rel="preload" href="/fonts/manrope-var.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/ems/app.css?v=13">
+<link rel="stylesheet" href="/ems/app.css?v=14">
 </head><body><div id="app"><div class="boot"><img src="/img/hasta-emblem.webp" alt="" width="56" height="56"></div></div>
-<script type="module" src="/ems/app.js?v=23"></script></body></html>`;
+<script type="module" src="/ems/app.js?v=24"></script></body></html>`;
 }
 
 /* ---------------- Router ---------------- */
@@ -408,6 +409,12 @@ async function route(request, env, url, ctx, base, p) {
   if (p === '/staff/trial-consent-form' && m === 'GET') return api({ ok: true, questions: SCREEN_QS, text: TRIAL_TEXT, version: TRIAL_VERSION });
   if ((r = p.match(/^\/staff\/appointments\/(\d+)\/trial-consent$/)) && m === 'POST') return saveTrialConsent(env, me, +r[1], body);
   if ((r = p.match(/^\/staff\/appointments\/(\d+)\/trial-consent$/)) && m === 'GET') return trialConsentView(env, +r[1]);
+  if (p === '/staff/campaigns' && m === 'GET') return api({ ok: true, campaigns: await BOOTH.campaigns(env), concerns: BOOTH.CONCERNS });
+  if (p === '/staff/campaigns' && m === 'POST') return BOOTH.saveCampaign(env, me, null, body);
+  if ((r = p.match(/^\/staff\/campaigns\/(\d+)$/)) && m === 'PUT') return BOOTH.saveCampaign(env, me, +r[1], body);
+  if ((r = p.match(/^\/staff\/campaigns\/(\d+)$/)) && m === 'GET') return BOOTH.campaignDetail(env, +r[1]);
+  if (p === '/staff/booth' && m === 'POST') return BOOTH.boothCheck(env, me, body);
+  if ((r = p.match(/^\/staff\/booth\/(\d+)$/)) && m === 'PUT') return BOOTH.markBooth(env, +r[1], body);
   if (p === '/staff/leads' && m === 'GET') return listLeads(env, url, sc, scope);
   if ((r = p.match(/^\/staff\/leads\/(\d+)$/)) && m === 'PUT') return updateLead(env, +r[1], body);
   if ((r = p.match(/^\/staff\/leads\/(\d+)\/convert$/)) && m === 'POST') return convertLead(env, me, +r[1], body, sc);
@@ -799,6 +806,7 @@ async function createClient(env, me, b, sc) {
   const id = r.meta.last_row_id;
   await env.DB.prepare('INSERT OR IGNORE INTO ems_plans (client_id, updated_by) VALUES (?,?)').bind(id, me.id).run();
   if (f.lead_id) await env.DB.prepare("UPDATE leads SET status='booked', updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=?").bind(f.lead_id).run();
+  if (f.lead_id) await BOOTH.seedClientFromBooth(env, id, f.lead_id).catch(e => console.error('booth seed', e));
   return api({ ok: true, id, pin });
 }
 
@@ -1328,7 +1336,7 @@ async function logReminder(env, me, b) {
   if (!kind || !ref) return bad('Missing reminder');
   await env.DB.prepare('INSERT INTO ems_reminder_log (client_id, lead_id, kind, ref, staff_id) VALUES (?,?,?,?,?)')
     .bind(parseInt(b.client_id, 10) || null, parseInt(b.lead_id, 10) || null, kind, ref, me.id).run();
-  if (kind === 'lead' && parseInt(b.lead_id, 10)) await env.DB.prepare("UPDATE leads SET status='contacted', updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=? AND status='new'").bind(parseInt(b.lead_id, 10)).run();
+  if ((kind === 'lead' || kind === 'booth') && parseInt(b.lead_id, 10)) await env.DB.prepare("UPDATE leads SET status='contacted', updated_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') WHERE id=? AND status='new'").bind(parseInt(b.lead_id, 10)).run();
   return api({ ok: true });
 }
 
